@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  orchestrator:
+    build: ./orchestrator
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./orchestrator/.env
+    volumes:
+      - ./orchestrator:/app
+    networks:
+      - app-network
+  
+  github-mcp:
+    build: .mock-mcps/github-mcp
+    ports:
+      - "8101:8080"
+    networks:
+      - app-network
+
+  qa-generator-mcp:
+    build: .mock-mcps/qa-generator-mcp
+    ports:
+      - "8102:8080"
+    networks:
+      - app-network
+
+  postgres-writer-mcp:
+    build: .mock-mcps/postgres-writer-mcp
+    ports:
+      - "8103:8080"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

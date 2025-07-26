@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+httpx
+pydantic
+
+# LangGraph and orchestration tools
+langgraph
+langchain
+langchain-core
+langchain-openai
+openai
+fastmcp
+
+tiktoken
+python-dotenv
+
+pytest
