@@ -1,21 +1,12 @@
 from fastapi import APIRouter, HTTPException, Request
-from fastmcp import Client
-from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.graph import StateGraph, MessagesState, END
 from langchain_core.messages import AIMessage
 from langchain_core.messages.tool import ToolMessage
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain.chat_models import init_chat_model
-from langchain_core.tools import tool
 from app.schemas.task_schema import TaskRequest
 
 router = APIRouter()
-
-def make_tool_wrapper(tool_meta, url):
-    @tool(name_or_callable=tool_meta.name, description=tool_meta.description or "")
-    async def wrapped_tool(**kwargs):
-        async with Client(url) as client:
-            return await client.call_tool(tool_meta.name, kwargs)
-    return wrapped_tool
 
 
 @router.post("/run")
@@ -33,7 +24,7 @@ async def run_task(req: TaskRequest, request: Request):
             "tool_counter": 0,
     }
 
-    if registry is None or not registry.tools:
+    if registry is None or not registry._tools:
         raise HTTPException(status_code=500, detail="MCP registry not initialized.")
 
     # Step 1: Search tools based on user prompt
@@ -42,11 +33,7 @@ async def run_task(req: TaskRequest, request: Request):
         raise HTTPException(status_code=404, detail="No matching tools found.")
 
     # Step 2: Wrap discovered tools into LangChain @tool
-    tool_funcs = []
-    for entry in matches:
-        tool_meta = entry["tool"]
-        url = entry["url"]
-        tool_funcs.append(make_tool_wrapper(tool_meta, url))
+    tool_funcs = [registry._make_wrapper(meta) for meta in matches]
 
     # Step 3: Create LLM agent bound with tools
     llm = init_chat_model(
