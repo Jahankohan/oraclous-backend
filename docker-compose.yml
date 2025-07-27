@@ -13,26 +13,42 @@ services:
       - app-network
   
   github-mcp:
-    build: .mock-mcps/github-mcp
+    build: ./mock-mcps/github-mcp
     ports:
       - "8101:8080"
     networks:
       - app-network
 
   qa-generator-mcp:
-    build: .mock-mcps/qa-generator-mcp
+    build: ./mock-mcps/qa-generator-mcp
     ports:
       - "8102:8080"
     networks:
       - app-network
 
   postgres-writer-mcp:
-    build: .mock-mcps/postgres-writer-mcp
+    build: ./mock-mcps/postgres-writer-mcp
     ports:
       - "8103:8080"
+    networks:
+      - app-network
+  
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+      POSTGRES_DB: testdatabase
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     networks:
       - app-network
 
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  pgdata:
