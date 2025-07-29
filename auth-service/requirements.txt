@@ -1,0 +1,12 @@
+pydantic[email]
+pydantic-settings
+requests
+python-jose[cryptography]
+python-json-logger
+fastapi
+uvicorn[standard]
+httpx
+aiofiles
+pydantic
+asyncpg==0.29.0
+sqlalchemy==1.4.27
