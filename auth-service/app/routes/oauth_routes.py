@@ -1,16 +1,18 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 
-from app.core.dependencies import get_repository
-from app.core.security import decode_state
+from app.core.dependencies import get_token_repository, get_user_repository, verify_internal_service
+from app.core.jwt_handler import decode_state, create_access_token, create_refresh_token
+from fastapi import Query
+from urllib.parse import urlencode
 from app.services.oauth_service import OAuthService
-
+from datetime import datetime
 router = APIRouter()
 
 @router.get("/oauth/{provider}/login")
 async def login(provider: str, request: Request, state: str = "/"):
     """Redirect to OAuth login page for the provider."""
-    (repository, _) = await get_repository(request)
+    repository = await get_token_repository(request)
     oauth_service = OAuthService(repository)
     login_url = await oauth_service.build_login_url(provider, state)
     return RedirectResponse(login_url)
@@ -32,7 +34,9 @@ async def callback(provider: str, request: Request):
 
     redirect_path = state_data.get("state", "/")
 
-    (token_repository, user_repository) = await get_repository(request)
+    token_repository = await get_token_repository(request)
+    user_repository = await get_user_repository(request)
+
     oauth_service = OAuthService(token_repository)
 
     # 1. Exchange code for token
@@ -59,7 +63,24 @@ async def callback(provider: str, request: Request):
         expires_at=token_data.get("expires_at"),
     )
 
-    return RedirectResponse(redirect_path)
+    jwt_token, _ = create_access_token({"sub": email, "is_superuser": False})
+    refresh_token = create_refresh_token({"sub": email, "is_superuser": False})
+
+    # response_url = f"{settings}/oauth/{provider}/callback?access_token={jwt_token}&refresh_token={refresh_token}&email={email}&state={redirect_path}"
+    params = {
+        "access_token": jwt_token,
+        "refresh_token": refresh_token,
+        "email": email,
+        "state": redirect_path
+    }
+    
+    # Build the frontend callback URL
+    frontend_base_url = "http://localhost:8080/oauth/{}/callback".format(provider)
+    query_string = urlencode(params)
+    response_url = f"{frontend_base_url}?{query_string}"
+    
+    # Return redirect response
+    return RedirectResponse(url=response_url)
 
 
 @router.post("/oauth/{provider}/ensure-access")
@@ -70,7 +91,36 @@ async def ensure_access(provider: str, request: Request):
     required_scopes = data.get("required_scopes", [])
     state = data.get("state", "/")
 
-    (repository, _) = await get_repository(request)
+    repository = await get_token_repository(request)
     oauth_service = OAuthService(repository)
     result = await oauth_service.ensure_access(user_id, provider, required_scopes, state)
     return JSONResponse(result)
+
+@router.get("/oauth/runtime-tokens")
+async def get_runtime_token(
+    request: Request,
+    user_id: str = Query(...),
+    provider: str = Query(...),
+    _=Depends(verify_internal_service)
+):
+    """Retrieve runtime OAuth token for a specific user and provider (internal use only)."""
+    token_repository = await get_token_repository(request)
+    token_obj = await token_repository.get_token(user_id, provider)
+
+    if not token_obj:
+        raise HTTPException(status_code=404, detail="Token not found")
+    
+    if token_obj.expires_at <= datetime.utcnow():
+        # Refresh token
+        oauth_service = OAuthService(token_repository)
+        refreshed = await oauth_service.refresh_token(provider, token_obj.refresh_token)
+        token_obj = {**token_obj, **refreshed}
+
+    return {
+        "user_id": user_id,
+        "provider": provider,
+        "access_token": token_obj.access_token,
+        "expires_at": token_obj.expires_at,
+        "scopes": token_obj.scopes,
+        "refresh_token": token_obj.refresh_token,
+    }

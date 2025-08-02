@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timedelta
 
 from app.core.constants import PROVIDERS
-from app.core.security import sign_state
+from app.core.jwt_handler import sign_state
 from app.repositories.token_repository import TokenRepository
 
 
@@ -36,18 +36,17 @@ class OAuthService:
     async def exchange_token(self, provider: str, code: str):
         """Exchange authorization code for access/refresh token."""
         config = PROVIDERS[provider]
-
+        auth = None
         data = {
             "code": code,
             "redirect_uri": f"{os.getenv('REDIRECT_URI')}/oauth/{provider}/callback",
         }
 
-        if provider != "google":
+        if provider == "google":
             data["grant_type"] = "authorization_code"
             data["client_id"] = os.getenv(f"{provider.upper()}_CLIENT_ID"),
             data["client_secret"] = os.getenv(f"{provider.upper()}_CLIENT_SECRET"),
         
-        auth = {}
         if provider == "notion":
             data["grant_type"] = "authorization_code"
             auth= (os.getenv(f"{provider.upper()}_CLIENT_ID"), os.getenv(f"{provider.upper()}_CLIENT_SECRET"))
@@ -55,11 +54,9 @@ class OAuthService:
         headers = {}
         if provider == "github":
             headers["Accept"] = "application/json"
-            # data["client_id"] = os.getenv(f"{provider.upper()}_CLIENT_ID")
-            # data["client_secret"] = os.getenv(f"{provider.upper()}_CLIENT_SECRET")
             auth= (os.getenv(f"{provider.upper()}_CLIENT_ID"), os.getenv(f"{provider.upper()}_CLIENT_SECRET"))
     
-
+        print("Exchanging New:", data)
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 config["token_url"],
@@ -136,6 +133,16 @@ class OAuthService:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             profile = resp.json()
+
+            if provider == "github" and not profile.get("email"):
+                # Fetch emails if not present
+                email_resp = await client.get("https://api.github.com/user/emails", headers=headers)
+                email_resp.raise_for_status()
+                emails = email_resp.json()
+
+                primary_email = next((e["email"] for e in emails if e.get("primary")), None)
+                fallback_email = next((e["email"] for e in emails if e.get("verified")), None)
+                profile["email"] = primary_email or fallback_email
 
         if provider == "google":
             # Google userinfo response: { "email": "", "given_name": "", "family_name": "", "picture": "" }

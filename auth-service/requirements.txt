@@ -1,6 +1,8 @@
 pydantic[email]
 pydantic-settings
 requests
+passlib
+bcrypt
 python-jose[cryptography]
 python-json-logger
 fastapi

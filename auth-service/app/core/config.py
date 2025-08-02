@@ -8,6 +8,8 @@ load_dotenv()
 class Settings(BaseSettings):
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: str = 1440  # 24 hours
+    REFRESH_TOKEN_EXPIRE_DAYS: str = 7 # 7 days
     DB_URL: str
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
@@ -16,6 +18,10 @@ class Settings(BaseSettings):
     NOTION_CLIENT_ID: str
     NOTION_CLIENT_SECRET: str
     REDIRECT_URI: str
+    EMAIL_ADDRESS: str
+    EMAIL_PASSWORD: str
+    FRONTEND_URL: str = "http://localhost:8080"
+    INTERNAL_SERVICE_KEY: str = "your_internal_service_key"
 
     class Config:
         env_file = ".env"
