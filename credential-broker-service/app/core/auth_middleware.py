@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        internal_token = request.headers.get("X-Internal-Token")
+        internal_token = request.headers.get("x-internal-service-key")
         auth_header = request.headers.get("Authorization")
 
         # Skip authentication for public endpoints if needed
@@ -30,8 +30,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Delegate validation to Auth Service
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{settings.AUTH_SERVICE_URL}/auth/validate",
-                headers={"Authorization": f"Bearer {token}"}
+                f"{settings.AUTH_SERVICE_URL}/auth/me",
+                headers={"Authorization": auth_header}  # Pass the full Authorization header
             )
 
         if response.status_code != 200:

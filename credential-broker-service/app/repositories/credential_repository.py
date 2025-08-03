@@ -48,6 +48,14 @@ class CredentialRepository:
             result = await session.execute(select(Credential))
             return result.scalars().all()
 
+    async def list_by_user(self, user_id: UUID) -> List[Credential]:
+        """List credentials for a specific user."""
+        async with self.Session() as session:
+            result = await session.execute(
+                select(Credential).where(Credential.created_by == user_id)
+            )
+            return result.scalars().all()
+
     async def update(self, credential_id: UUID, provider: str, cred_type: str, encrypted_data: str, metadata: dict) -> Optional[Credential]:
         """Update credential (provider, type, and encrypted data)."""
         async with self.Session() as session:

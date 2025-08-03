@@ -21,6 +21,9 @@ class CredentialService:
 
     async def list_credentials(self):
         return await self.repository.list_all()
+    
+    async def list_credentials_by_user(self, user_id: UUID):
+        return await self.repository.list_by_user(user_id)
 
     async def update_credential(self, credential_id: UUID, provider: str, type_: str, data: dict, metadata: dict):
         encrypted_data = encrypt_secret(data)
@@ -64,8 +67,15 @@ class CredentialService:
         refresh_token = decrypted_data.get("refresh_token")
 
         # TODO: Consider implementing proactive token refresh (e.g. refresh if expiring in the next 5 minutes)
-        if expires_at and datetime.utcnow() >= datetime.fromisoformat(expires_at):
-            refreshed_token = await self._refresh_token(decrypted_data.get("user_id"), credential.provider)
+        if expires_at:
+            # Handle both string and datetime objects
+            if isinstance(expires_at, str):
+                expires_datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            else:
+                expires_datetime = expires_at
+            
+            if datetime.utcnow() >= expires_datetime:
+                refreshed_token = await self._refresh_token(str(credential.created_by), credential.provider)
 
             # Merge old token data to preserve fields like refresh_token or scopes
             merged_token = {
