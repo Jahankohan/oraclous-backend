@@ -85,3 +85,41 @@ async def change_password(change_password_req: auth_schemas.ChangePasswordReques
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     return await auth_service.change_password(user=db_user, new_password=change_password_req.new_password)
+
+@router.get("/validate")
+async def validate_token(request: Request, token: str = Depends(oauth2_scheme)):
+    repository = await get_user_repository(request)
+    auth_service = AuthService(repository)
+
+    payload = await auth_service.verify_access_token(token)
+    email = payload.get("sub")
+    if email is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    
+    db_user = await auth_service.get_user_by_email(email=email)
+    if not db_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return payload
+
+@router.get("/me")
+async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)):
+    """Get current user information from token - used by credential broker middleware."""
+    repository = await get_user_repository(request)
+    auth_service = AuthService(repository)
+
+    payload = await auth_service.verify_access_token(token)
+    email = payload.get("sub")
+    if email is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    
+    db_user = await auth_service.get_user_by_email(email=email)
+    if not db_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    return {
+        "id": str(db_user.id),
+        "email": db_user.email,
+        "first_name": db_user.first_name,
+        "last_name": db_user.last_name,
+        "is_verified": db_user.is_verified
+    }
