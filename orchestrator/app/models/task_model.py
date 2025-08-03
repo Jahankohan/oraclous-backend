@@ -26,7 +26,7 @@ class Task(Base):
     outputs = Column(JSONB, nullable=True)
     logs = Column(JSONB, nullable=True)
     token_usage = Column(String, nullable=True)
-    metadata = Column(JSONB, nullable=True)
+    task_metadata = Column(JSONB, nullable=True)
     started_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
     owner_id = Column(String, nullable=True)

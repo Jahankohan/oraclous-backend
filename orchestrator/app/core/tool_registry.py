@@ -4,7 +4,6 @@ from typing import Dict, List, Any, Optional, Callable
 from langchain_core.tools import tool
 import json
 import aiofiles
-import os
 
 
 class ToolMetadata(BaseModel):
@@ -65,17 +64,6 @@ class ToolRegistry:
     async def save_to_disk(self):
         async with aiofiles.open(self.persist_file, mode="w") as f:
             await f.write(json.dumps([t.model_dump() for t in self._tools.values()], indent=2))
-
-    async def load_from_disk(self):
-        if not os.path.exists(self.persist_file):
-            return
-        async with aiofiles.open(self.persist_file, mode="r") as f:
-            content = await f.read()
-            raw = json.loads(content)
-            for entry in raw:
-                tool = ToolMetadata(**entry)
-                if tool.validate():
-                    self._tools[tool.name] = tool
     
     def search(self, keyword: str, top_k: int = 5) -> List[ToolMetadata]:
         keyword = keyword.lower()

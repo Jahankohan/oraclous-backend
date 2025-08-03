@@ -16,7 +16,7 @@ class TaskUpdate(BaseModel):
     outputs: Optional[dict]
     logs: Optional[dict]
     token_usage: Optional[str]
-    metadata: Optional[dict]
+    task_metadata: Optional[dict]
     finished_at: Optional[datetime]
 
 
@@ -28,7 +28,7 @@ class TaskRead(BaseModel):
     outputs: Optional[dict]
     logs: Optional[dict]
     token_usage: Optional[str]
-    metadata: Optional[dict]
+    task_metadata: Optional[dict]
     started_at: datetime
     finished_at: Optional[datetime]
     owner_id: Optional[str]

@@ -1,15 +1,14 @@
 from fastapi import FastAPI
-from app.core.config import DATABASE_URL, MCP_SERVERS
+from app.core.config import DATABASE_URL
 from contextlib import asynccontextmanager
-from app.core.tool_registry import ToolRegistry
-import json
-import os
 from app.repositories.workflow_repository import WorkflowRepository
 from app.repositories.tool_repository import ToolRepository
 from app.repositories.task_repository import TaskRepository
+from app.repositories.mcp_repository import MCPRepository
 from app.routes import workflow_routes
-from orchestrator.app.routes import tool_routes
+from app.routes import tool_routes
 from app.routes import task_routes
+from app.routes import auth_routes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,6 +17,10 @@ async def lifespan(app: FastAPI):
     await repository.create_tables()
     app.state.repository = repository
 
+    mcp_repository = MCPRepository(db_url=DATABASE_URL)
+    await mcp_repository.create_tables()
+    app.state.mcp_repository = mcp_repository
+
     tool_repository = ToolRepository(db_url=DATABASE_URL)
     await tool_repository.create_tables()
     app.state.tool_repository = tool_repository
@@ -25,15 +28,7 @@ async def lifespan(app: FastAPI):
     task_repository = TaskRepository(db_url=DATABASE_URL)
     await task_repository.create_tables()
     app.state.task_repository = task_repository
-    
-    servers=MCP_SERVERS
-
     # Initialize and load the registry
-    registry = ToolRegistry(servers=servers, persist_file="tool_registry.json")
-    await registry.load_tools_from_mcp()
-    app.state.registry = registry
-    await registry.save_to_disk()
-    print("MCP Registry initialized with", len(registry._tools), "tools")
     
     yield
 

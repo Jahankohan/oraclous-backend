@@ -33,6 +33,11 @@ class ToolRepository:
         async with self.Session() as session:
             result = await session.execute(select(Tool).where(Tool.id == tool_id))
             return result.scalars().first()
+        
+    async def get_tool_by_name(self, name: str) -> Optional[Tool]:
+        async with self.Session() as session:
+            result = await session.execute(select(Tool).where(Tool.name == name))
+            return result.scalars().first()
 
     async def update_tool(self, tool_id: UUID, data: ToolUpdate) -> Optional[Tool]:
         async with self.Session() as session:
@@ -45,6 +50,28 @@ class ToolRepository:
                     setattr(tool, key, value)
             await session.commit()
             return tool
+    
+    async def search(self, keyword: str, top_k: int = 5) -> List[Tool]:
+        async with self.Session() as session:
+            stmt = select(Tool)
+            result = await session.execute(stmt)
+            tools = result.scalars().all()
+
+            keyword = keyword.lower()
+            tokens = keyword.split()
+
+            def match_score(tool: Tool) -> int:
+                score = 0
+                for token in tokens:
+                    if token in tool.name.lower():
+                        score += 2
+                    if token in (tool.description or "").lower():
+                        score += 1
+                return score
+
+        scored = [(tool, match_score(tool)) for tool in tools]
+        filtered = [tool for tool, score in scored if score > 0]
+        return sorted(filtered, key=lambda t: match_score(t), reverse=True)[:top_k]
 
     async def delete_tool(self, tool_id: UUID) -> bool:
         async with self.Session() as session:
