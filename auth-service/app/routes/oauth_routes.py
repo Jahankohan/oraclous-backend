@@ -1,14 +1,18 @@
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Request, HTTPException, Depends, Query
 from fastapi.responses import RedirectResponse, JSONResponse
+from typing import List, Optional
+from datetime import datetime
 
 from app.core.dependencies import get_token_repository, get_user_repository, verify_internal_service
 from app.core.jwt_handler import decode_state, create_access_token, create_refresh_token
-from fastapi import Query
 from urllib.parse import urlencode
+from app.schema.oauth_schemas import TokenRefreshRequest, TokenRefreshResponse, ScopeValidationRequest, RuntimeTokenResponse, ScopeValidationResponse, UserTokensResponse, EnsureAccessResponse
 from app.services.oauth_service import OAuthService
-from datetime import datetime
+from pydantic import BaseModel
+
 router = APIRouter()
 
+# Existing endpoints remain the same...
 @router.get("/oauth/{provider}/login")
 async def login(provider: str, request: Request, state: str = "/"):
     """Redirect to OAuth login page for the provider."""
@@ -52,7 +56,7 @@ async def callback(provider: str, request: Request):
         first_name = profile.get("first_name", "")
         last_name = profile.get("last_name", "")
         picture = profile.get("picture", "")
-        user = await user_repository.create_user(email=email, first_name=first_name, last_name=last_name, profile_picture= picture)
+        user = await user_repository.create_user(email=email, first_name=first_name, last_name=last_name, profile_picture=picture)
 
     await token_repository.save_token(
         user_id=user.id,
@@ -66,7 +70,6 @@ async def callback(provider: str, request: Request):
     jwt_token, _ = create_access_token({"sub": email, "is_superuser": False})
     refresh_token = create_refresh_token({"sub": email, "is_superuser": False})
 
-    # response_url = f"{settings}/oauth/{provider}/callback?access_token={jwt_token}&refresh_token={refresh_token}&email={email}&state={redirect_path}"
     params = {
         "access_token": jwt_token,
         "refresh_token": refresh_token,
@@ -79,8 +82,119 @@ async def callback(provider: str, request: Request):
     query_string = urlencode(params)
     response_url = f"{frontend_base_url}?{query_string}"
     
-    # Return redirect response
     return RedirectResponse(url=response_url)
+
+@router.post("/oauth/validate-scopes", response_model=ScopeValidationResponse)
+async def validate_scopes(
+    request_data: ScopeValidationRequest, 
+    request: Request,
+    _: bool = Depends(verify_internal_service)
+):
+    """Validate if user has required scopes for a provider (internal service only)."""
+    token_repository = await get_token_repository(request)
+    oauth_service = OAuthService(token_repository)
+    
+    result = await oauth_service.ensure_access(
+        user_id=request_data.user_id,
+        provider=request_data.provider,
+        required_scopes=request_data.required_scopes,
+        redirect_state="/oauth-callback"  # Default state for re-auth
+    )
+    
+    if result["action"] == "ok":
+        return ScopeValidationResponse(
+            valid=True,
+            missing_scopes=[],
+            current_scopes=result["current_scopes"],
+            token_expired=False,
+            needs_reauth=False
+        )
+    else:
+        return ScopeValidationResponse(
+            valid=False,
+            missing_scopes=result["missing_scopes"],
+            current_scopes=result["current_scopes"],
+            token_expired=True,
+            needs_reauth=True,
+            login_url=result["login_url"]
+        )
+
+@router.post("/oauth/refresh-if-needed", response_model=TokenRefreshResponse)
+async def refresh_if_needed(
+    request_data: TokenRefreshRequest,
+    request: Request,
+    _: bool = Depends(verify_internal_service)
+):
+    """Refresh token if expired (internal service only)."""
+    token_repository = await get_token_repository(request)
+    oauth_service = OAuthService(token_repository)
+    
+    try:
+        token_obj = await token_repository.get_token(request_data.user_id, request_data.provider)
+        
+        if not token_obj:
+            return TokenRefreshResponse(
+                success=False,
+                error="Token not found"
+            )
+        
+        # Check if token is expired
+        if token_obj.expires_at and datetime.utcnow() > token_obj.expires_at:
+            if token_obj.refresh_token:
+                # Refresh the token
+                refreshed = await oauth_service.refresh_token(
+                    request_data.user_id, 
+                    request_data.provider, 
+                    token_obj.refresh_token
+                )
+                return TokenRefreshResponse(
+                    success=True,
+                    access_token=refreshed["access_token"],
+                    expires_at=refreshed["expires_at"]
+                )
+            else:
+                return TokenRefreshResponse(
+                    success=False,
+                    error="Token expired and no refresh token available"
+                )
+        else:
+            # Token is still valid
+            return TokenRefreshResponse(
+                success=True,
+                access_token=token_obj.access_token,
+                expires_at=token_obj.expires_at
+            )
+            
+    except Exception as e:
+        return TokenRefreshResponse(
+            success=False,
+            error=f"Token refresh failed: {str(e)}"
+        )
+
+@router.get("/oauth/user-tokens", response_model=UserTokensResponse)
+async def get_user_tokens(
+    request: Request,
+    user_id: str = Query(...),
+    _: bool = Depends(verify_internal_service)
+):
+    """Get all OAuth tokens for a user (internal service only)."""
+    token_repository = await get_token_repository(request)
+    
+    tokens = await token_repository.list_tokens(user_id)
+    
+    providers = []
+    for token in tokens:
+        providers.append({
+            "provider": token.provider,
+            "scopes": token.scopes or [],
+            "expires_at": token.expires_at,
+            "has_refresh_token": bool(token.refresh_token)
+        })
+    
+    return UserTokensResponse(
+        user_id=user_id,
+        providers=providers
+    )
 
 
 @router.post("/oauth/{provider}/ensure-access")
@@ -94,7 +208,7 @@ async def ensure_access(provider: str, request: Request):
     repository = await get_token_repository(request)
     oauth_service = OAuthService(repository)
     result = await oauth_service.ensure_access(user_id, provider, required_scopes, state)
-    return JSONResponse(result)
+    return result
 
 @router.get("/oauth/runtime-tokens")
 async def get_runtime_token(
@@ -110,17 +224,31 @@ async def get_runtime_token(
     if not token_obj:
         raise HTTPException(status_code=404, detail="Token not found")
     
-    if token_obj.expires_at <= datetime.utcnow():
-        # Refresh token
-        oauth_service = OAuthService(token_repository)
-        refreshed = await oauth_service.refresh_token(provider, token_obj.refresh_token)
-        token_obj = {**token_obj, **refreshed}
-
-    return {
-        "user_id": user_id,
-        "provider": provider,
-        "access_token": token_obj.access_token,
-        "expires_at": token_obj.expires_at,
-        "scopes": token_obj.scopes,
-        "refresh_token": token_obj.refresh_token,
-    }
+    # Check if token is expired and refresh if needed
+    if token_obj.expires_at and token_obj.expires_at <= datetime.utcnow():
+        if token_obj.refresh_token:
+            oauth_service = OAuthService(token_repository)
+            try:
+                refreshed = await oauth_service.refresh_token(user_id, provider, token_obj.refresh_token)
+                runtime_token_response = RuntimeTokenResponse(
+                     user_id=user_id,
+                     provider=provider,
+                     access_token=refreshed["access_token"],
+                     expires_at=refreshed["expires_at"],
+                     scopes=token_obj.scopes,
+                     refresh_token=token_obj.refresh_token
+                )
+                return runtime_token_response
+            except Exception as e:
+                raise HTTPException(status_code=401, detail=f"Token refresh failed: {str(e)}")
+        else:
+            raise HTTPException(status_code=401, detail="Token expired and no refresh token available")
+    runtime_token_response = RuntimeTokenResponse(
+        user_id=user_id,
+        provider=provider,
+        access_token=token_obj.access_token,
+        expires_at=token_obj.expires_at,
+        scopes=token_obj.scopes,
+        refresh_token=token_obj.refresh_token
+    )
+    return runtime_token_response

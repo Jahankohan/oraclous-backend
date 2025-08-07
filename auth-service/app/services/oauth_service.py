@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from app.core.constants import PROVIDERS
 from app.core.jwt_handler import sign_state
 from app.repositories.token_repository import TokenRepository
+from app.schema.oauth_schemas import EnsureAccessResponse
 
 
 class OAuthService:
@@ -44,17 +45,17 @@ class OAuthService:
 
         if provider == "google":
             data["grant_type"] = "authorization_code"
-            data["client_id"] = os.getenv(f"{provider.upper()}_CLIENT_ID"),
-            data["client_secret"] = os.getenv(f"{provider.upper()}_CLIENT_SECRET"),
+            data["client_id"] = os.getenv(f"{provider.upper()}_CLIENT_ID")
+            data["client_secret"] = os.getenv(f"{provider.upper()}_CLIENT_SECRET")
         
         if provider == "notion":
             data["grant_type"] = "authorization_code"
-            auth= (os.getenv(f"{provider.upper()}_CLIENT_ID"), os.getenv(f"{provider.upper()}_CLIENT_SECRET"))
+            auth = (os.getenv(f"{provider.upper()}_CLIENT_ID"), os.getenv(f"{provider.upper()}_CLIENT_SECRET"))
 
         headers = {}
         if provider == "github":
             headers["Accept"] = "application/json"
-            auth= (os.getenv(f"{provider.upper()}_CLIENT_ID"), os.getenv(f"{provider.upper()}_CLIENT_SECRET"))
+            auth = (os.getenv(f"{provider.upper()}_CLIENT_ID"), os.getenv(f"{provider.upper()}_CLIENT_SECRET"))
     
         print("Exchanging New:", data)
         async with httpx.AsyncClient() as client:
@@ -88,32 +89,55 @@ class OAuthService:
             "refresh_token": refresh_token,
         }
 
+        headers = {"Accept": "application/json"}
+        auth = None
+        
+        # Provider-specific auth configuration
+        if provider in ["github", "notion"]:
+            auth = (os.getenv(f"{provider.upper()}_CLIENT_ID"), os.getenv(f"{provider.upper()}_CLIENT_SECRET"))
+
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 config["token_url"],
                 data=data,
-                headers={"Accept": "application/json"},
-                auth=config.get("auth")
+                headers=headers,
+                auth=auth
             )
             resp.raise_for_status()
             token_data = resp.json()
 
         access_token = token_data.get("access_token")
+        new_refresh_token = token_data.get("refresh_token", refresh_token)  # Some providers don't return new refresh token
         expires_in = token_data.get("expires_in", 3600)
         expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
+        # Update token in database
         await self.repository.update_access_token(user_id, provider, access_token, expires_at)
+        
+        # If we got a new refresh token, update that too
+        if new_refresh_token != refresh_token:
+            token_obj = await self.repository.get_token(user_id, provider)
+            if token_obj:
+                await self.repository.save_token(
+                    user_id=user_id,
+                    provider=provider,
+                    access_token=access_token,
+                    refresh_token=new_refresh_token,
+                    scopes=token_obj.scopes,
+                    expires_at=expires_at
+                )
 
         return {
             "access_token": access_token,
             "expires_at": expires_at,
-            "refresh_token": refresh_token  # still needed for context
+            "refresh_token": new_refresh_token
         }
     
     async def fetch_user_profile(self, provider: str, access_token: str) -> dict:
+        """Fetch user profile information from the provider."""
         if provider == "google":
             url = "https://www.googleapis.com/oauth2/v2/userinfo"
-            headers={"Authorization": f"Bearer {access_token}"}
+            headers = {"Authorization": f"Bearer {access_token}"}
         elif provider == "github":
             url = "https://api.github.com/user"
             headers = {
@@ -126,6 +150,8 @@ class OAuthService:
                 "Authorization": f"Bearer {access_token}",
                 "Notion-Version": "2022-06-28"
             }
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(url, headers=headers)
@@ -142,8 +168,11 @@ class OAuthService:
                 fallback_email = next((e["email"] for e in emails if e.get("verified")), None)
                 profile["email"] = primary_email or fallback_email
 
+        return self._normalize_profile(provider, profile)
+
+    def _normalize_profile(self, provider: str, profile: dict) -> dict:
+        """Normalize profile data across providers."""
         if provider == "google":
-            # Google userinfo response: { "email": "", "given_name": "", "family_name": "", "picture": "" }
             return {
                 "email": profile.get("email"),
                 "first_name": profile.get("given_name"),
@@ -151,8 +180,6 @@ class OAuthService:
                 "picture": profile.get("picture")
             }
         elif provider == "github":
-            # GitHub does not provide first/last name separately
-            print("Profile:", profile)
             full_name = profile.get("name") or ""
             parts = full_name.split(" ", 1)
             return {
@@ -165,6 +192,7 @@ class OAuthService:
             return self.extract_notion_user_info(profile)
 
     def extract_notion_user_info(self, data: dict):
+        """Extract user info from Notion API response."""
         owner_user = data.get("bot", {}).get("owner", {}).get("user", {})
 
         full_name = owner_user.get("name", "")
@@ -209,41 +237,86 @@ class OAuthService:
         # Check for expiry
         if token_obj.expires_at and datetime.utcnow() > token_obj.expires_at:
             if token_obj.refresh_token:
-                # Attempt to refresh token
-                refreshed = await self.refresh_token(user_id, provider, token_obj.refresh_token)
-                token_obj.access_token = refreshed["access_token"]
-                token_obj.expires_at = refreshed["expires_at"]
+                try:
+                    # Attempt to refresh token
+                    refreshed = await self.refresh_token(user_id, provider, token_obj.refresh_token)
+                    token_obj.access_token = refreshed["access_token"]
+                    token_obj.expires_at = refreshed["expires_at"]
+                except Exception as e:
+                    print(f"Token refresh failed for {provider}: {e}")
+                    # Refresh failed → re-authenticate
+                    login_url = await self.build_login_url(provider, redirect_state, required_scopes)
+                    ensure_access_response = EnsureAccessResponse(
+                        action="reauthenticate",
+                        login_url=login_url,
+                        current_scopes=token_obj.scopes or [],
+                        missing_scopes=required_scopes,
+                        error="Token refresh failed"
+                    )
+                    return ensure_access_response
             else:
                 # No refresh token → re-authenticate
                 login_url = await self.build_login_url(provider, redirect_state, required_scopes)
-                return {
-                    "action": "reauthenticate",
-                    "login_url": login_url,
-                    "current_scopes": token_obj.scopes or [],
-                    "missing_scopes": required_scopes
-                }
+                ensure_access_response = EnsureAccessResponse(
+                    action="reauthenticate",
+                    login_url=login_url,
+                    current_scopes=token_obj.scopes or [],
+                    missing_scopes=required_scopes,
+                    error="Token expired, no refresh token"
+                )
+                return ensure_access_response
 
         # Check for missing scopes
         current_scopes = set(token_obj.scopes or [])
         missing_scopes = [s for s in required_scopes if s not in current_scopes]
 
         if missing_scopes:
-            login_url = await self.build_login_url(provider, redirect_state, list(current_scopes.union(missing_scopes)))
-            return {
-                "action": "reauthenticate",
-                "login_url": login_url,
-                "current_scopes": list(current_scopes),
-                "missing_scopes": missing_scopes
-            }
+            # Need additional scopes → re-authenticate with combined scopes
+            combined_scopes = list(current_scopes.union(missing_scopes))
+            login_url = await self.build_login_url(provider, redirect_state, combined_scopes)
+            ensure_access_response = EnsureAccessResponse(
+                action="reauthenticate",
+                login_url=login_url,
+                current_scopes=list(current_scopes) or [],
+                missing_scopes=missing_scopes,
+                error="insufficient_scopes"
+            )
+            return ensure_access_response
 
         # All good
-        return {
-            "action": "ok",
-            "token": {
+        ensure_access_response = EnsureAccessResponse(
+            action="ok",
+            token={
                 "access_token": token_obj.access_token,
                 "expires_at": token_obj.expires_at,
                 "scopes": token_obj.scopes
             },
-            "current_scopes": token_obj.scopes,
-            "missing_scopes": []
+            current_scopes=token_obj.scopes,
+            missing_scopes=[],
+        )
+        return ensure_access_response
+
+    async def validate_token_scopes(self, user_id: str, provider: str, required_scopes: List[str]) -> dict:
+        """Validate if user has required scopes without attempting refresh."""
+        token_obj = await self.repository.get_token(user_id, provider)
+        
+        if not token_obj:
+            return {
+                "valid": False,
+                "missing_scopes": required_scopes,
+                "current_scopes": [],
+                "token_expired": False,
+                "token_missing": True
+            }
+
+        current_scopes = set(token_obj.scopes or [])
+        missing_scopes = [s for s in required_scopes if s not in current_scopes]
+        token_expired = token_obj.expires_at and datetime.utcnow() > token_obj.expires_at
+
+        return {
+            "valid": len(missing_scopes) == 0 and not token_expired,
+            "missing_scopes": missing_scopes,
+            "current_scopes": list(current_scopes),
+            "token_expired": token_expired,
+            "token_missing": False
         }
