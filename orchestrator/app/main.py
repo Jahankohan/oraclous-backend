@@ -5,14 +5,15 @@ from app.repositories.workflow_repository import WorkflowRepository
 from app.repositories.tool_repository import ToolRepository
 from app.repositories.task_repository import TaskRepository
 from app.repositories.mcp_repository import MCPRepository
+from app.core.ingestion_setup import setup_ingestion_system
 from app.routes import workflow_routes
 from app.routes import tool_routes
 from app.routes import task_routes
-from app.routes import auth_routes
+from app.routes import data_ingestion_routes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize DB repository
+    # Initialize existing repositories
     repository = WorkflowRepository(db_url=DATABASE_URL)
     await repository.create_tables()
     app.state.repository = repository
@@ -28,20 +29,37 @@ async def lifespan(app: FastAPI):
     task_repository = TaskRepository(db_url=DATABASE_URL)
     await task_repository.create_tables()
     app.state.task_repository = task_repository
-    # Initialize and load the registry
+    
+    # Initialize data ingestion system
+    (data_source_repo, 
+     ingestion_job_repo, 
+     document_repo, 
+     ingestion_registry) = await setup_ingestion_system(DATABASE_URL)
+    
+    app.state.data_source_repository = data_source_repo
+    app.state.ingestion_job_repository = ingestion_job_repo
+    app.state.document_repository = document_repo
+    app.state.ingestion_registry = ingestion_registry
+    
+    print("All repositories and ingestion system initialized")
     
     yield
 
-    # If needed: graceful shutdown logic here
-    print("Shutting down MCP orchestrator")
+    # Graceful shutdown
+    print("Shutting down orchestrator")
     await app.state.repository.close()
     await app.state.tool_repository.close()
     await app.state.task_repository.close()
-
+    await app.state.data_source_repository.close()
+    await app.state.ingestion_job_repository.close()
+    await app.state.document_repository.close()
 
 app = FastAPI(title="Oraclous Orchestrator", lifespan=lifespan)
 
+# Include existing routes
 app.include_router(task_routes.router, prefix="/tasks", tags=["Tasks"])
 app.include_router(workflow_routes.router, prefix="/workflows", tags=["Workflows"])
 app.include_router(tool_routes.router, prefix="/tools", tags=["Tools"])
 
+# Include new data ingestion routes
+app.include_router(data_ingestion_routes.router, tags=["Data Ingestion"])
