@@ -5,6 +5,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from uuid import UUID
 from app.core.constants import DATA_SOURCE_CAPABILITIES, OAUTH_ERROR_CODES
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -32,39 +33,60 @@ class CredentialBroker:
     This class should be used by the orchestrator to obtain OAuth tokens.
     """
     
-    def __init__(self, auth_service_url: str, internal_service_key: str):
-        self.auth_service_url = auth_service_url.rstrip('/')
-        self.internal_service_key = internal_service_key
+    def __init__(self):
+        self.auth_service_url = settings.AUTH_SERVICE_URL
+        self.internal_service_key = settings.INTERNAL_SERVICE_KEY
         self.headers = {
             "X-Internal-Key": self.internal_service_key,
             "Content-Type": "application/json"
         }
 
     async def get_provider_token(
-        self, 
-        user_id: UUID, 
-        provider: str, 
+        self,
+        user_id: UUID,
+        provider: str,
         required_scopes: Optional[List[str]] = None
     ) -> CredentialResult:
         """
         Get a valid token for a provider, ensuring it has required scopes.
-        Will attempt refresh if token is expired.
+        Will attempt refresh if token is expired or missing required scopes.
+        Handles all edge cases and lifecycle.
         """
         try:
-            # First, validate current scopes
-            if required_scopes:
-                scope_result = await self._validate_scopes(user_id, provider, required_scopes)
-                if not scope_result.success:
-                    return scope_result
-
-            # Get the actual token
+            # 1. Get the actual token (may be expired or missing scopes)
             token_result = await self._get_runtime_token(user_id, provider)
             if not token_result.success:
-                return token_result
+                # If token expired, try to refresh
+                if token_result.error_code == OAUTH_ERROR_CODES["TOKEN_EXPIRED"]:
+                    refresh_result = await self.refresh_token_if_needed(user_id, provider)
+                    if refresh_result.success:
+                        token_result = refresh_result
+                    else:
+                        return refresh_result
+                else:
+                    return token_result
 
+            # 2. Check expiry (if expires_at is present)
+            expires_at = token_result.token.expires_at
+            if expires_at and expires_at < datetime.utcnow():
+                refresh_result = await self.refresh_token_if_needed(user_id, provider)
+                if refresh_result.success:
+                    token_result = refresh_result
+                else:
+                    return refresh_result
+
+            # 3. Check required scopes (if any)
+            if required_scopes:
+                # If token_result.token.scopes is missing or insufficient, validate
+                user_scopes = set(token_result.token.scopes or [])
+                missing = [s for s in required_scopes if s not in user_scopes]
+                if missing:
+                    # Try to validate scopes and get login_url if needed
+                    scope_result = await self._validate_scopes(user_id, provider, required_scopes)
+                    if not scope_result.success:
+                        return scope_result
             logger.info(f"Successfully obtained token for user {user_id}, provider {provider}")
             return token_result
-            
         except Exception as e:
             logger.error(f"Unexpected error getting provider token: {e}")
             return CredentialResult(
@@ -258,24 +280,36 @@ class CredentialBroker:
             )
 
     async def refresh_token_if_needed(self, user_id: UUID, provider: str) -> CredentialResult:
-        """Explicitly refresh a token if it's expired."""
+        """Explicitly refresh a token if it's expired. Also fetch scopes if possible."""
         try:
             async with httpx.AsyncClient() as client:
                 payload = {"user_id": user_id, "provider": provider}
-                
                 response = await client.post(
                     f"{self.auth_service_url}/oauth/refresh-if-needed",
                     headers=self.headers,
                     json=payload
                 )
-                
                 if response.status_code == 200:
                     data = response.json()
                     if data["success"]:
+                        # Try to fetch scopes after refresh
+                        scopes = []
+                        # Try to get scopes from runtime-tokens endpoint
+                        try:
+                            resp2 = await client.get(
+                                f"{self.auth_service_url}/oauth/runtime-tokens",
+                                headers=self.headers,
+                                params={"user_id": user_id, "provider": provider}
+                            )
+                            if resp2.status_code == 200:
+                                d2 = resp2.json()
+                                scopes = d2.get("scopes", [])
+                        except Exception:
+                            pass
                         token_info = TokenInfo(
                             access_token=data["access_token"],
                             expires_at=datetime.fromisoformat(data["expires_at"]) if data.get("expires_at") else None,
-                            scopes=[],  # Scopes not returned in refresh response
+                            scopes=scopes,
                             provider=provider,
                             user_id=user_id
                         )
@@ -292,7 +326,6 @@ class CredentialBroker:
                         error_code=OAUTH_ERROR_CODES["PROVIDER_ERROR"],
                         error_message=f"Refresh request failed: {response.status_code}"
                     )
-                    
         except Exception as e:
             logger.error(f"Error refreshing token: {e}")
             return CredentialResult(
