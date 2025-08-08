@@ -47,18 +47,18 @@ PROVIDERS = {
             "read:discussion": "Read team discussions",
             "write:discussion": "Read and write team discussions"
         },
-        "supports_refresh": False
+        "supports_refresh": False  # GitHub doesn't support refresh tokens
     },
     "notion": {
         "authorize_url": "https://api.notion.com/v1/oauth/authorize",
         "token_url": "https://api.notion.com/v1/oauth/token",
         "user_info": "https://api.notion.com/v1/users/me",
-        "scopes": [],
+        "scopes": [],  # Notion uses workspace-level permissions instead of scopes
         "scope_descriptions": {
             "read_content": "Read access to pages and databases",
             "update_content": "Edit access to pages and databases",
             "insert_content": "Create new pages and database entries"
         },
-        "supports_refresh": False,
+        "supports_refresh": True
     }
 }

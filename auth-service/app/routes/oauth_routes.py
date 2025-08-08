@@ -69,7 +69,7 @@ async def callback(provider: str, request: Request):
 
     jwt_token, _ = create_access_token({"sub": email, "is_superuser": False})
     refresh_token = create_refresh_token({"sub": email, "is_superuser": False})
-
+    print("Access token:", jwt_token)
     params = {
         "access_token": jwt_token,
         "refresh_token": refresh_token,

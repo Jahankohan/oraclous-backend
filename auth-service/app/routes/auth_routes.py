@@ -121,5 +121,5 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
         "email": db_user.email,
         "first_name": db_user.first_name,
         "last_name": db_user.last_name,
-        "is_verified": db_user.is_verified
+        "is_verified": db_user.is_email_verified
     }
