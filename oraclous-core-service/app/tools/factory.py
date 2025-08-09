@@ -1,22 +1,41 @@
-from typing import Dict
-from app.interfaces.tool_definition import ToolDefinition
+from typing import Dict, Any, Optional
+from app.tools.registry import tool_registry
 from app.interfaces.tool_executor import BaseToolExecutor
+from app.schemas.tool_instance import ToolInstance, ExecutionContext
 
-# Helper classes for tool implementation
-class ToolImplementationFactory:
-    """Factory for creating tool executors from definitions"""
+
+class ToolFactory:
+    """
+    Factory for creating and managing tool instances
+    """
     
-    _executors: Dict[str, type] = {}
+    @staticmethod
+    def create_executor(tool_definition_id: str) -> BaseToolExecutor:
+        """Create a tool executor from definition ID"""
+        return tool_registry.create_executor(tool_definition_id)
     
-    @classmethod
-    def register_executor(cls, tool_type: str, executor_class: type):
-        """Register an executor class for a tool type"""
-        cls._executors[tool_type] = executor_class
+    @staticmethod
+    def validate_tool_instance(instance: ToolInstance) -> bool:
+        """Validate that a tool instance is properly configured"""
+        try:
+            executor = ToolFactory.create_executor(instance.tool_definition_id)
+            return True  # If we can create executor, basic validation passes
+        except Exception:
+            return False
     
-    @classmethod
-    def create_executor(cls, definition: ToolDefinition) -> BaseToolExecutor:
-        """Create executor instance for a tool definition"""
-        executor_class = cls._executors.get(definition.type)
-        if not executor_class:
-            raise ValueError(f"No executor registered for tool type: {definition.type}")
-        return executor_class(definition)
+    @staticmethod 
+    async def execute_tool(
+        instance: ToolInstance,
+        input_data: Any,
+        context: ExecutionContext
+    ):
+        """Execute a tool instance with given input and context"""
+        executor = ToolFactory.create_executor(instance.tool_definition_id)
+        
+        # Use async context manager if supported
+        if hasattr(executor, '__aenter__'):
+            async with executor as exec_instance:
+                return await exec_instance.execute(input_data, context)
+        else:
+            return await executor.execute(input_data, context)
+
