@@ -2,6 +2,8 @@
 
 A restructured and cleaner implementation of the Neo4j LLM Graph Builder backend using FastAPI.
 
+Original Implementation: https://github.com/neo4j-labs/llm-graph-builder
+
 ## Features
 
 - **Clean Architecture**: Well-organized code structure with clear separation of concerns

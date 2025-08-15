@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 from datetime import datetime
 import uuid
+from neo4j.time import DateTime as Neo4jDateTime
 
 from langchain_community.document_loaders import (
     PyMuPDFLoader, UnstructuredFileLoader, YoutubeLoader,
@@ -444,13 +445,20 @@ class DocumentService:
         
         documents = []
         for record in result:
+            created_at = record["createdAt"]
+            processed_at = record.get("processedAt")
+            # Convert Neo4jDateTime to Python datetime
+            if isinstance(created_at, Neo4jDateTime):
+                created_at = created_at.to_native()
+            if isinstance(processed_at, Neo4jDateTime):
+                processed_at = processed_at.to_native()
             documents.append(DocumentInfo(
                 id=record["id"],
                 file_name=record["fileName"],
                 source_type=record["sourceType"],
                 status=ProcessingStatus(record["status"]),
-                created_at=record["createdAt"],
-                processed_at=record.get("processedAt"),
+                created_at=created_at,  # <-- use converted variable
+                processed_at=processed_at,  # <-- use converted variable
                 chunk_count=record.get("chunkCount", 0)
             ))
         

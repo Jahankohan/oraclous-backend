@@ -7,7 +7,8 @@ from datetime import datetime
 from langchain.schema import Document
 from langchain_community.graphs import Neo4jGraph
 from langchain_experimental.graph_transformers import LLMGraphTransformer
-from langchain.schema.graph_document import GraphDocument
+# from langchain.schema.graph_document import GraphDocument
+from langchain_community.graphs.graph_document import GraphDocument
 
 from app.core.neo4j_client import Neo4jClient
 from app.core.exceptions import ExtractionError
