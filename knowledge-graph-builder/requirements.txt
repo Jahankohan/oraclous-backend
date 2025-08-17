@@ -32,7 +32,7 @@ pydantic==2.11.7
 pydantic-settings==2.10.1
 
 # Embeddings
-sentence-transformers==2.2.2
+sentence-transformers
 
 # Document processing
 PyPDF2==3.0.1

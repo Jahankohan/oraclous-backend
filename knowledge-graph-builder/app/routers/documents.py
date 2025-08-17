@@ -4,12 +4,15 @@ from fastapi.responses import StreamingResponse
 from typing import List, Optional
 import json
 import asyncio
+from datetime import datetime
 
 from app.core.neo4j_client import Neo4jClient, get_neo4j_client
 from app.models.requests import DocumentUploadRequest, ExtractionRequest, ProcessingMode
 from app.models.responses import BaseResponse, DocumentInfo, ProcessingProgress
-from app.services.document_service import DocumentService
+from app.services.advanced_graph_integration_service import AdvancedGraphIntegrationService
+from app.services.advanced_graph_integration_service import AdvancedGraphIntegrationService
 from app.services.extraction_service import ExtractionService
+from app.services.document_service import DocumentService
 
 router = APIRouter()
 
@@ -20,33 +23,25 @@ async def upload_files(
 ) -> BaseResponse:
     """Upload files for processing"""
     try:
-        document_service = DocumentService(neo4j)
-        
+        integration_service = AdvancedGraphIntegrationService(neo4j)
         uploaded_files = []
         for file in files:
             # Save file temporarily
             import tempfile
             import shutil
             from pathlib import Path
-            
             temp_dir = Path(tempfile.gettempdir()) / "llm_graph_builder"
             temp_dir.mkdir(exist_ok=True)
-            
             file_path = temp_dir / file.filename
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-            
             uploaded_files.append(str(file_path))
-        
-        # Create document nodes
-        documents = await document_service.scan_sources("local", file_paths=uploaded_files)
-        
+        documents = await integration_service.scan_sources("local", file_paths=uploaded_files)
         return BaseResponse(
             success=True,
             message=f"Successfully uploaded {len(documents)} files",
-            data={"uploaded_files": [doc.file_name for doc in documents]}
+            data={"uploaded_files": [doc["file_name"] for doc in documents]}
         )
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
@@ -94,7 +89,36 @@ async def extract_graph_from_documents(
     """Extract knowledge graph from documents with real-time progress updates"""
     try:
         extraction_service = ExtractionService(neo4j)
-        
+        from app.services.document_service import DocumentService
+        document_service = DocumentService(neo4j)
+
+        # Check and create chunks if missing
+        async def ensure_chunks_exist(file_names):
+            for file_name in file_names:
+                # Get document info
+                query = """
+                MATCH (d:Document {fileName: $fileName})
+                RETURN d.id as id, d.fileName as fileName, d.sourceType as sourceType, d.status as status, coalesce(d.totalChunks, 0) as totalChunks
+                """
+                result = neo4j.execute_query(query, {"fileName": file_name})
+                if not result:
+                    continue
+                doc_info = result[0]
+                if doc_info["totalChunks"] == 0:
+                    # Load content and chunk
+                    doc_model = DocumentInfo(
+                        id=doc_info["id"],
+                        file_name=doc_info["fileName"],
+                        source_type=doc_info["sourceType"],
+                        status=doc_info["status"],
+                        created_at=datetime.now()
+                    )
+                    documents = await document_service.load_document_content(doc_model)
+                    chunks = await document_service.split_documents(documents)
+                    await document_service.create_chunk_nodes(doc_model, chunks)
+
+        await ensure_chunks_exist(request.file_names)
+
         async def generate_progress():
             async for progress in extraction_service.extract_graph(
                 file_names=request.file_names,
@@ -104,13 +128,13 @@ async def extract_graph_from_documents(
                 enable_schema=request.enable_schema
             ):
                 yield f"data: {json.dumps(progress.dict())}\n\n"
-        
+
         return StreamingResponse(
             generate_progress(),
             media_type="text/plain",
             headers={"Cache-Control": "no-cache"}
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
 
@@ -120,9 +144,8 @@ async def get_sources_list(
 ) -> List[DocumentInfo]:
     """Get list of all document sources"""
     try:
-        document_service = DocumentService(neo4j)
-        return await document_service.get_documents_list()
-        
+        integration_service = AdvancedGraphIntegrationService(neo4j)
+        return await integration_service.get_documents_list()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get sources list: {str(e)}")
 

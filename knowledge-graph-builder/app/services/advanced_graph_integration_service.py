@@ -6,6 +6,7 @@ import json
 from collections import defaultdict
 
 from app.core.neo4j_client import Neo4jClient
+from neo4j.time import DateTime as Neo4jDateTime
 from app.core.exceptions import ServiceError
 from app.config.settings import get_settings
 from app.services.advanced_graph_analytic import AdvancedGraphAnalytics
@@ -16,6 +17,214 @@ from app.services.entity_resolution import EntityResolution, SchemaLearning
 logger = logging.getLogger(__name__)
 
 class AdvancedGraphIntegrationService:
+    # --- Document Ingestion & Processing (migrated from DocumentService) ---
+    async def scan_sources(self, source_type, **kwargs):
+        """Scan and create document source nodes"""
+        try:
+            if source_type == 'local':
+                return await self._scan_local_files(**kwargs)
+            elif source_type == 's3':
+                return await self._scan_s3_bucket(**kwargs)
+            elif source_type == 'gcs':
+                return await self._scan_gcs_bucket(**kwargs)
+            elif source_type == 'youtube':
+                return await self._scan_youtube_video(**kwargs)
+            elif source_type == 'wiki':
+                return await self._scan_wikipedia_page(**kwargs)
+            elif source_type == 'web':
+                return await self._scan_web_page(**kwargs)
+            else:
+                raise Exception(f"Unsupported source type: {source_type}")
+        except Exception as e:
+            logger.error(f"Error scanning {source_type} sources: {e}")
+            raise Exception(f"Failed to scan sources: {e}")
+
+    async def _scan_local_files(self, file_paths):
+        # ...existing code from DocumentService._scan_local_files...
+        documents = []
+        for file_path in file_paths:
+            import uuid
+            from pathlib import Path
+            doc_id = str(uuid.uuid4())
+            file_name = Path(file_path).name
+            query = """
+            CREATE (d:Document {
+                id: $id,
+                fileName: $fileName,
+                filePath: $filePath,
+                sourceType: 'local',
+                status: 'New',
+                createdAt: datetime(),
+                totalChunks: 0,
+                processedAt: null
+            })
+            RETURN d
+            """
+            self.neo4j.execute_write_query(query, {
+                "id": doc_id,
+                "fileName": file_name,
+                "filePath": file_path,
+                "sourceType": 'local',
+                "status": 'New'
+            })
+            documents.append({
+                "id": doc_id,
+                "file_name": file_name,
+                "source_type": 'local',
+                "status": 'New',
+                "created_at": datetime.now(),
+                "total_chunks": 0,
+                "processed_at": None
+            })
+        return documents
+
+    async def _scan_s3_bucket(self, bucket_name, prefix=""):
+        # ...existing code from DocumentService._scan_s3_bucket...
+        logger.info(f"Scanning S3 bucket: {bucket_name}")
+        return []
+
+    async def _scan_gcs_bucket(self, project_id, bucket_name, prefix=""):
+        # ...existing code from DocumentService._scan_gcs_bucket...
+        logger.info(f"Scanning GCS bucket: {bucket_name}")
+        return []
+
+    async def _scan_youtube_video(self, video_url):
+        # ...existing code from DocumentService._scan_youtube_video...
+        import uuid
+        doc_id = str(uuid.uuid4())
+        video_id = video_url.split('v=')[-1].split('&')[0]
+        query = """
+        CREATE (d:Document {
+            id: $id,
+            fileName: $fileName,
+            url: $url,
+            sourceType: 'youtube',
+            status: 'New',
+            createdAt: datetime(),
+            totalChunks: 0,
+            processedAt: null
+        })
+        RETURN d
+        """
+        self.neo4j.execute_write_query(query, {
+            "id": doc_id,
+            "fileName": f"youtube_video_{video_id}",
+            "url": video_url,
+            "sourceType": 'youtube',
+            "status": 'New'
+        })
+        return [{
+            "id": doc_id,
+            "file_name": f"youtube_video_{video_id}",
+            "source_type": 'youtube',
+            "status": 'New',
+            "created_at": datetime.now(),
+            "total_chunks": 0,
+            "processed_at": None
+        }]
+
+    async def _scan_wikipedia_page(self, page_title):
+        # ...existing code from DocumentService._scan_wikipedia_page...
+        import uuid
+        doc_id = str(uuid.uuid4())
+        query = """
+        CREATE (d:Document {
+            id: $id,
+            fileName: $fileName,
+            pageTitle: $pageTitle,
+            sourceType: 'wiki',
+            status: 'New',
+            createdAt: datetime(),
+            totalChunks: 0,
+            processedAt: null
+        })
+        RETURN d
+        """
+        self.neo4j.execute_write_query(query, {
+            "id": doc_id,
+            "fileName": f"wikipedia_{page_title.replace(' ', '_')}",
+            "pageTitle": page_title,
+            "sourceType": 'wiki',
+            "status": 'New'
+        })
+        return [{
+            "id": doc_id,
+            "file_name": f"wikipedia_{page_title.replace(' ', '_')}",
+            "source_type": 'wiki',
+            "status": 'New',
+            "created_at": datetime.now(),
+            "total_chunks": 0,
+            "processed_at": None
+        }]
+
+    async def _scan_web_page(self, url):
+        # ...existing code from DocumentService._scan_web_page...
+        import uuid
+        doc_id = str(uuid.uuid4())
+        query = """
+        CREATE (d:Document {
+            id: $id,
+            fileName: $fileName,
+            url: $url,
+            sourceType: 'web',
+            status: 'New',
+            createdAt: datetime(),
+            totalChunks: 0,
+            processedAt: null
+        })
+        RETURN d
+        """
+        self.neo4j.execute_write_query(query, {
+            "id": doc_id,
+            "fileName": f"web_page_{hash(url)}",
+            "url": url,
+            "sourceType": 'web',
+            "status": 'New'
+        })
+        return [{
+            "id": doc_id,
+            "file_name": f"web_page_{hash(url)}",
+            "source_type": 'web',
+            "status": 'New',
+            "created_at": datetime.now(),
+            "total_chunks": 0,
+            "processed_at": None
+        }]
+
+    async def get_documents_list(self):
+        # ...existing code from DocumentService.get_documents_list...
+        query = """
+        MATCH (d:Document)
+        OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
+        RETURN d.id as id,
+               d.fileName as fileName,
+               d.sourceType as sourceType,
+               d.status as status,
+               d.createdAt as createdAt,
+               d.processedAt as processedAt,
+               count(c) as chunkCount
+        ORDER BY d.createdAt DESC
+        """
+        result = self.neo4j.execute_query(query)
+        documents = []
+        for record in result:
+            created_at = record["createdAt"]
+            processed_at = record.get("processedAt")
+            # Convert Neo4jDateTime to Python datetime
+            if isinstance(created_at, Neo4jDateTime):
+                created_at = created_at.to_native()
+            if isinstance(processed_at, Neo4jDateTime):
+                processed_at = processed_at.to_native()
+            documents.append({
+                "id": record["id"],
+                "file_name": record["fileName"],
+                "source_type": record["sourceType"],
+                "status": record["status"],
+                "created_at": created_at,
+                "processed_at": processed_at,
+                "chunk_count": record.get("chunkCount", 0)
+            })
+        return documents
     """Integration service that orchestrates all advanced graph capabilities"""
     
     def __init__(self, neo4j_client: Neo4jClient):

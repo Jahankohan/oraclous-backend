@@ -4,7 +4,7 @@ from typing import List, Optional
 from app.core.neo4j_client import Neo4jClient, get_neo4j_client
 from app.models.requests import ChatRequest
 from app.models.responses import ChatResponse, BaseResponse
-from app.services.chat_service import ChatService
+from app.services.enhanced_chat_service import EnhancedChatService
 
 router = APIRouter()
 
@@ -15,15 +15,13 @@ async def chat_with_bot(
 ) -> ChatResponse:
     """Chat with the knowledge graph bot"""
     try:
-        chat_service = ChatService(neo4j)
-        
+        chat_service = EnhancedChatService(neo4j)
         return await chat_service.chat(
             message=request.message,
             mode=request.mode,
             file_names=request.file_names,
             session_id=request.session_id
         )
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
 
@@ -34,14 +32,12 @@ async def clear_chat_history(
 ) -> BaseResponse:
     """Clear chat history for a session"""
     try:
-        chat_service = ChatService(neo4j)
+        chat_service = EnhancedChatService(neo4j)
         await chat_service.clear_chat_history(session_id)
-        
         return BaseResponse(
             success=True,
             message="Chat history cleared successfully"
         )
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to clear chat history: {str(e)}")
 
@@ -53,9 +49,8 @@ async def get_chat_history(
 ):
     """Get chat history for a session"""
     try:
-        chat_service = ChatService(neo4j)
+        chat_service = EnhancedChatService(neo4j)
         return await chat_service.get_chat_history(session_id, limit)
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get chat history: {str(e)}")
 

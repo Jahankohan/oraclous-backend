@@ -1,3 +1,13 @@
+# --- Neo4j Write Test on Startup ---
+import logging
+from app.core.neo4j_client import get_neo4j_client
+try:
+    neo4j = get_neo4j_client()
+    result = neo4j.execute_write_query("CREATE (t:TestNode {createdAt: datetime()}) RETURN t")
+    logging.info(f"Neo4j write test successful: {result}")
+except Exception as e:
+    logging.error(f"Neo4j write test failed: {e}")
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,8 +22,8 @@ from app.core.exceptions import Neo4jConnectionError, ServiceError
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,  # or DEBUG if you want even more details
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
 

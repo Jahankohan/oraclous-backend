@@ -7,7 +7,6 @@ from datetime import datetime
 from langchain.schema import Document
 from langchain_community.graphs import Neo4jGraph
 from langchain_experimental.graph_transformers import LLMGraphTransformer
-# from langchain.schema.graph_document import GraphDocument
 from langchain_community.graphs.graph_document import GraphDocument
 
 from app.core.neo4j_client import Neo4jClient
@@ -35,10 +34,12 @@ class ExtractionService:
         enable_schema: bool = True
     ) -> AsyncGenerator[ProcessingProgress, None]:
         """Extract knowledge graph from documents"""
-        
+        print(f"[EXTRACTION] Starting extraction for files: {file_names}")
         try:
             # Get documents to process
             documents = await self._get_documents_to_process(file_names)
+
+            print(f"[EXTRACTION] Documents to process: {len(documents)}")
             
             if not documents:
                 raise ExtractionError("No documents found for processing")
@@ -83,13 +84,23 @@ class ExtractionService:
                             total_chunks=len(chunks),
                             current_step=f"Extracting entities from batch {batch_idx // batch_size + 1}/{total_batches}"
                         )
-                        
+                        print(f"[EXTRACTION] Batch {batch_idx // batch_size + 1}/{total_batches} for file '{doc_info['fileName']}':")
+                        print(f"  Chunks in batch: {[chunk['id'] for chunk in batch_chunks]}")
+
                         # Extract graph documents
                         graph_documents = await self._extract_batch_graph(
                             graph_transformer, 
                             batch_chunks
                         )
-                        
+
+                        print(f"  Graph documents extracted: {len(graph_documents)}")
+                        for idx, gd in enumerate(graph_documents):
+                            print(f"    GraphDocument[{idx}]: nodes={len(getattr(gd, 'nodes', []))}, relationships={len(getattr(gd, 'relationships', []))}")
+                            print(f"      Nodes: {[getattr(n, 'id', None) for n in getattr(gd, 'nodes', [])]}")
+                            print(f"      Relationships: {[getattr(r, 'type', None) for r in getattr(gd, 'relationships', [])]}")
+
+                        print(f"Extracted {len(graph_documents)} graph documents from batch {batch_idx // batch_size + 1}")
+
                         # Store graph documents
                         await self._store_graph_documents(graph_documents, doc_info["id"])
                         
@@ -119,7 +130,7 @@ class ExtractionService:
                     )
                     
                 except Exception as e:
-                    logger.error(f"Error processing document {doc_info['fileName']}: {e}")
+                    print(f"Error processing document {doc_info['fileName']}: {e}")
                     await self._update_document_status(doc_info["id"], ProcessingStatus.FAILED)
                     
                     yield ProcessingProgress(
@@ -133,7 +144,7 @@ class ExtractionService:
                     )
         
         except Exception as e:
-            logger.error(f"Error in extraction process: {e}")
+            print(f"Error in extraction process: {e}")
             raise ExtractionError(f"Extraction failed: {e}")
     
     async def _get_documents_to_process(self, file_names: List[str]) -> List[Dict[str, Any]]:
@@ -154,7 +165,7 @@ class ExtractionService:
                    coalesce(d.totalChunks, 0) as totalChunks
             """
             result = self.neo4j.execute_query(query, {"status": ProcessingStatus.NEW.value})
-        
+        print(f"[EXTRACTION] Documents to process: {[doc['fileName'] for doc in result]}")
         return result
     
     async def _get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
@@ -164,9 +175,10 @@ class ExtractionService:
         RETURN c.id as id, c.text as text, c.chunkIndex as chunkIndex
         ORDER BY c.chunkIndex
         """
-        
-        return self.neo4j.execute_query(query, {"docId": document_id})
-    
+        chunks = self.neo4j.execute_query(query, {"docId": document_id})
+        print(f"[EXTRACTION] Chunks for document {document_id}: {[chunk['id'] for chunk in chunks]}")
+        return chunks
+
     async def _extract_batch_graph(
         self, 
         graph_transformer: LLMGraphTransformer, 
@@ -195,6 +207,7 @@ class ExtractionService:
     
     async def _store_graph_documents(self, graph_documents: List[GraphDocument], document_id: str) -> None:
         """Store extracted graph documents in Neo4j"""
+        print(f"[EXTRACTION] Storing {len(graph_documents)} graph documents for document {document_id}")
         for graph_doc in graph_documents:
             # Create entity nodes
             for node in graph_doc.nodes:
