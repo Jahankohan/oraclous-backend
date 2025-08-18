@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from app.core.config import settings
 from app.core.database import init_db, close_db
-from app.api.v1.router import router as api_router
+from app.api.v1.router import api_router
 
 
 @asynccontextmanager
@@ -26,8 +26,3 @@ app = FastAPI(
 
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")
-
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "version": settings.VERSION}

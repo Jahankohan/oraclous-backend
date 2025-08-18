@@ -89,8 +89,11 @@ class ToolRegistryService(BaseToolRegistry, ToolValidationMixin):
     
         # Capabilities filter
         if query.capabilities:
+            from sqlalchemy import cast
+            from sqlalchemy.dialects.postgresql import JSONB
             for capability in query.capabilities:
-                capability_condition = ToolDefinitionDB.capabilities.op('@>')([{'name': capability}])
+                capability_jsonb = cast([{'name': capability}], JSONB)
+                capability_condition = ToolDefinitionDB.capabilities.op('@>')(capability_jsonb)
                 conditions.append(capability_condition)
     
         # Tags filter
@@ -188,13 +191,16 @@ class ToolRegistryService(BaseToolRegistry, ToolValidationMixin):
         stmt = select(ToolDefinitionDB)
         
         if category:
+            print("Category:", category)
             stmt = stmt.where(ToolDefinitionDB.category == category.value)
         
         stmt = stmt.order_by(ToolDefinitionDB.name).offset(offset).limit(limit)
-        
+        print("Stmt:", stmt)
         result = await self.db.execute(stmt)
         db_tools = result.scalars().all()
-        
+
+        print("DB Tools:", db_tools)
+
         return [self._db_to_pydantic(tool) for tool in db_tools]
     
     async def update_tool(self, tool_id: str, definition: ToolDefinition) -> bool:

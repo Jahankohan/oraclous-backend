@@ -1,6 +1,7 @@
 import uuid
-from sqlalchemy import Column, String, Text, JSON
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy import Column, String, Text
+from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
@@ -21,17 +22,19 @@ class ToolDefinitionDB(Base, UUIDMixin, TimestampMixin):
     # Categorization
     category = Column(String(50), nullable=False, index=True)
     type = Column(String(50), nullable=False, index=True)
-    capabilities = Column(JSON, default=list)  # List of ToolCapability dicts
+    capabilities = Column(JSONB, default=list)  # List of ToolCapability dicts
     tags = Column(ARRAY(String), default=list)
     
     # Schemas (stored as JSON)
-    input_schema = Column(JSON, nullable=False)
-    output_schema = Column(JSON, nullable=False)
-    configuration_schema = Column(JSON)
+    input_schema = Column(JSONB, nullable=False)
+    output_schema = Column(JSONB, nullable=False)
+    configuration_schema = Column(JSONB)
     
     # Requirements
-    credential_requirements = Column(JSON, default=list)  # List of CredentialRequirement dicts
+    credential_requirements = Column(JSONB, default=list)  # List of CredentialRequirement dicts
     dependencies = Column(ARRAY(String), default=list)
+
+    instances = relationship("ToolInstanceDB", back_populates="tool_definition")
     
     # Metadata
     author = Column(String(255))

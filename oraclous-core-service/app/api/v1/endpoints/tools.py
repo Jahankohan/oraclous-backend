@@ -7,7 +7,7 @@ from app.services.tool_registry import ToolRegistryService
 from app.schemas.tool_definition import ToolDefinition, ToolQuery
 from app.schemas.common import ToolCategory
 
-router = APIRouter(prefix="/tools", tags=["tools"])
+router = APIRouter()
 
 
 async def get_tool_registry(db: AsyncSession = Depends(get_session)) -> ToolRegistryService:
