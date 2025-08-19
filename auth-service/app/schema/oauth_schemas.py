@@ -5,10 +5,12 @@ from datetime import datetime
 class TokenRefreshRequest(BaseModel):
     user_id: str
     provider: str
+    state: Optional[str] = "/"
 
 class TokenRefreshResponse(BaseModel):
     success: bool
     access_token: Optional[str] = None
+    login_url: Optional[str] = None
     expires_at: Optional[datetime] = None
     error: Optional[str] = None
 

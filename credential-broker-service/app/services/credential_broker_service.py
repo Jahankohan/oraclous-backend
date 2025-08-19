@@ -45,6 +45,7 @@ class CredentialBroker:
         self,
         user_id: UUID,
         provider: str,
+        state: Optional[str] = "/",
         required_scopes: Optional[List[str]] = None
     ) -> CredentialResult:
         """
@@ -54,7 +55,7 @@ class CredentialBroker:
         """
         try:
             # 1. Get the actual token (may be expired or missing scopes)
-            token_result = await self._get_runtime_token(user_id, provider)
+            token_result = await self._get_runtime_token(user_id, provider, state, required_scopes)
             if not token_result.success:
                 # If token expired, try to refresh
                 if token_result.error_code == OAUTH_ERROR_CODES["TOKEN_EXPIRED"]:
@@ -85,10 +86,10 @@ class CredentialBroker:
                     scope_result = await self._validate_scopes(user_id, provider, required_scopes)
                     if not scope_result.success:
                         return scope_result
-            logger.info(f"Successfully obtained token for user {user_id}, provider {provider}")
+            print(f"Successfully obtained token for user {user_id}, provider {provider}")
             return token_result
         except Exception as e:
-            logger.error(f"Unexpected error getting provider token: {e}")
+            print(f"Unexpected error getting provider token: {e}")
             return CredentialResult(
                 success=False,
                 error_code=OAUTH_ERROR_CODES["PROVIDER_ERROR"],
@@ -99,7 +100,7 @@ class CredentialBroker:
         self, 
         user_id: UUID, 
         provider: str, 
-        data_source_type: str
+        required_scopes: str
     ) -> CredentialResult:
         """
         Ensure user has access to a specific data source type (e.g., 'drive', 'databases').
@@ -107,19 +108,21 @@ class CredentialBroker:
         """
         try:
             # Get required scopes for this data source
-            capabilities = DATA_SOURCE_CAPABILITIES.get(provider, {}).get(data_source_type)
+            capabilities = DATA_SOURCE_CAPABILITIES.get(provider, {}).get(required_scopes)
+            print("capabilities:", capabilities)
             if not capabilities:
                 return CredentialResult(
                     success=False,
                     error_code=OAUTH_ERROR_CODES["INVALID_PROVIDER"],
-                    error_message=f"Unsupported data source: {provider}/{data_source_type}"
+                    error_message=f"Unsupported data source: {provider}/{required_scopes}"
                 )
 
-            required_scopes = capabilities.get("required_scopes", [])
-            return await self.get_provider_token(user_id, provider, required_scopes)
+            scopes_needed = capabilities.get("required_scopes", [])
+            print("scopes_needed:", scopes_needed)
+            return await self.get_provider_token(user_id, provider, scopes_needed)
             
         except Exception as e:
-            logger.error(f"Error ensuring data source access: {e}")
+            print(f"Error ensuring data source access: {e}")
             return CredentialResult(
                 success=False,
                 error_code=OAUTH_ERROR_CODES["PROVIDER_ERROR"],
@@ -133,7 +136,7 @@ class CredentialBroker:
                 response = await client.get(
                     f"{self.auth_service_url}/oauth/user-tokens",
                     headers=self.headers,
-                    params={"user_id": user_id}
+                    params={"user_id": str(user_id)}
                 )
                 
                 if response.status_code == 200:
@@ -218,7 +221,8 @@ class CredentialBroker:
                     return CredentialResult(
                         success=False,
                         error_code=OAUTH_ERROR_CODES["PROVIDER_ERROR"],
-                        error_message=f"Scope validation failed: {response.status_code}"
+                        error_message=f"Scope validation failed: {response.status_code}",
+                        login_url=data.get("login_url")
                     )
                     
         except Exception as e:
@@ -229,14 +233,26 @@ class CredentialBroker:
                 error_message=str(e)
             )
 
-    async def _get_runtime_token(self, user_id: UUID, provider: str) -> CredentialResult:
+    async def _get_login_url(self, provider: str, state: str, required_scopes) -> Optional[str]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.auth_service_url}/oauth/login-url",
+                headers=self.headers,
+                params={"provider": provider, "state": state, "required_scopes": required_scopes}
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("login_url")
+            return None
+
+    async def _get_runtime_token(self, user_id: UUID, provider: str, state: Optional[str] = "/", required_scopes: Optional[List[str]] = None) -> CredentialResult:
         """Get runtime token from auth service."""
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     f"{self.auth_service_url}/oauth/runtime-tokens",
                     headers=self.headers,
-                    params={"user_id": user_id, "provider": provider}
+                    params={"user_id": str(user_id), "provider": provider}
                 )
                 
                 if response.status_code == 200:
@@ -258,10 +274,12 @@ class CredentialBroker:
                     )
                     
                 elif response.status_code == 401:
+                    login_url = await self._get_login_url(provider, state, required_scopes)
                     return CredentialResult(
                         success=False,
                         error_code=OAUTH_ERROR_CODES["TOKEN_EXPIRED"],
-                        error_message="Token expired and refresh failed"
+                        error_message="Token expired and refresh failed",
+                        login_url=login_url
                     )
                     
                 else:
@@ -283,7 +301,7 @@ class CredentialBroker:
         """Explicitly refresh a token if it's expired. Also fetch scopes if possible."""
         try:
             async with httpx.AsyncClient() as client:
-                payload = {"user_id": user_id, "provider": provider}
+                payload = {"user_id": str(user_id), "provider": provider}
                 response = await client.post(
                     f"{self.auth_service_url}/oauth/refresh-if-needed",
                     headers=self.headers,
@@ -299,7 +317,7 @@ class CredentialBroker:
                             resp2 = await client.get(
                                 f"{self.auth_service_url}/oauth/runtime-tokens",
                                 headers=self.headers,
-                                params={"user_id": user_id, "provider": provider}
+                                params={"user_id": str(user_id), "provider": provider}
                             )
                             if resp2.status_code == 200:
                                 d2 = resp2.json()
@@ -318,7 +336,8 @@ class CredentialBroker:
                         return CredentialResult(
                             success=False,
                             error_code=OAUTH_ERROR_CODES["REFRESH_FAILED"],
-                            error_message=data.get("error", "Token refresh failed")
+                            error_message=data.get("error", "Token refresh failed"),
+                            login_url=data.get("login_url")
                         )
                 else:
                     return CredentialResult(

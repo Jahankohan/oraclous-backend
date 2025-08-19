@@ -84,6 +84,20 @@ async def callback(provider: str, request: Request):
     
     return RedirectResponse(url=response_url)
 
+@router.get("/oauth/login-url")
+async def get_login_url(
+    provider: str = Query(...),
+    state: str = Query("/"),
+    required_scopes: Optional[List[str]] = Query(None),
+    request: Request = None,
+    _: bool = Depends(verify_internal_service)
+):
+    """Return OAuth login URL for a provider and user (internal service only)."""
+    repository = await get_token_repository(request)
+    oauth_service = OAuthService(repository)
+    login_url = await oauth_service.build_login_url(provider, state, required_scopes)
+    return {"login_url": login_url}
+
 @router.post("/oauth/validate-scopes", response_model=ScopeValidationResponse)
 async def validate_scopes(
     request_data: ScopeValidationRequest, 
@@ -131,11 +145,13 @@ async def refresh_if_needed(
     
     try:
         token_obj = await token_repository.get_token(request_data.user_id, request_data.provider)
-        
+
         if not token_obj:
+            login_url = await oauth_service.build_login_url(request_data.provider, state=request_data.state)
             return TokenRefreshResponse(
                 success=False,
-                error="Token not found"
+                error="Token not found",
+                login_url=login_url
             )
         
         # Check if token is expired
@@ -153,9 +169,11 @@ async def refresh_if_needed(
                     expires_at=refreshed["expires_at"]
                 )
             else:
+                login_url = await oauth_service.build_login_url(request_data.provider, state=request_data.state)
                 return TokenRefreshResponse(
                     success=False,
-                    error="Token expired and no refresh token available"
+                    error="Token expired and no refresh token available",
+                    login_url=login_url
                 )
         else:
             # Token is still valid
@@ -166,9 +184,11 @@ async def refresh_if_needed(
             )
             
     except Exception as e:
+        login_url = await oauth_service.build_login_url(request_data.provider, state=request_data.state)
         return TokenRefreshResponse(
             success=False,
-            error=f"Token refresh failed: {str(e)}"
+            error=f"Token refresh failed: {str(e)}",
+            login_url=login_url
         )
 
 @router.get("/oauth/user-tokens", response_model=UserTokensResponse)

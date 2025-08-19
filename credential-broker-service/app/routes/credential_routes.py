@@ -96,7 +96,7 @@ async def ensure_data_source_access(
     request_data: RuntimeTokenRequest
 ):
     broker = CredentialBroker()
-    result = await broker.ensure_data_source_access(request_data.user_id, request_data.provider, request_data.data_source_type)
+    result = await broker.ensure_data_source_access(request_data.user_id, request_data.provider, request_data.required_scopes)
     if result.success:
         return CredentialBrokerSuccessResponse(
             access_token=result.token.access_token,
