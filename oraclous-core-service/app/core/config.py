@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     
     # Auth settings (for integration with your existing auth service)
     AUTH_SERVICE_URL: str = "http://localhost:8080"
-    CREDENTIAL_BROKER_URL: str = "http://localhost:8001"
+    CREDENTIAL_BROKER_URL: str = "http://localhost:8001/credentials"
     INTERNAL_SERVICE_KEY: str
     
     # Redis (for future job queue)

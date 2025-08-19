@@ -39,6 +39,9 @@ class ToolInstance(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+    oauth_redirects: Optional[Dict[str, Optional[str]]] = None
+    missing_credentials: Optional[List[str]] = None
+
 
 class CreateInstanceRequest(BaseModel):
     """Request to create a new tool instance"""

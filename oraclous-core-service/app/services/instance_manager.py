@@ -34,22 +34,22 @@ class InstanceManagerService(BaseInstanceManager):
         self.credential_client = credential_client
     
     async def create_instance(
-        self, 
+        self,
         user_id: UUID,
         tool_definition_id: str,
         workflow_id: str,
         configuration: Dict[str, Any]
     ) -> ToolInstance:
-        """Create a new tool instance"""
+        """Create a new tool instance with automatic credential check"""
         # 1. Validate tool definition exists
         tool_definition = await self.tool_registry.get_tool(tool_definition_id)
         if not tool_definition:
             raise ValueError(f"Tool definition {tool_definition_id} not found")
-        
+
         # 2. Validate configuration against tool schema
         if not self._validate_configuration(tool_definition, configuration):
             raise ValueError("Invalid configuration for tool")
-        
+
         # 3. Create instance request
         create_request = CreateInstanceRequest(
             workflow_id=workflow_id,
@@ -59,29 +59,72 @@ class InstanceManagerService(BaseInstanceManager):
             configuration=configuration,
             settings=configuration.get("settings", {})
         )
-        
+
         # 4. Create instance in repository
         instance = await self.repo.create_instance(user_id, create_request)
-        
+
         # 5. Determine and store required credentials
         required_creds = self._extract_required_credentials(tool_definition)
+
         if required_creds:
             await self._update_required_credentials(instance.id, required_creds)
-        
-        # 6. Update status based on credential requirements
-        if required_creds:
-            await self.repo.update_instance_status(
-                instance.id, 
-                InstanceStatus.CONFIGURATION_REQUIRED
-            )
+
+        # 6. Try to fetch credentials from broker
+        credential_mappings = {}
+        oauth_redirects = {}
+        missing_credentials = []
+        required_scopes = self._build_required_scopes_map(tool_definition)
+        for cred_req in tool_definition.credential_requirements:
+            cred_type = cred_req.type.value
+            provider = "google"
+            scopes = required_scopes.get(cred_type, []) if required_scopes else []
+            if cred_type == "OAUTH_TOKEN" and provider:
+                # Try to get runtime token for the actual provider
+                token_response = await self.credential_client.get_runtime_token(
+                    user_id=str(user_id),
+                    provider=str(provider),
+                    required_scopes=scopes
+                )
+                print("Token Response:", token_response)
+                if token_response and token_response.get("access_token"):
+                    credential_mappings[cred_type] = provider
+                else:
+                    # Fallback: validate and get login URL
+                    validation = await self.credential_client.validate_credentials(
+                        user_id=str(user_id),
+                        credential_mappings={cred_type: provider},
+                        required_scopes=required_scopes
+                    )
+                    login_url = token_response.get("login_url")
+                    print("Login URL:", login_url)
+                    oauth_redirects[cred_type] = login_url
+                    missing_credentials.append(cred_type)
+            elif cred_type == "OAUTH_TOKEN":
+                # If provider is missing, treat as missing credential
+                missing_credentials.append(cred_type)
+            else:
+                validation = await self.credential_client.validate_credentials(
+                    user_id=user_id,
+                    credential_mappings={cred_type: cred_type}
+                )
+                valid = validation.get(cred_type, {}).get("valid", False)
+                if valid:
+                    credential_mappings[cred_type] = cred_type
+                else:
+                    missing_credentials.append(cred_type)
+
+        # 7. Update instance status
+        if not missing_credentials:
+            await self.repo.update_instance_status(instance.id, InstanceStatus.READY)
         else:
-            await self.repo.update_instance_status(
-                instance.id, 
-                InstanceStatus.READY
-            )
-        
+            await self.repo.update_instance_status(instance.id, InstanceStatus.CONFIGURATION_REQUIRED)
+
         logger.info(f"Created instance {instance.id} for tool {tool_definition.name}")
-        return await self.repo.get_instance(instance.id)
+        # Attach credential info to instance (for API response)
+        instance = await self.repo.get_instance(instance.id)
+        instance.oauth_redirects = oauth_redirects
+        instance.missing_credentials = missing_credentials
+        return instance
     
     async def configure_instance(
         self, 
@@ -115,40 +158,40 @@ class InstanceManagerService(BaseInstanceManager):
         return False
     
     async def configure_credentials(
-        self, 
-        instance_id: str, 
+        self,
+        instance_id: str,
         user_id: UUID,
         request: ConfigureCredentialsRequest
     ) -> InstanceStatusResponse:
-        """Configure credentials for an instance"""
+        """Configure credentials for an instance, with OAuth/manual handling"""
         # 1. Get instance
         instance = await self.repo.get_user_instance(instance_id, user_id)
         if not instance:
             raise ValueError(f"Instance {instance_id} not found for user {user_id}")
-        
+
         # 2. Get tool definition
         tool_definition = await self.tool_registry.get_tool(instance.tool_definition_id)
         if not tool_definition:
             raise ValueError(f"Tool definition {instance.tool_definition_id} not found")
-        
+
         # 3. Validate credential mappings
         validation_errors = []
         required_cred_types = {req.type.value for req in tool_definition.credential_requirements if req.required}
         provided_cred_types = set(request.credential_mappings.keys())
-        
+
         # Check for missing required credentials
         missing_creds = required_cred_types - provided_cred_types
         if missing_creds:
             validation_errors.extend([f"Missing required credential: {cred}" for cred in missing_creds])
-        
+
         # Check for unexpected credentials
         unexpected_creds = provided_cred_types - {req.type.value for req in tool_definition.credential_requirements}
         if unexpected_creds:
             validation_errors.extend([f"Unexpected credential: {cred}" for cred in unexpected_creds])
-        
+
         if validation_errors:
             raise ValueError(f"Credential validation failed: {'; '.join(validation_errors)}")
-        
+
         # 4. Validate credentials with credential broker
         required_scopes = self._build_required_scopes_map(tool_definition)
         credential_validation = await self.credential_client.validate_credentials(
@@ -156,28 +199,38 @@ class InstanceManagerService(BaseInstanceManager):
             credential_mappings=request.credential_mappings,
             required_scopes=required_scopes
         )
-        
+
         # 5. Update instance with credential mappings
         updated_instance = await self.repo.configure_credentials(
             instance_id, user_id, request.credential_mappings
         )
-        
+
         if not updated_instance:
             raise ValueError("Failed to update instance credentials")
-        
-        # 6. Build credential status response
+
+        # 6. Build credential status response, handle OAuth/manual
         credentials_status = []
         all_valid = True
-        
+        oauth_redirects = {}
+        missing_credentials = []
+
         for cred_req in tool_definition.credential_requirements:
             cred_type = cred_req.type.value
             mapping_exists = cred_type in request.credential_mappings
             validation_result = credential_validation.get(cred_type, {})
             is_valid = validation_result.get("valid", False) if mapping_exists else False
-            
+
+            if cred_type == "OAUTH_TOKEN" and not is_valid:
+                login_url = validation_result.get("login_url")
+                if login_url:
+                    oauth_redirects[cred_type] = login_url
+                missing_credentials.append(cred_type)
+            elif cred_req.required and not is_valid:
+                missing_credentials.append(cred_type)
+
             if cred_req.required and not is_valid:
                 all_valid = False
-            
+
             credentials_status.append(InstanceCredentialStatus(
                 credential_type=cred_type,
                 required=cred_req.required,
@@ -185,7 +238,7 @@ class InstanceManagerService(BaseInstanceManager):
                 valid=is_valid,
                 error_message=validation_result.get("error") if mapping_exists else None
             ))
-        
+
         # 7. Update instance status
         if all_valid:
             await self.repo.update_instance_status(instance_id, InstanceStatus.READY)
@@ -193,9 +246,13 @@ class InstanceManagerService(BaseInstanceManager):
         else:
             await self.repo.update_instance_status(instance_id, InstanceStatus.CONFIGURATION_REQUIRED)
             updated_instance.status = InstanceStatus.CONFIGURATION_REQUIRED
-        
+
         logger.info(f"Configured credentials for instance {instance_id}, status: {updated_instance.status}")
-        
+
+        # Attach credential info to instance (for API response)
+        updated_instance.oauth_redirects = oauth_redirects
+        updated_instance.missing_credentials = missing_credentials
+
         return InstanceStatusResponse(
             instance=updated_instance,
             credentials_status=credentials_status,

@@ -11,11 +11,41 @@ logger = logging.getLogger(__name__)
 
 
 class CredentialClient:
+    async def get_runtime_token(
+        self,
+        user_id: UUID,
+        provider: str,
+        required_scopes: Optional[List[str]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get OAuth runtime token for a user and provider from credential broker
+        """
+        payload = {
+            "user_id": str(user_id),
+            "provider": provider,
+            "required_scopes": required_scopes or []
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.credential_broker_url}/runtime-token",
+                    headers=self.headers,
+                    json=payload
+                )
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    logger.error(f"Failed to get runtime token: {response.status_code} - {response.text}")
+                    return None
+        except Exception as e:
+            logger.error(f"Error getting runtime token: {e}")
+            return None
+
+
     """
     Client for communicating with the Credential Broker Service
     Handles all credential-related operations for the orchestrator
     """
-    
     def __init__(self):
         self.credential_broker_url = settings.CREDENTIAL_BROKER_URL
         self.internal_service_key = settings.INTERNAL_SERVICE_KEY
@@ -24,84 +54,48 @@ class CredentialClient:
             "Content-Type": "application/json"
         }
         self.timeout = 30.0
-    
-    async def get_runtime_credentials(
-        self, 
-        user_id: UUID, 
+
+    async def validate_credentials(
+        self,
+        user_id: UUID,
         credential_mappings: Dict[str, str],
         required_scopes: Optional[Dict[str, List[str]]] = None
-    ) -> Dict[str, Any]:
+    ) -> Dict[str, Dict[str, Any]]:
         """
-        Get runtime credentials for tool execution
-        
-        Args:
-            user_id: User ID
-            credential_mappings: Maps credential_type -> credential_id or provider
-            required_scopes: Maps credential_type -> required_scopes
-            
-        Returns:
-            Dict mapping credential_type -> credential_data
+        Validate that all required credentials are available and valid
+        Uses /ensure-data-source-access for OAuth, and GET for other credentials
         """
-        credentials = {}
-        
+        validation_results = {}
         for cred_type, cred_identifier in credential_mappings.items():
             try:
                 # Handle OAuth tokens
                 if cred_type == "OAUTH_TOKEN":
                     scopes = required_scopes.get(cred_type, []) if required_scopes else []
-                    cred_data = await self._get_oauth_token(user_id, cred_identifier, scopes)
-                    
-                # Handle API keys and other credential types
+                    # Use ensure_data_source_access for OAuth validation/flow
+                    result = await self.ensure_data_source_access(user_id, cred_identifier, scopes)
+                    if result.get("success"):
+                        validation_results[cred_type] = {
+                            "valid": True,
+                            "error": None,
+                            "login_url": None
+                        }
+                    else:
+                        validation_results[cred_type] = {
+                            "valid": False,
+                            "error": result.get("error_message"),
+                            "login_url": result.get("login_url"),
+                            "missing_scopes": result.get("missing_scopes", [])
+                        }
                 else:
-                    cred_data = await self._get_credential_data(cred_identifier)
-                
-                if cred_data:
-                    credentials[cred_type] = cred_data
-                else:
-                    logger.warning(f"Failed to retrieve credential {cred_type} for user {user_id}")
-                    
+                    result = await self._validate_credential(cred_identifier)
+                    validation_results[cred_type] = result
             except Exception as e:
-                logger.error(f"Error retrieving credential {cred_type}: {e}")
-                raise
-        
-        return credentials
-    
-    async def _get_oauth_token(
-        self, 
-        user_id: UUID, 
-        provider: str, 
-        required_scopes: List[str]
-    ) -> Optional[Dict[str, Any]]:
-        """Get OAuth token from credential broker"""
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                payload = {
-                    "user_id": str(user_id),
-                    "provider": provider,
-                    "required_scopes": required_scopes
+                validation_results[cred_type] = {
+                    "valid": False,
+                    "error": str(e),
+                    "error_code": "VALIDATION_ERROR"
                 }
-                
-                response = await client.post(
-                    f"{self.credential_broker_url}/runtime-token",
-                    headers=self.headers,
-                    json=payload
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    return {
-                        "access_token": data["access_token"],
-                        "expires_at": data.get("expires_at"),
-                        "scopes": data.get("scopes", []),
-                        "provider": provider
-                    }
-                else:
-                    logger.error(f"Failed to get OAuth token: {response.status_code} - {response.text}")
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"Error getting OAuth token: {e}")
-            return None
+        return validation_results
     
     async def _get_credential_data(self, credential_id: str) -> Optional[Dict[str, Any]]:
         """Get credential data by ID from credential broker"""
@@ -123,39 +117,6 @@ class CredentialClient:
         except Exception as e:
             logger.error(f"Error getting credential data: {e}")
             return None
-    
-    async def validate_credentials(
-        self, 
-        user_id: UUID, 
-        credential_mappings: Dict[str, str],
-        required_scopes: Optional[Dict[str, List[str]]] = None
-    ) -> Dict[str, Dict[str, Any]]:
-        """
-        Validate that all required credentials are available and valid
-        
-        Returns:
-            Dict mapping credential_type -> {valid: bool, error: str}
-        """
-        validation_results = {}
-        
-        for cred_type, cred_identifier in credential_mappings.items():
-            try:
-                if cred_type == "OAUTH_TOKEN":
-                    scopes = required_scopes.get(cred_type, []) if required_scopes else []
-                    result = await self._validate_oauth_token(user_id, cred_identifier, scopes)
-                else:
-                    result = await self._validate_credential(cred_identifier)
-                
-                validation_results[cred_type] = result
-                
-            except Exception as e:
-                validation_results[cred_type] = {
-                    "valid": False,
-                    "error": str(e),
-                    "error_code": "VALIDATION_ERROR"
-                }
-        
-        return validation_results
     
     async def _validate_oauth_token(
         self, 
@@ -271,7 +232,7 @@ class CredentialClient:
         self, 
         user_id: UUID, 
         provider: str, 
-        data_source_type: str
+        required_scopes: List[str]
     ) -> Dict[str, Any]:
         """Ensure user has access to specific data source"""
         try:
@@ -279,7 +240,7 @@ class CredentialClient:
                 payload = {
                     "user_id": str(user_id),
                     "provider": provider,
-                    "data_source_type": data_source_type
+                    "required_scopes": required_scopes
                 }
                 
                 response = await client.post(

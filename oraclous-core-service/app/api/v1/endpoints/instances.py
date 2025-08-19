@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.schemas.tool_instance import (
     ToolInstance, CreateInstanceRequest, UpdateInstanceRequest,
-    ConfigureCredentialsRequest, InstanceStatusResponse,
+    ConfigureCredentialsRequest, InstanceStatusResponse, InstanceCredentialStatus,
     InstanceListResponse, Execution, CreateExecutionRequest
 )
 from app.schemas.common import InstanceStatus
@@ -19,12 +19,11 @@ from app.core.database import get_session
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 router = APIRouter()
 
-
 # Dependency to get current user ID
 async def get_current_user_id() -> UUID:
     # TODO: Implement proper JWT token validation
     # For now, mock a user ID - replace with actual auth integration
-    return UUID("550e8400-e29b-41d4-a716-446655440000")
+    return UUID("af8531b1-4459-4599-8f70-a438dfca741d")
 
 
 # Dependency to get instance service
@@ -39,6 +38,73 @@ async def get_instance_service(db: AsyncSession = Depends(get_session)) -> Insta
         credential_client=credential_client
     )
 
+# Simple endpoint to refresh instance credentials and status
+@router.post("/{instance_id}/refresh-credentials", response_model=InstanceStatusResponse)
+async def refresh_instance_credentials(
+    instance_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+    service: InstanceManagerService = Depends(get_instance_service)
+):
+    """
+    Refresh credentials for an instance and update status if new token is available.
+    Handles edge case: if credential_mappings is missing, auto-generate from tool definition.
+    """
+    try:
+        instance = await service.get_user_instance(instance_id, user_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        tool_definition = await service.tool_registry.get_tool(instance.tool_definition_id)
+        required_scopes = service._build_required_scopes_map(tool_definition)
+        # Auto-generate credential_mappings if missing
+        credential_mappings = instance.credential_mappings or {}
+        if not credential_mappings:
+            for cred_req in tool_definition.credential_requirements:
+                cred_type = cred_req.type.value
+                # Use provider from tool definition if available, else fallback to cred_type
+                provider = getattr(cred_req, "provider", None) or "google" if cred_type == "OAUTH_TOKEN" else cred_type
+                credential_mappings[cred_type] = provider
+            # Persist this mapping to the instance
+            await service.repo.configure_credentials(instance_id, user_id, credential_mappings)
+            instance.credential_mappings = credential_mappings
+        credential_validation = await service.credential_client.validate_credentials(
+            user_id=user_id,
+            credential_mappings=credential_mappings,
+            required_scopes=required_scopes
+        )
+        all_valid = all(
+            v.get("valid", False)
+            for v in credential_validation.values()
+        )
+        if all_valid:
+            await service.repo.update_instance_status(instance_id, InstanceStatus.READY)
+            instance.status = InstanceStatus.READY
+        else:
+            await service.repo.update_instance_status(instance_id, InstanceStatus.CONFIGURATION_REQUIRED)
+            instance.status = InstanceStatus.CONFIGURATION_REQUIRED
+
+        # Build credentials_status list from credential_validation and tool_definition
+        credentials_status = []
+        for cred_req in tool_definition.credential_requirements:
+            cred_type = cred_req.type.value
+            cred_validation = credential_validation.get(cred_type, {})
+            credentials_status.append(
+                InstanceCredentialStatus(
+                    credential_type=cred_type,
+                    required=getattr(cred_req, "required", True),
+                    configured=cred_validation.get("configured", True),
+                    valid=cred_validation.get("valid", False),
+                    error_message=cred_validation.get("error"),
+                    login_url=cred_validation.get("login_url")
+                )
+            )
+        return InstanceStatusResponse(
+            instance=instance,
+            credentials_status=credentials_status,
+            is_ready_for_execution=all_valid,
+            validation_errors=[]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh credentials: {str(e)}")
 
 @router.post("/", response_model=ToolInstance, status_code=201)
 async def create_instance(
@@ -54,7 +120,12 @@ async def create_instance(
             workflow_id=request.workflow_id,
             configuration=request.configuration
         )
-        return instance
+        # Return instance plus credential info
+        return {
+            **instance.dict(),
+            "oauth_redirects": getattr(instance, "oauth_redirects", {}),
+            "missing_credentials": getattr(instance, "missing_credentials", [])
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -104,7 +175,12 @@ async def configure_instance_credentials(
     """Configure credentials for a tool instance"""
     try:
         status_response = await service.configure_credentials(instance_id, user_id, request)
-        return status_response
+        # Return status response plus credential info
+        return {
+            **status_response.dict(),
+            "oauth_redirects": getattr(status_response.instance, "oauth_redirects", {}),
+            "missing_credentials": getattr(status_response.instance, "missing_credentials", [])
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
