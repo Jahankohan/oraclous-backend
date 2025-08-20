@@ -16,6 +16,8 @@ python-multipart==0.0.20
 aiomysql==0.2.0  # MySQL async driver
 alembic==1.16.4
 
+PyPDF2==3.0.1
+
 
 # Google APIs (for Google Drive/Sheets)
 google-api-python-client==2.178.0

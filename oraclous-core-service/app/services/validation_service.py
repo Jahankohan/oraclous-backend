@@ -211,7 +211,6 @@ class ValidationService:
     ) -> Dict[str, Any]:
         """Validate a single credential requirement with detailed user messaging"""
         cred_type = cred_req.type.value
-        print("Cred Req:", cred_req)
         cred_detail = {
             "type": cred_type,
             "required": cred_req.required,
@@ -232,7 +231,6 @@ class ValidationService:
             cred_detail["is_configured"] = True
             cred_identifier = instance.credential_mappings[cred_type]
 
-            print("cred_identifier:", cred_identifier)
             # Validate the credential
             if cred_type == "OAUTH_TOKEN":
                 validation_result = await self._validate_oauth_credential(

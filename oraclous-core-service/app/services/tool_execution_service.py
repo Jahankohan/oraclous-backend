@@ -99,7 +99,6 @@ class ToolExecutionService:
                 await self._update_instance_stats(instance, result, str(execution.id))
                 
                 logger.info(f"Sync execution completed for instance {instance_id}")
-                print("Final execution result:", result)
                 return result
                 
             except Exception as e:

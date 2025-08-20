@@ -84,7 +84,7 @@ class GoogleDriveReader(OAuthTool):
                     },
                     "file_type": {
                         "type": "string", 
-                        "enum": ["auto", "sheets", "csv", "excel", "docs"],
+                        "enum": ["auto", "sheets", "csv", "excel", "docs", "pdf"],
                         "description": "File type to process (auto-detect if not specified)"
                     },
                     
@@ -195,13 +195,13 @@ class GoogleDriveReader(OAuthTool):
                 success=False,
                 error_message=f"Failed to execute Google Drive operation: {str(e)}"
             )
-    
+
     async def _read_drive_file(
         self,
         input_data: Dict[str, Any],
         credentials
     ) -> Dict[str, Any]:
-        """Read content from a specific Google Drive file"""
+        """Read content from a specific Google Drive file - UPDATED for PDF"""
         drive_service = build('drive', 'v3', credentials=credentials)
         
         file_id = input_data["file_id"]
@@ -230,6 +230,16 @@ class GoogleDriveReader(OAuthTool):
             result_data = await self._process_google_docs(
                 file_id, input_data, credentials
             )
+        elif file_type == "pdf": 
+            result_data = await self._process_pdf_file(
+                drive_service, file_id, input_data
+            )
+        elif file_type == "unknown":
+            # ADDED: Better error for unknown files
+            raise ValueError(
+                f"Unsupported file type: {file_metadata['mimeType']}. "
+                f"Supported types: Google Docs, Google Sheets, CSV, Excel, PDF"
+            )
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
         
@@ -244,6 +254,7 @@ class GoogleDriveReader(OAuthTool):
         
         return result_data
     
+
     async def _list_drive_files(
         self,
         input_data: Dict[str, Any],
@@ -315,9 +326,103 @@ class GoogleDriveReader(OAuthTool):
             "application/vnd.google-apps.document": "docs", 
             "text/csv": "csv",
             "application/vnd.ms-excel": "excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "excel"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "excel",
+            "application/pdf": "pdf",
+            "image/png": "image",
+            "image/jpeg": "image",
+            "text/plain": "text"
         }
         return mime_mapping.get(mime_type, "unknown")
+    
+    async def _process_pdf_file(
+        self,
+        drive_service,
+        file_id: str,
+        input_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Process PDF file by downloading it
+        Note: PDF text extraction would require additional libraries like PyPDF2
+        For now, we'll return file metadata and download info
+        """
+        try:
+            # Get file metadata first
+            file_metadata = drive_service.files().get(
+                fileId=file_id,
+                fields="id,name,size,modifiedTime,webViewLink"
+            ).execute()
+            
+            # For PDFs, we can provide metadata and download info
+            # Full text extraction would require PyPDF2 or similar
+            return {
+                "data": [
+                    ["property", "value"],
+                    ["file_name", file_metadata["name"]],
+                    ["file_size", file_metadata.get("size", "N/A")],
+                    ["modified_time", file_metadata["modifiedTime"]],
+                    ["download_url", f"https://drive.google.com/file/d/{file_id}/view"],
+                    ["web_view_link", file_metadata.get("webViewLink", "")]
+                ],
+                "headers": ["property", "value"],
+                "row_count": 5,
+                "metadata": {
+                    "file_type": "pdf",
+                    "note": "PDF text extraction requires additional processing"
+                }
+            }
+            
+        except Exception as e:
+            raise Exception(f"Failed to process PDF file: {str(e)}")
+
+    async def _process_pdf_with_text_extraction(
+        self,
+        drive_service,
+        file_id: str,
+        input_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Process PDF file with text extraction (requires PyPDF2)
+        """
+        try:
+            import PyPDF2
+            
+            # Download PDF file
+            request = drive_service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+            
+            fh.seek(0)
+            
+            # Extract text from PDF
+            pdf_reader = PyPDF2.PdfReader(fh)
+            text_content = []
+            
+            for page_num, page in enumerate(pdf_reader.pages):
+                page_text = page.extract_text()
+                if page_text.strip():
+                    text_content.append([f"Page {page_num + 1}", page_text.strip()])
+            
+            return {
+                "data": text_content,
+                "headers": ["page", "content"],
+                "row_count": len(text_content),
+                "metadata": {
+                    "file_type": "pdf",
+                    "total_pages": len(pdf_reader.pages),
+                    "text_extracted": True
+                }
+            }
+            
+        except ImportError:
+            # Fallback to metadata-only if PyPDF2 not available
+            return await self._process_pdf_file(drive_service, file_id, input_data)
+        except Exception as e:
+            raise Exception(f"Failed to extract text from PDF: {str(e)}")
+
     
     async def _process_google_sheets(
         self, 

@@ -31,8 +31,6 @@ class ToolFactory:
     ):
         """Execute a tool instance with given input and context"""
         executor = ToolFactory.create_executor(instance.tool_definition_id)
-
-        print("Executor:", executor)  # Debugging line to check executor creation
         
         # Use async context manager if supported
         if hasattr(executor, '__aenter__'):
