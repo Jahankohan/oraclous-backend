@@ -1,6 +1,7 @@
+# app/schemas/tool_definition.py
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from app.schemas.common import CredentialType, ToolCategory, ToolType
@@ -57,10 +58,12 @@ class ToolDefinition(BaseModel):
     dependencies: List[str] = Field(default_factory=list, description="Tool dependencies")
     
     # Metadata
-    author: Optional[str] = None
+    author: Optional[uuid.UUID] = None
     documentation_url: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # FIXED: Use timezone-aware datetimes by default
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         # Allow UUID objects to be converted to/from strings

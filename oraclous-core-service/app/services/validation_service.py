@@ -231,7 +231,8 @@ class ValidationService:
             
             cred_detail["is_configured"] = True
             cred_identifier = instance.credential_mappings[cred_type]
-            
+
+            print("cred_identifier:", cred_identifier)
             # Validate the credential
             if cred_type == "OAUTH_TOKEN":
                 validation_result = await self._validate_oauth_credential(

@@ -18,14 +18,15 @@ class Base(AsyncAttrs, DeclarativeBase):
 class TimestampMixin:
     """
     Mixin to add created_at and updated_at timestamp fields
+    FIXED: Ensure all timestamps are timezone-aware
     """
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
+        DateTime(timezone=True),  # This ensures timezone awareness
         server_default=func.now(),
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
+        DateTime(timezone=True),  # This ensures timezone awareness
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False

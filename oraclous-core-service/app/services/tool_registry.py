@@ -4,6 +4,7 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy import cast
 from sqlalchemy.dialects.postgresql import JSONPATH, JSONB
+from datetime import datetime, timezone
 
 from app.interfaces.tool_registry import BaseToolRegistry
 from app.schemas.tool_definition import ToolDefinition, ToolQuery
@@ -267,9 +268,16 @@ class ToolRegistryService(BaseToolRegistry, ToolValidationMixin):
         return True
     
     def _db_to_pydantic(self, db_tool: ToolDefinitionDB) -> ToolDefinition:
-        """Convert DB model to Pydantic model"""
+        """
+        Convert DB model to Pydantic model
+        FIXED: Properly handle timezone-aware datetimes
+        """
         from app.schemas.tool_definition import ToolCapability, CredentialRequirement
         from app.schemas.common import ToolCategory, ToolType
+        
+        # FIXED: Ensure datetimes are timezone-aware
+        created_at = self._ensure_timezone_aware(db_tool.created_at)
+        updated_at = self._ensure_timezone_aware(db_tool.updated_at)
         
         return ToolDefinition(
             id=db_tool.id,
@@ -288,6 +296,21 @@ class ToolRegistryService(BaseToolRegistry, ToolValidationMixin):
             dependencies=db_tool.dependencies,
             author=db_tool.author,
             documentation_url=db_tool.documentation_url,
-            created_at=db_tool.created_at,
-            updated_at=db_tool.updated_at
+            created_at=created_at,
+            updated_at=updated_at
         )
+    
+    def _ensure_timezone_aware(self, dt: datetime) -> datetime:
+        """
+        Ensure datetime is timezone-aware
+        FIXED: Handle both timezone-aware and timezone-naive datetimes from database
+        """
+        if dt is None:
+            return datetime.now(timezone.utc)
+        
+        if dt.tzinfo is None:
+            # Timezone-naive datetime from database - assume UTC
+            return dt.replace(tzinfo=timezone.utc)
+        else:
+            # Already timezone-aware
+            return dt
