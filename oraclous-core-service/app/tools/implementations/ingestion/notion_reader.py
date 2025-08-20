@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 import asyncio
 from datetime import datetime
 import httpx
+from decimal import Decimal
 
 from app.utils.tool_id_generator import generate_tool_id
 from app.tools.base.internal_tool import InternalTool
@@ -451,3 +452,13 @@ class NotionReader(InternalTool):
     async def close(self):
         """Close the HTTP client"""
         await self.http_client.aclose()
+
+    def calculate_credits(self, input_data: Any, result: ExecutionResult) -> Decimal:
+        if not result.success or not result.data:
+            return Decimal('0.1')
+        
+        row_count = result.data.get("row_count", 0)
+        base_credits = Decimal('0.1')
+        row_credits = Decimal(str(row_count)) * Decimal('0.001')
+        
+        return base_credits + row_credits

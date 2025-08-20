@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 import aiomysql
 import pandas as pd
+from decimal import Decimal
 
 from app.utils.tool_id_generator import generate_tool_id
 from app.tools.base.database_tool import DatabaseTool
@@ -264,17 +265,17 @@ class MySQLReader(DatabaseTool):
     def calculate_credits(self, input_data: Any, result: ExecutionResult) -> float:
         """Calculate credits based on data processed"""
         if not result.success or not result.data:
-            return 0.05  # Minimal charge for failed attempts
+            return Decimal("0.05")  # Minimal charge for failed attempts
         
         row_count = result.data.get("row_count", 0)
         operation = input_data.get("operation", "query")
         
         # Same credit structure as PostgreSQL
         if operation == "list_tables":
-            return 0.05
+            return Decimal("0.05")
         elif operation == "describe_table":
-            return 0.1
+            return Decimal("0.1")
         else:  # query operation
-            base_credits = 0.1
-            row_credits = row_count * 0.001
+            base_credits = Decimal("0.1")
+            row_credits = Decimal(row_count) * Decimal("0.001")
             return base_credits + row_credits
