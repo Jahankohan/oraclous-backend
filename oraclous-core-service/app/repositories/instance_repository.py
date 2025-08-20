@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, update, delete
 from sqlalchemy.orm import selectinload
 from uuid import UUID
+from decimal import Decimal
 
 from app.models.tool_instance import ToolInstanceDB
 from app.models.execution import ExecutionDB
@@ -14,6 +15,15 @@ from app.schemas.tool_instance import (
 )
 from app.schemas.common import InstanceStatus
 
+
+def _safe_uuid_convert(value):
+    """Safely convert any UUID type to Python UUID"""
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    # Handle AsyncPG UUID objects by converting to string first
+    return UUID(str(value))
 
 class InstanceRepository:
     """Repository for tool instance data operations"""
@@ -72,6 +82,38 @@ class InstanceRepository:
         
         return self._db_instance_to_pydantic(db_instance)
     
+    async def update_instance_execution_stats(
+        self,
+        instance_id: str,
+        execution_id: str,
+        credits_consumed: Decimal,
+        execution_count_increment: int = 1
+    ) -> bool:
+        """Update instance execution statistics"""
+        from datetime import datetime
+        
+        # Get current instance to calculate new totals
+        current_instance = await self.get_instance(instance_id)
+        if not current_instance:
+            return False
+        
+        new_execution_count = current_instance.execution_count + execution_count_increment
+        new_total_credits = current_instance.total_credits_consumed + credits_consumed
+        
+        query = update(ToolInstanceDB).where(
+            ToolInstanceDB.id == instance_id
+        ).values(
+            execution_count=new_execution_count,
+            total_credits_consumed=new_total_credits,
+            last_execution_id=execution_id,  # This is now clearly the execution ID
+            updated_at=datetime.utcnow()
+        )
+        
+        result = await self.db.execute(query)
+        await self.db.commit()
+        
+        return result.rowcount > 0
+
     async def update_instance(
         self, 
         instance_id: str, 
@@ -394,10 +436,10 @@ class InstanceRepository:
         from decimal import Decimal
         
         return ToolInstance(
-            id=db_instance.id,
-            workflow_id=db_instance.workflow_id,
-            tool_definition_id=db_instance.tool_definition_id,
-            user_id=db_instance.user_id,
+            id=_safe_uuid_convert(db_instance.id),
+            workflow_id=_safe_uuid_convert(db_instance.workflow_id),
+            tool_definition_id=_safe_uuid_convert(db_instance.tool_definition_id),
+            user_id=_safe_uuid_convert(db_instance.user_id),
             name=db_instance.name,
             description=db_instance.description,
             configuration=db_instance.configuration or {},
@@ -405,7 +447,7 @@ class InstanceRepository:
             credential_mappings=db_instance.credential_mappings or {},
             required_credentials=db_instance.required_credentials or [],
             status=InstanceStatus(db_instance.status),
-            last_execution_id=db_instance.last_execution_id,
+            last_execution_id=_safe_uuid_convert(db_instance.last_execution_id),
             execution_count=int(db_instance.execution_count or 0),
             total_credits_consumed=Decimal(str(db_instance.total_credits_consumed or 0)),
             created_at=db_instance.created_at,

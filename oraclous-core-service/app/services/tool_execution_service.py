@@ -55,7 +55,6 @@ class ToolExecutionService:
             # 1. Validate instance readiness
             validation_result = await self._validate_execution_readiness(instance_id, user_id)
             if not validation_result["is_ready"]:
-                print("validation_result:", validation_result)
                 return ExecutionResult(
                     success=False,
                     error_message=validation_result["error_message"],
@@ -88,18 +87,16 @@ class ToolExecutionService:
                 
                 # Build context and execute
                 context = await self._build_execution_context(instance, execution, user_id)
-                print("Execution context:", context)
 
                 result = await self._execute_tool(instance, input_data, context)
-                print("Execution result:", result)
                 
                 # Calculate processing time
                 processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
                 result.processing_time_ms = processing_time
                 
                 # Update records
-                await self._update_execution_with_result(execution.id, result)
-                await self._update_instance_stats(instance, result)
+                await self._update_execution_with_result(str(execution.id), result)
+                await self._update_instance_stats(instance, result, str(execution.id))
                 
                 logger.info(f"Sync execution completed for instance {instance_id}")
                 print("Final execution result:", result)
@@ -645,22 +642,18 @@ class ToolExecutionService:
             update_data["error_type"] = result.error_type
         
         await self.instance_manager.repo.update_execution(execution_id, update_data)
-    
-    async def _update_instance_stats(self, instance: ToolInstance, result: ExecutionResult):
-        """Update instance statistics"""
-        new_execution_count = instance.execution_count + 1
-        new_credits = instance.total_credits_consumed + result.credits_consumed
-        
-        # Update via repository  
-        await self.instance_manager.repo.update_instance(
-            instance.id,
-            UUID(instance.user_id),
-            {
-                "execution_count": new_execution_count,
-                "total_credits_consumed": new_credits,
-                "last_execution_id": instance.id  # This should be execution_id
-            }
+
+    async def _update_instance_stats(self, instance: ToolInstance, result: ExecutionResult, execution_id: str):
+        """Update instance statistics using dedicated repository method"""
+        success = await self.instance_manager.repo.update_instance_execution_stats(
+            instance_id=str(instance.id),
+            execution_id=execution_id,
+            credits_consumed=result.credits_consumed,
+            execution_count_increment=1
         )
+    
+        if not success:
+            logger.warning(f"Failed to update stats for instance {instance.id}")
     
     def _estimate_execution_duration(self, instance: ToolInstance) -> Optional[int]:
         """Estimate execution duration based on tool type and history"""

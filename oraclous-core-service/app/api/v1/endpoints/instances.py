@@ -445,6 +445,8 @@ async def execute_tool_instance_sync(
             input_data=input_data,
             max_retries=max_retries
         )
+
+        print("Results:", result)
         
         return {
             "success": result.success,

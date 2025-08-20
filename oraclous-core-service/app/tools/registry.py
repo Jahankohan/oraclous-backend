@@ -50,6 +50,7 @@ class ToolRegistry:
             raise ValueError(f"No executor found for tool: {tool_id}")
         
         definition = self.get_definition(tool_id)
+        print("Definition:", definition)
         return executor_class(definition)
 
 

@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 import asyncio
 import httpx
 from datetime import datetime
+from decimal import Decimal
 
 from app.interfaces.tool_executor import BaseToolExecutor
 from app.schemas.tool_instance import ExecutionContext, ExecutionResult
@@ -37,18 +38,20 @@ class InternalTool(BaseToolExecutor, ToolValidationMixin):
     ) -> ExecutionResult:
         """Main execution method with error handling"""
         try:
-            # Validate inputs
+            # Basic input validation (lightweight)
             if not self.validate_input(input_data):
                 return ExecutionResult(
                     success=False,
-                    error_message="Invalid input data"
+                    error_message="Invalid input data",
+                    error_type="INVALID_INPUT"
                 )
             
-            # Validate context
+            # Basic context validation (lightweight)
             if not await self.validate_context(context):
                 return ExecutionResult(
                     success=False,
-                    error_message="Invalid execution context or missing credentials"
+                    error_message="Invalid execution context or missing credentials",
+                    error_type="INVALID_CONTEXT"
                 )
             
             # Execute the actual tool logic
@@ -56,6 +59,10 @@ class InternalTool(BaseToolExecutor, ToolValidationMixin):
             
             # Calculate credits consumed
             credits = self.calculate_credits(input_data, result)
+            
+            if isinstance(credits, (int, float)):
+                credits = Decimal(str(credits))
+        
             result.credits_consumed = credits
             
             return result
@@ -64,7 +71,8 @@ class InternalTool(BaseToolExecutor, ToolValidationMixin):
             return ExecutionResult(
                 success=False,
                 error_message=f"Tool execution failed: {str(e)}",
-                metadata={"error_type": type(e).__name__}
+                error_type=type(e).__name__,
+                metadata={"error_details": str(e)}
             )
     
     @abstractmethod
@@ -77,21 +85,34 @@ class InternalTool(BaseToolExecutor, ToolValidationMixin):
         pass
     
     async def validate_context(self, context: ExecutionContext) -> bool:
-        """Validate execution context and credentials"""
-        # Check if required credentials are present
-        for req in self.definition.credential_requirements:
-            if req.required and not context.credentials:
-                return False
-            
-            if req.required and req.type.value not in context.credentials:
+        """
+        Lightweight context validation (just check basic structure)
+        Heavy validation is done by ValidationService before execution
+        """
+        if not context:
+            return False
+        
+        # Just verify required context fields exist
+        required_fields = ['instance_id', 'workflow_id', 'user_id', 'job_id']
+        for field in required_fields:
+            if not hasattr(context, field) or getattr(context, field) is None:
                 return False
         
         return True
     
     def validate_input(self, input_data: Any) -> bool:
-        """Validate input data against schema"""
-        # Use the mixin method to validate against input schema
-        return self.validate_schema_match(input_data, self.definition.input_schema)
+        """
+        Lightweight input validation (just check basic structure)
+        Heavy validation should be done by the ValidationService
+        """
+        if input_data is None:
+            return False
+        
+        # Basic type check - most tools expect dict input
+        if not isinstance(input_data, dict):
+            return False
+        
+        return True
     
     def get_credentials(self, context: ExecutionContext, cred_type: str) -> Optional[Dict[str, Any]]:
         """Helper to extract specific credential type"""

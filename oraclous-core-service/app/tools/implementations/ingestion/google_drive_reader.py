@@ -3,6 +3,7 @@ import io
 import pandas as pd
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+from decimal import Decimal
 
 from app.tools.base.auth_tool import OAuthTool
 from app.schemas.tool_instance import ExecutionContext, ExecutionResult
@@ -433,15 +434,12 @@ class GoogleDriveReader(OAuthTool):
             "row_count": len(lines)
         }
     
-    def calculate_credits(self, input_data: Any, result: ExecutionResult) -> float:
-        """Calculate credits based on data processed"""
+    def calculate_credits(self, input_data: Any, result: ExecutionResult) -> Decimal:
         if not result.success or not result.data:
-            return 0.1  # Minimal charge for failed attempts
+            return Decimal('0.1')
         
         row_count = result.data.get("row_count", 0)
-        
-        # Credit calculation: 0.1 base + 0.001 per row
-        base_credits = 0.1
-        row_credits = row_count * 0.001
+        base_credits = Decimal('0.1')
+        row_credits = Decimal(str(row_count)) * Decimal('0.001')
         
         return base_credits + row_credits
