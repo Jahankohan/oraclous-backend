@@ -1,9 +1,10 @@
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import DateTime, String
+from sqlalchemy import DateTime
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from datetime import datetime
-from typing import Optional
+import uuid
 
 
 class Base(AsyncAttrs, DeclarativeBase):
@@ -33,10 +34,11 @@ class TimestampMixin:
 
 class UUIDMixin:
     """
-    Mixin to add UUID primary key
+    Mixin to add UUID primary key - FIXED to use proper UUID type
     """
-    id: Mapped[str] = mapped_column(
-        String(36), 
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),  # FIXED: Use proper UUID type instead of String(36)
         primary_key=True,
+        default=uuid.uuid4,  # FIXED: Use uuid.uuid4 directly
         nullable=False
     )

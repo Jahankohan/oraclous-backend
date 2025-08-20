@@ -1,21 +1,16 @@
-import uuid
-from sqlalchemy import Column, String, Text, JSON, ForeignKey, Numeric, DateTime
+from sqlalchemy import Column, String, JSON, ForeignKey, Numeric, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 from app.models.base import Base, TimestampMixin, UUIDMixin
 
 class JobDB(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "jobs"
     
-    def __init__(self, **kwargs):
-        if 'id' not in kwargs:
-            kwargs['id'] = str(uuid.uuid4())
-        super().__init__(**kwargs)
+    # REMOVE the custom __init__ method
     
-    # Job identification
+    # Job identification - FIXED: Use UUID type for foreign key
     job_type = Column(String(100), nullable=False)  # 'tool_execution', 'workflow_execution', etc.
-    execution_id = Column(String, ForeignKey('executions.id'), nullable=False)
+    execution_id = Column(UUID(as_uuid=True), ForeignKey('executions.id'), nullable=False)
     
     # Job queue information
     queue_name = Column(String(100), default='default')

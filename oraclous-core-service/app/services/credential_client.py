@@ -133,7 +133,7 @@ class CredentialClient:
                 }
                 
                 response = await client.post(
-                    f"{self.credential_broker_url}/oauth/validate-scopes",
+                    f"{self.credential_broker_url}/ensure-data-source-access",
                     headers=self.headers,
                     json=params
                 )

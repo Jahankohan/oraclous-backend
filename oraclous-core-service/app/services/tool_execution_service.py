@@ -55,6 +55,7 @@ class ToolExecutionService:
             # 1. Validate instance readiness
             validation_result = await self._validate_execution_readiness(instance_id, user_id)
             if not validation_result["is_ready"]:
+                print("validation_result:", validation_result)
                 return ExecutionResult(
                     success=False,
                     error_message=validation_result["error_message"],
@@ -87,7 +88,10 @@ class ToolExecutionService:
                 
                 # Build context and execute
                 context = await self._build_execution_context(instance, execution, user_id)
+                print("Execution context:", context)
+
                 result = await self._execute_tool(instance, input_data, context)
+                print("Execution result:", result)
                 
                 # Calculate processing time
                 processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
@@ -98,6 +102,7 @@ class ToolExecutionService:
                 await self._update_instance_stats(instance, result)
                 
                 logger.info(f"Sync execution completed for instance {instance_id}")
+                print("Final execution result:", result)
                 return result
                 
             except Exception as e:
@@ -548,7 +553,6 @@ class ToolExecutionService:
     
     async def _execute_tool(self, instance: ToolInstance, input_data: Dict[str, Any], context: ExecutionContext) -> ExecutionResult:
         """Execute tool directly"""
-        executor = ToolFactory.create_executor(instance.tool_definition_id)
         return await ToolFactory.execute_tool(instance, input_data, context)
     
     async def _execute_tool_with_progress(

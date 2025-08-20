@@ -211,6 +211,7 @@ class ValidationService:
     ) -> Dict[str, Any]:
         """Validate a single credential requirement with detailed user messaging"""
         cred_type = cred_req.type.value
+        print("Cred Req:", cred_req)
         cred_detail = {
             "type": cred_type,
             "required": cred_req.required,
@@ -265,18 +266,11 @@ class ValidationService:
                 provider=provider,
                 required_scopes=scopes
             )
-            
-            if token_data and token_data.get("access_token"):
+
+            if token_data and token_data.get("success"):
                 return {"valid": True}
-            else:
-                # Fallback to validation endpoint
-                validation_result = await self.credential_client._validate_oauth_token(
-                    user_id=user_id,
-                    provider=provider,
-                    required_scopes=scopes
-                )
-                return validation_result
-                
+            token_data["valid"] = False
+            return token_data
         except Exception as e:
             return {
                 "valid": False,

@@ -1,18 +1,13 @@
-import uuid
 from sqlalchemy import Column, String, Text
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class ToolDefinitionDB(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "tool_definitions"
     
-    # Override id to use UUID generation
-    def __init__(self, **kwargs):
-        if 'id' not in kwargs:
-            kwargs['id'] = str(uuid.uuid4())
-        super().__init__(**kwargs)
+    # REMOVE the custom __init__ method
     
     name = Column(String(255), nullable=False, index=True)
     description = Column(Text)

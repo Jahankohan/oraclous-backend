@@ -25,6 +25,7 @@ class CredentialRequirement(BaseModel):
     """Defines what credentials a tool needs"""
     type: CredentialType
     required: bool = True
+    provider: str = Field(..., description="Credential provider")
     scopes: Optional[List[str]] = None
     description: Optional[str] = None
 
@@ -34,7 +35,7 @@ class ToolDefinition(BaseModel):
     Tool Definition - Metadata stored in Tool Registry
     This is the 'blueprint' of a tool, not an executable instance
     """
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
     name: str = Field(..., description="Human-readable tool name")
     description: str = Field(..., description="Tool description")
     version: str = Field(default="1.0.0", description="Tool version")
@@ -61,6 +62,11 @@ class ToolDefinition(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+    class Config:
+        # Allow UUID objects to be converted to/from strings
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 # Registry query helpers
 class ToolQuery(BaseModel):

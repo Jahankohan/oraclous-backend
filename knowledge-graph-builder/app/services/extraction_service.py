@@ -3,6 +3,7 @@ import logging
 from typing import List, Dict, Any, Optional, AsyncGenerator
 import json
 from datetime import datetime
+from app.models.responses import DocumentInfo
 
 from langchain.schema import Document
 from langchain_community.graphs import Neo4jGraph
@@ -26,34 +27,63 @@ class ExtractionService:
         self.llm_factory = LLMClientFactory()
     
     async def extract_graph(
-        self, 
-        file_names: List[str], 
+        self,
+        file_names: List[str],
         model: str,
         node_labels: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
-        enable_schema: bool = True
+        enable_schema: bool = True,
+        document_service=None
     ) -> AsyncGenerator[ProcessingProgress, None]:
-        """Extract knowledge graph from documents"""
+        """Extract knowledge graph from documents, including chunk creation if missing"""
         print(f"[EXTRACTION] Starting extraction for files: {file_names}")
         try:
             # Get documents to process
             documents = await self._get_documents_to_process(file_names)
 
             print(f"[EXTRACTION] Documents to process: {len(documents)}")
-            
+
             if not documents:
                 raise ExtractionError("No documents found for processing")
-            
+
+            # Check and create chunks if missing
+            if document_service is None:
+                from app.services.document_service import DocumentService
+                document_service = DocumentService(self.neo4j)
+            for doc_info in documents:
+                if doc_info["totalChunks"] == 0:
+                    doc_model = DocumentInfo(
+                        id=doc_info["id"],
+                        file_name=doc_info["fileName"],
+                        source_type=doc_info.get("sourceType", "local"),
+                        status=doc_info.get("status", ProcessingStatus.NEW),
+                        created_at=datetime.now()
+                    )
+                    # Load content and chunk
+                    loaded_docs = await document_service.load_document_content(doc_model)
+                    yield ProcessingProgress(
+                        file_name=doc_info["fileName"],
+                        status=ProcessingStatus.PROCESSING,
+                        progress_percentage=0.0,
+                        chunks_processed=0,
+                        total_chunks=0,
+                        current_step="Splitting document into chunks"
+                    )
+                    chunks = await document_service.split_documents(loaded_docs)
+                    await document_service.create_chunk_nodes(doc_model, chunks)
+                    # Update doc_info for downstream chunk count
+                    doc_info["totalChunks"] = len(chunks)
+
             # Initialize LLM
             llm = self.llm_factory.get_llm(model)
-            
+
             # Create graph transformer
             graph_transformer = LLMGraphTransformer(
                 llm=llm,
                 allowed_nodes=node_labels if enable_schema and node_labels else [],
                 allowed_relationships=relationship_types if enable_schema and relationship_types else []
             )
-            
+
             # Process each document
             for i, doc_info in enumerate(documents):
                 try:

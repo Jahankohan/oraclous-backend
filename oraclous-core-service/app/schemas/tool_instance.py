@@ -10,11 +10,10 @@ from app.schemas.common import InstanceStatus
 class ToolInstance(BaseModel):
     """
     Tool Instance - Configured instance of a tool for workflow execution
-    This represents a specific use of a tool with specific configuration
     """
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
     workflow_id: uuid.UUID = Field(..., description="Parent workflow ID")
-    tool_definition_id: str = Field(..., description="Reference to tool definition")
+    tool_definition_id: uuid.UUID = Field(..., description="Reference to tool definition")  # FIXED
     user_id: uuid.UUID = Field(..., description="Owner user ID")
     
     # Instance configuration
@@ -31,7 +30,7 @@ class ToolInstance(BaseModel):
     status: InstanceStatus = Field(default=InstanceStatus.PENDING)
     
     # Execution metadata
-    last_execution_id: Optional[str] = None
+    last_execution_id: Optional[uuid.UUID] = None  # FIXED
     execution_count: int = 0
     total_credits_consumed: Decimal = Field(default=Decimal('0'))
     
@@ -42,11 +41,17 @@ class ToolInstance(BaseModel):
     oauth_redirects: Optional[Dict[str, Optional[str]]] = None
     missing_credentials: Optional[List[str]] = None
 
+    class Config:
+        # Allow UUID objects to be converted to/from strings
+        json_encoders = {
+            uuid.UUID: str
+        }
+
 
 class CreateInstanceRequest(BaseModel):
     """Request to create a new tool instance"""
-    workflow_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    tool_definition_id: str = Field(..., description="Tool definition to instantiate")
+    workflow_id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4)  # FIXED
+    tool_definition_id: uuid.UUID = Field(..., description="Tool definition to instantiate")  # FIXED
     name: str = Field(..., description="Instance name")
     description: Optional[str] = Field(None, description="Instance description")
     configuration: Dict[str, Any] = Field(default_factory=dict, description="Initial configuration")
@@ -60,6 +65,10 @@ class CreateInstanceRequest(BaseModel):
             raise ValueError('Name too long (max 255 characters)')
         return v.strip()
 
+    class Config:
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 class UpdateInstanceRequest(BaseModel):
     """Request to update an existing instance"""
@@ -103,13 +112,18 @@ class InstanceStatusResponse(BaseModel):
 
 class ExecutionContext(BaseModel):
     """Context provided during tool execution"""
-    instance_id: str
-    workflow_id: str
-    user_id: str
-    job_id: str
+    instance_id: uuid.UUID
+    workflow_id: uuid.UUID
+    user_id: uuid.UUID
+    job_id: uuid.UUID
     credentials: Optional[Dict[str, Any]] = None
     configuration: Dict[str, Any] = Field(default_factory=dict)
     settings: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 
 class ExecutionResult(BaseModel):
@@ -126,10 +140,10 @@ class ExecutionResult(BaseModel):
 # Execution tracking schemas
 class Execution(BaseModel):
     """Execution record"""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    workflow_id: str
-    instance_id: str
-    user_id: str
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)  # FIXED
+    workflow_id: uuid.UUID  # FIXED
+    instance_id: uuid.UUID  # FIXED
+    user_id: uuid.UUID  # FIXED
     
     status: str = Field(default='QUEUED')
     input_data: Optional[Dict[str, Any]] = None
@@ -149,19 +163,28 @@ class Execution(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
+    class Config:
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 class CreateExecutionRequest(BaseModel):
     """Request to create a new execution"""
-    instance_id: str
+    instance_id: uuid.UUID
     input_data: Dict[str, Any]
     max_retries: int = Field(default=3, ge=0, le=10)
+
+    class Config:
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 
 class Job(BaseModel):
     """Job for queue processing"""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
     job_type: str
-    execution_id: str
+    execution_id: uuid.UUID
     
     queue_name: str = 'default'
     priority: int = 0
@@ -178,6 +201,10 @@ class Job(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
+    class Config:
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 # Response schemas
 class InstanceListResponse(BaseModel):

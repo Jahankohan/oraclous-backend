@@ -116,6 +116,7 @@ class NotionReader(InternalTool):
             credential_requirements=[
                 CredentialRequirement(
                     type=CredentialType.API_KEY,
+                    provider="notion",
                     required=True,
                     description="Notion Internal Integration Token"
                 )

@@ -1,4 +1,3 @@
-import uuid
 from sqlalchemy import Column, String, Text, JSON, ForeignKey, Numeric, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -8,15 +7,12 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 class ExecutionDB(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "executions"
     
-    def __init__(self, **kwargs):
-        if 'id' not in kwargs:
-            kwargs['id'] = str(uuid.uuid4())
-        super().__init__(**kwargs)
+    # REMOVE the custom __init__ method
     
-    # Execution identification
-    workflow_id = Column(UUID, nullable=False, index=True)
-    instance_id = Column(String, ForeignKey('tool_instances.id'), nullable=False)
-    user_id = Column(UUID, nullable=False, index=True)
+    # Execution identification - FIXED: Use UUID types
+    workflow_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    instance_id = Column(UUID(as_uuid=True), ForeignKey('tool_instances.id'), nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     
     # Execution details
     status = Column(String(50), nullable=False, default='QUEUED', index=True)

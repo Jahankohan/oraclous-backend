@@ -1,22 +1,21 @@
+# app/models/workflow.py - FIXED VERSION
 import uuid
-from sqlalchemy import Column, String, Text, JSON, Numeric, Boolean, ForeignKey
+from sqlalchemy import Column, String, Text, JSON, Numeric, Boolean, ForeignKey, DateTime
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class WorkflowDB(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "workflows"
     
-    def __init__(self, **kwargs):
-        if 'id' not in kwargs:
-            kwargs['id'] = str(uuid.uuid4())
-        super().__init__(**kwargs)
+    # REMOVE the custom __init__ method - let UUIDMixin handle UUID generation
     
     # Basic workflow information
     name = Column(String(255), nullable=False)
     description = Column(Text)
-    owner_id = Column(UUID, nullable=False, index=True)
+    owner_id = Column(UUID(as_uuid=True), nullable=False, index=True)  # FIXED: Use UUID type
     
     # Workflow structure
     nodes = Column(JSON, nullable=False, default=list)  # List of workflow nodes
@@ -37,7 +36,7 @@ class WorkflowDB(Base, UUIDMixin, TimestampMixin):
     is_template = Column(Boolean, default=False)
     
     # Execution tracking
-    last_execution_id = Column(UUID, nullable=True)
+    last_execution_id = Column(UUID(as_uuid=True), nullable=True)  # FIXED: Use UUID type
     total_executions = Column(Numeric(10, 0), default=0)
     successful_executions = Column(Numeric(10, 0), default=0)
     
@@ -61,14 +60,11 @@ class WorkflowDB(Base, UUIDMixin, TimestampMixin):
 class WorkflowExecutionDB(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "workflow_executions"
     
-    def __init__(self, **kwargs):
-        if 'id' not in kwargs:
-            kwargs['id'] = str(uuid.uuid4())
-        super().__init__(**kwargs)
+    # REMOVE the custom __init__ method - let UUIDMixin handle UUID generation
     
-    # Execution identification
-    workflow_id = Column(UUID, ForeignKey("workflows.id"), nullable=False, index=True)
-    user_id = Column(UUID, nullable=False, index=True)
+    # Execution identification - FIXED: Use UUID type for foreign key
+    workflow_id = Column(UUID(as_uuid=True), ForeignKey("workflows.id"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     
     # Execution details
     status = Column(String(50), nullable=False, default='QUEUED', index=True)
@@ -89,8 +85,6 @@ class WorkflowExecutionDB(Base, UUIDMixin, TimestampMixin):
     failed_node_id = Column(String(255))  # ID of node where execution failed
     
     # Timing
-    from sqlalchemy import DateTime
-    from sqlalchemy.sql import func
     queued_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -118,10 +112,7 @@ class WorkflowExecutionDB(Base, UUIDMixin, TimestampMixin):
 class WorkflowTemplateDB(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "workflow_templates"
     
-    def __init__(self, **kwargs):
-        if 'id' not in kwargs:
-            kwargs['id'] = str(uuid.uuid4())
-        super().__init__(**kwargs)
+    # REMOVE the custom __init__ method
     
     # Template information
     name = Column(String(255), nullable=False)
@@ -137,7 +128,7 @@ class WorkflowTemplateDB(Base, UUIDMixin, TimestampMixin):
     required_tools = Column(ARRAY(String), default=list)  # Required tool definition IDs
     
     # Metadata
-    author_id = Column(UUID)
+    author_id = Column(UUID(as_uuid=True))  # FIXED: Use UUID type
     tags = Column(ARRAY(String), default=list)
     difficulty_level = Column(String(20), default='BEGINNER')  # BEGINNER, INTERMEDIATE, ADVANCED
     estimated_time_minutes = Column(Numeric(5, 0))
@@ -158,15 +149,12 @@ class WorkflowTemplateDB(Base, UUIDMixin, TimestampMixin):
 class WorkflowShareDB(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "workflow_shares"
     
-    def __init__(self, **kwargs):
-        if 'id' not in kwargs:
-            kwargs['id'] = str(uuid.uuid4())
-        super().__init__(**kwargs)
+    # REMOVE the custom __init__ method
     
-    # Sharing details
-    workflow_id = Column(UUID, nullable=False, index=True)
-    owner_id = Column(UUID, nullable=False)      # Workflow owner
-    shared_with_id = Column(UUID, nullable=True) # Specific user (null for public)
+    # Sharing details - FIXED: Use UUID types
+    workflow_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    owner_id = Column(UUID(as_uuid=True), nullable=False)      # Workflow owner
+    shared_with_id = Column(UUID(as_uuid=True), nullable=True) # Specific user (null for public)
     
     # Permissions
     permission_type = Column(String(20), nullable=False, default='VIEW')  # VIEW, EXECUTE, EDIT, ADMIN
@@ -174,7 +162,6 @@ class WorkflowShareDB(Base, UUIDMixin, TimestampMixin):
     
     # Sharing metadata
     share_token = Column(String(255), unique=True)  # For public sharing
-    from sqlalchemy import DateTime
     expires_at = Column(DateTime(timezone=True), nullable=True)
     
     # Usage tracking

@@ -228,17 +228,17 @@ class DocumentService:
     async def load_document_content(self, document_info: DocumentInfo) -> List[Document]:
         """Load actual document content using appropriate loader"""
         try:
-            if document_info.source_type == DocumentSource.LOCAL.value:
+            source_type = (document_info.source_type or "").lower()
+            if source_type == DocumentSource.LOCAL.value:
                 return await self._load_local_file(document_info)
-            elif document_info.source_type == DocumentSource.YOUTUBE.value:
+            elif source_type == DocumentSource.YOUTUBE.value:
                 return await self._load_youtube_content(document_info)
-            elif document_info.source_type == DocumentSource.WIKIPEDIA.value:
+            elif source_type in [DocumentSource.WIKIPEDIA.value, "wikipedia"]:
                 return await self._load_wikipedia_content(document_info)
-            elif document_info.source_type == DocumentSource.WEB.value:
+            elif source_type == DocumentSource.WEB.value:
                 return await self._load_web_content(document_info)
             else:
                 raise DocumentProcessingError(f"Unsupported source type: {document_info.source_type}")
-                
         except Exception as e:
             logger.error(f"Error loading document {document_info.file_name}: {e}")
             raise DocumentProcessingError(f"Failed to load document content: {e}")
@@ -300,22 +300,33 @@ class DocumentService:
         return documents
     
     async def _load_wikipedia_content(self, document_info: DocumentInfo) -> List[Document]:
-        """Load Wikipedia page content"""
+        """Load Wikipedia page content, with robust fallback for pageTitle extraction"""
+        # Try to get pageTitle from Neo4j
         query = "MATCH (d:Document {id: $id}) RETURN d.pageTitle as pageTitle"
         result = self.neo4j.execute_query(query, {"id": document_info.id})
-        
-        if not result:
-            raise DocumentProcessingError("Document not found")
-        
-        page_title = result[0]["pageTitle"]
-        
+        page_title = None
+        if result and result[0].get("pageTitle"):
+            page_title = result[0]["pageTitle"]
+        # Fallback: extract from file_name if Neo4j is missing pageTitle
+        if not page_title and document_info.file_name:
+            if document_info.file_name.startswith("wikipedia_"):
+                url_part = document_info.file_name[len("wikipedia_"):]
+                if url_part.startswith("https://"):
+                    # Take last part of URL as page title
+                    page_title = url_part.rstrip("/").split("/")[-1].replace("_", " ")
+        # If still not found, try to parse the full URL for a valid Wikipedia page title
+        if not page_title and document_info.file_name:
+            if document_info.file_name.startswith("wikipedia_"):
+                url_part = document_info.file_name[len("wikipedia_"):]
+                if url_part.startswith("https://en.wikipedia.org/wiki/"):
+                    page_title = url_part[len("https://en.wikipedia.org/wiki/"):].replace("_", " ")
+        if not page_title:
+            raise DocumentProcessingError(f"Could not determine Wikipedia page title for file_name: {document_info.file_name}")
         loader = WikipediaLoader(
             query=page_title,
             load_max_docs=1
         )
-        
         documents = await asyncio.to_thread(loader.load)
-        
         for doc in documents:
             doc.metadata.update({
                 "document_id": document_info.id,
@@ -323,7 +334,6 @@ class DocumentService:
                 "source_type": document_info.source_type,
                 "page_title": page_title
             })
-        
         return documents
     
     async def _load_web_content(self, document_info: DocumentInfo) -> List[Document]:

@@ -4,19 +4,20 @@ import pandas as pd
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-from app.utils.tool_id_generator import generate_tool_id
 from app.tools.base.auth_tool import OAuthTool
 from app.schemas.tool_instance import ExecutionContext, ExecutionResult
 from app.schemas.tool_definition import (
     ToolDefinition, ToolSchema, ToolCapability, CredentialRequirement
 )
 from app.schemas.common import ToolCategory, ToolType, CredentialType
+from app.utils.tool_id_generator import generate_tool_id
 
 
 class GoogleDriveReader(OAuthTool):
     """
     Tool for reading files from Google Drive
     Supports various file types: CSV, Excel, Docs, Sheets, etc.
+    Now supports multiple operations including listing files
     """
     
     @classmethod
@@ -32,7 +33,7 @@ class GoogleDriveReader(OAuthTool):
             capabilities=[
                 ToolCapability(
                     name="read_drive_files",
-                    description="Read files from Google Drive"
+                    description="Read content from specific Google Drive files"
                 ),
                 ToolCapability(
                     name="list_drive_files", 
@@ -51,9 +52,18 @@ class GoogleDriveReader(OAuthTool):
             input_schema=ToolSchema(
                 type="object",
                 properties={
+                    # ENHANCED: Add operation type
+                    "operation": {
+                        "type": "string",
+                        "enum": ["read_file", "list_files"],
+                        "description": "Type of operation to perform",
+                        "default": "read_file"
+                    },
+                    
+                    # File reading parameters
                     "file_id": {
                         "type": "string",
-                        "description": "Google Drive file ID"
+                        "description": "Google Drive file ID (required for read_file operation)"
                     },
                     "file_path": {
                         "type": "string", 
@@ -75,36 +85,62 @@ class GoogleDriveReader(OAuthTool):
                         "type": "string", 
                         "enum": ["auto", "sheets", "csv", "excel", "docs"],
                         "description": "File type to process (auto-detect if not specified)"
+                    },
+                    
+                    # File listing parameters
+                    "folder_id": {
+                        "type": "string",
+                        "description": "Google Drive folder ID to list files from (optional for list_files)"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query to filter files (optional for list_files)"
+                    },
+                    "page_size": {
+                        "type": "integer",
+                        "description": "Number of files to return (max 100, default 10)",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 10
                     }
                 },
-                required=["file_id"],
-                description="Input parameters for Google Drive file reading"
+                required=["operation"],
+                description="Input parameters for Google Drive operations"
             ),
             output_schema=ToolSchema(
                 type="object",
                 properties={
+                    "operation": {
+                        "type": "string",
+                        "description": "Operation that was performed"
+                    },
                     "data": {
                         "type": "array",
-                        "description": "Extracted data rows"
+                        "description": "Extracted data rows or file list"
                     },
                     "headers": {
                         "type": "array",
-                        "description": "Column headers"
+                        "description": "Column headers or file metadata fields"
                     },
                     "file_info": {
                         "type": "object",
-                        "description": "File metadata information"
+                        "description": "File metadata information (for read_file)"
                     },
                     "row_count": {
                         "type": "integer",
-                        "description": "Number of data rows"
+                        "description": "Number of data rows or files"
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Additional operation metadata"
                     }
                 },
-                description="Extracted file data and metadata"
+                description="Results from Google Drive operation"
             ),
             credential_requirements=[
                 CredentialRequirement(
                     type=CredentialType.OAUTH_TOKEN,
+                    provider="google",
                     required=True,
                     scopes=["https://www.googleapis.com/auth/drive.readonly"],
                     description="Google OAuth token with Drive read access"
@@ -117,7 +153,7 @@ class GoogleDriveReader(OAuthTool):
         input_data: Dict[str, Any], 
         context: ExecutionContext
     ) -> ExecutionResult:
-        """Execute Google Drive file reading"""
+        """Enhanced execution with operation routing"""
         try:
             # Get OAuth credentials
             oauth_creds = self.get_credentials(context, "OAUTH_TOKEN")
@@ -126,51 +162,29 @@ class GoogleDriveReader(OAuthTool):
             # Build Google Drive service
             from google.oauth2.credentials import Credentials
             credentials = Credentials(token=access_token)
-            drive_service = build('drive', 'v3', credentials=credentials)
             
-            file_id = input_data["file_id"]
-            file_type = input_data.get("file_type", "auto")
+            # Route based on operation type
+            operation = input_data.get("operation", "read_file")
             
-            # Get file metadata
-            file_metadata = drive_service.files().get(
-                fileId=file_id,
-                fields="id,name,mimeType,size,modifiedTime"
-            ).execute()
-            
-            # Determine processing method based on file type
-            if file_type == "auto":
-                file_type = self._detect_file_type(file_metadata["mimeType"])
-            
-            # Process based on file type
-            if file_type == "sheets":
-                result_data = await self._process_google_sheets(
-                    file_id, input_data, credentials
-                )
-            elif file_type in ["csv", "excel"]:
-                result_data = await self._process_file_download(
-                    drive_service, file_id, file_type, input_data
-                )
-            elif file_type == "docs":
-                result_data = await self._process_google_docs(
-                    file_id, input_data, credentials
-                )
+            if operation == "list_files":
+                result_data = await self._list_drive_files(input_data, credentials)
+                result_data["operation"] = "list_files"
+                
+            elif operation == "read_file":
+                if not input_data.get("file_id"):
+                    raise ValueError("file_id is required for read_file operation")
+                
+                result_data = await self._read_drive_file(input_data, credentials)
+                result_data["operation"] = "read_file"
+                
             else:
-                raise ValueError(f"Unsupported file type: {file_type}")
+                raise ValueError(f"Unsupported operation: {operation}")
             
             return ExecutionResult(
                 success=True,
-                data={
-                    **result_data,
-                    "file_info": {
-                        "id": file_metadata["id"],
-                        "name": file_metadata["name"],
-                        "mime_type": file_metadata["mimeType"],
-                        "size": file_metadata.get("size"),
-                        "modified_time": file_metadata["modifiedTime"]
-                    }
-                },
+                data=result_data,
                 metadata={
-                    "file_type": file_type,
+                    "operation": operation,
                     "processing_time": "calculated_later"
                 }
             )
@@ -178,8 +192,56 @@ class GoogleDriveReader(OAuthTool):
         except Exception as e:
             return ExecutionResult(
                 success=False,
-                error_message=f"Failed to read Google Drive file: {str(e)}"
+                error_message=f"Failed to execute Google Drive operation: {str(e)}"
             )
+    
+    async def _read_drive_file(
+        self,
+        input_data: Dict[str, Any],
+        credentials
+    ) -> Dict[str, Any]:
+        """Read content from a specific Google Drive file"""
+        drive_service = build('drive', 'v3', credentials=credentials)
+        
+        file_id = input_data["file_id"]
+        file_type = input_data.get("file_type", "auto")
+        
+        # Get file metadata
+        file_metadata = drive_service.files().get(
+            fileId=file_id,
+            fields="id,name,mimeType,size,modifiedTime"
+        ).execute()
+        
+        # Determine processing method based on file type
+        if file_type == "auto":
+            file_type = self._detect_file_type(file_metadata["mimeType"])
+        
+        # Process based on file type
+        if file_type == "sheets":
+            result_data = await self._process_google_sheets(
+                file_id, input_data, credentials
+            )
+        elif file_type in ["csv", "excel"]:
+            result_data = await self._process_file_download(
+                drive_service, file_id, file_type, input_data
+            )
+        elif file_type == "docs":
+            result_data = await self._process_google_docs(
+                file_id, input_data, credentials
+            )
+        else:
+            raise ValueError(f"Unsupported file type: {file_type}")
+        
+        # Add file metadata
+        result_data["file_info"] = {
+            "id": file_metadata["id"],
+            "name": file_metadata["name"],
+            "mime_type": file_metadata["mimeType"],
+            "size": file_metadata.get("size"),
+            "modified_time": file_metadata["modifiedTime"]
+        }
+        
+        return result_data
     
     async def _list_drive_files(
         self,
@@ -188,36 +250,61 @@ class GoogleDriveReader(OAuthTool):
     ) -> Dict[str, Any]:
         """
         List files in a Google Drive folder.
-        input_data can include 'folder_id' (optional), 'query' (optional), 'page_size' (optional)
+        Enhanced version with better parameter handling
         """
         drive_service = build('drive', 'v3', credentials=credentials)
+        
         folder_id = input_data.get("folder_id")
         query = input_data.get("query")
-        page_size = input_data.get("page_size", 100)
-
+        page_size = input_data.get("page_size", 10)
+        
         # Build query for files().list()
-        q = []
+        q_parts = []
+        
         if folder_id:
-            q.append(f"'{folder_id}' in parents")
+            q_parts.append(f"'{folder_id}' in parents")
+        
         if query:
-            q.append(query)
-        query_str = " and ".join(q) if q else None
-
+            q_parts.append(query)
+        
+        # Default: exclude trashed files
+        q_parts.append("trashed=false")
+        
+        query_str = " and ".join(q_parts) if q_parts else "trashed=false"
+        
         results = drive_service.files().list(
             q=query_str,
-            pageSize=page_size,
-            fields="files(id, name, mimeType, modifiedTime, size)"
+            pageSize=min(page_size, 100),  # Cap at 100
+            fields="files(id, name, mimeType, modifiedTime, size, parents, webViewLink)",
+            orderBy="modifiedTime desc"
         ).execute()
-
+        
         files = results.get("files", [])
-        data = [[f["id"], f["name"], f["mimeType"], f.get("size"), f["modifiedTime"]] for f in files]
-        headers = ["id", "name", "mimeType", "size", "modifiedTime"]
-
+        
+        # Format data as table
+        headers = ["id", "name", "mimeType", "size", "modifiedTime", "webViewLink"]
+        data = []
+        
+        for f in files:
+            data.append([
+                f["id"],
+                f["name"], 
+                f["mimeType"],
+                f.get("size", "N/A"),
+                f["modifiedTime"],
+                f.get("webViewLink", "")
+            ])
+        
         return {
             "data": data,
             "headers": headers,
             "row_count": len(data),
-            "metadata": {"operation": "list_drive_files"}
+            "metadata": {
+                "operation": "list_files",
+                "folder_id": folder_id,
+                "query": query,
+                "total_found": len(files)
+            }
         }
     
     def _detect_file_type(self, mime_type: str) -> str:

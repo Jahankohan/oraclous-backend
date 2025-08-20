@@ -99,6 +99,7 @@ class PostgreSQLReader(DatabaseTool):
             credential_requirements=[
                 CredentialRequirement(
                     type=CredentialType.CONNECTION_STRING,
+                    provider="postgresql",
                     required=True,
                     description="PostgreSQL connection string"
                 )

@@ -195,11 +195,8 @@ class ToolRegistryService(BaseToolRegistry, ToolValidationMixin):
             stmt = stmt.where(ToolDefinitionDB.category == category.value)
         
         stmt = stmt.order_by(ToolDefinitionDB.name).offset(offset).limit(limit)
-        print("Stmt:", stmt)
         result = await self.db.execute(stmt)
         db_tools = result.scalars().all()
-
-        print("DB Tools:", db_tools)
 
         return [self._db_to_pydantic(tool) for tool in db_tools]
     

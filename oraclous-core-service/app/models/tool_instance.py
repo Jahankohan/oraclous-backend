@@ -1,29 +1,21 @@
-import uuid
 from sqlalchemy import Column, String, Text, JSON, ForeignKey, Numeric
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.models.base import Base, TimestampMixin, UUIDMixin
-from app.models.workflow import WorkflowDB
-from app.models.tool_definition import ToolDefinitionDB
 
 
 class ToolInstanceDB(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "tool_instances"
     
-    # Override id to use UUID generation
-    def __init__(self, **kwargs):
-        if 'id' not in kwargs:
-            kwargs['id'] = str(uuid.uuid4())
-        super().__init__(**kwargs)
+    # REMOVE the custom __init__ method - let UUIDMixin handle it
     
     # Basic instance information
     name = Column(String(255), nullable=False)
     description = Column(Text)
     
-    # Relationships
-    workflow_id = Column(UUID, ForeignKey("workflows.id"), nullable=False, index=True)
-    workflow = relationship("WorkflowDB", back_populates="instances")
-    user_id = Column(UUID, nullable=False, index=True)  # User who owns this instance
+    # Relationships - FIXED: Use UUID types
+    workflow_id = Column(UUID(as_uuid=True), ForeignKey("workflows.id"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), nullable=False, index=True)  # User who owns this instance
     
     # Configuration
     configuration = Column(JSON, default=dict)  # Tool-specific configuration
@@ -36,14 +28,17 @@ class ToolInstanceDB(Base, UUIDMixin, TimestampMixin):
     # Status and State
     status = Column(String(50), nullable=False, default='PENDING', index=True)
     
-    # Execution History
-    last_execution_id = Column(UUID, nullable=True)
+    # Execution History - FIXED: Use UUID type
+    last_execution_id = Column(UUID(as_uuid=True), nullable=True)
     execution_count = Column(Numeric(10, 0), default=0)
     total_credits_consumed = Column(Numeric(10, 4), default=0)
     
-    # Relationships
-    tool_definition_id = Column(UUID, ForeignKey("tool_definitions.id"), nullable=False, index=True)
+    # Relationships - FIXED: Use UUID type for foreign key
+    tool_definition_id = Column(UUID(as_uuid=True), ForeignKey("tool_definitions.id"), nullable=False, index=True)
+    
+    # Relationship declarations
+    workflow = relationship("WorkflowDB", back_populates="instances")
     tool_definition = relationship("ToolDefinitionDB", back_populates="instances")
-
+    
     def __repr__(self):
         return f"<ToolInstance {self.name} ({self.id})>"

@@ -92,40 +92,14 @@ async def extract_graph_from_documents(
         from app.services.document_service import DocumentService
         document_service = DocumentService(neo4j)
 
-        # Check and create chunks if missing
-        async def ensure_chunks_exist(file_names):
-            for file_name in file_names:
-                # Get document info
-                query = """
-                MATCH (d:Document {fileName: $fileName})
-                RETURN d.id as id, d.fileName as fileName, d.sourceType as sourceType, d.status as status, coalesce(d.totalChunks, 0) as totalChunks
-                """
-                result = neo4j.execute_query(query, {"fileName": file_name})
-                if not result:
-                    continue
-                doc_info = result[0]
-                if doc_info["totalChunks"] == 0:
-                    # Load content and chunk
-                    doc_model = DocumentInfo(
-                        id=doc_info["id"],
-                        file_name=doc_info["fileName"],
-                        source_type=doc_info["sourceType"],
-                        status=doc_info["status"],
-                        created_at=datetime.now()
-                    )
-                    documents = await document_service.load_document_content(doc_model)
-                    chunks = await document_service.split_documents(documents)
-                    await document_service.create_chunk_nodes(doc_model, chunks)
-
-        await ensure_chunks_exist(request.file_names)
-
         async def generate_progress():
             async for progress in extraction_service.extract_graph(
                 file_names=request.file_names,
                 model=request.model,
                 node_labels=request.node_labels,
                 relationship_types=request.relationship_types,
-                enable_schema=request.enable_schema
+                enable_schema=request.enable_schema,
+                document_service=document_service
             ):
                 yield f"data: {json.dumps(progress.dict())}\n\n"
 
@@ -145,7 +119,27 @@ async def get_sources_list(
     """Get list of all document sources"""
     try:
         integration_service = AdvancedGraphIntegrationService(neo4j)
-        return await integration_service.get_documents_list()
+        docs = await integration_service.get_documents_list()
+        # Convert dicts to DocumentInfo if needed
+        doc_objs = []
+        for doc in docs:
+            if isinstance(doc, dict):
+                doc_obj = DocumentInfo(
+                    id=doc.get("id", ""),
+                    file_name=doc.get("file_name") or doc.get("fileName") or "Unknown",
+                    source_type=doc.get("source_type") or doc.get("sourceType") or "local",
+                    status=doc.get("status") or "New",
+                    created_at=doc.get("created_at") or doc.get("createdAt") or datetime.now(),
+                    processed_at=doc.get("processed_at") or doc.get("processedAt"),
+                    node_count=doc.get("node_count"),
+                    relationship_count=doc.get("relationship_count"),
+                    chunk_count=doc.get("chunk_count")
+                )
+                doc_objs.append(doc_obj)
+            else:
+                # Already a DocumentInfo object
+                doc_objs.append(doc)
+        return doc_objs
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get sources list: {str(e)}")
 

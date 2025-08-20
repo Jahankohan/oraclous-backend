@@ -9,7 +9,7 @@ def generate_tool_id(
     version: str = "1.0.0",
     category: str = "",
     namespace: Optional[str] = None
-) -> str:
+) -> uuid.UUID:  # FIXED: Return UUID object instead of string
     """
     Generate a deterministic UUID for a tool based on its characteristics.
     
@@ -23,7 +23,7 @@ def generate_tool_id(
         namespace: Optional namespace for organization-specific tools
     
     Returns:
-        String UUID that's deterministic based on input parameters
+        UUID object that's deterministic based on input parameters
     """
     # Create a consistent string representation
     if namespace:
@@ -40,7 +40,7 @@ def generate_tool_id(
     
     tool_uuid = uuid.uuid5(ORACLOUS_NAMESPACE, tool_string)
     
-    return str(tool_uuid)
+    return tool_uuid  # Return UUID object directly
 
 
 def generate_tool_id_from_class(tool_class) -> str:

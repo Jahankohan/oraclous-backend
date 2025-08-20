@@ -98,6 +98,7 @@ class MySQLReader(DatabaseTool):
             credential_requirements=[
                 CredentialRequirement(
                     type=CredentialType.CONNECTION_STRING,
+                    provider="mysql",
                     required=True,
                     description="MySQL connection string"
                 )

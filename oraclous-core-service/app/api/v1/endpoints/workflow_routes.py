@@ -3,13 +3,15 @@ from typing import List, Optional
 from app.schemas.workflow import Workflow, CreateWorkflowRequest, UpdateWorkflowRequest
 from app.repositories.workflow_repository import WorkflowRepository
 from app.services.workflow_service import WorkflowService
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_session
 
 router = APIRouter()
 
 # Dependency injection placeholder
-async def get_workflow_service():
+async def get_workflow_service(db: AsyncSession = Depends(get_session)):
     # Replace with actual session and repository creation
-    repository = WorkflowRepository(db=None)  # TODO: Inject actual AsyncSession
+    repository = WorkflowRepository(db=db)
     return WorkflowService(repository)
 
 @router.post("/", response_model=Workflow)

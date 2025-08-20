@@ -42,11 +42,11 @@ class PermissionType(str, Enum):
 # Core workflow schemas
 class WorkflowNode(BaseModel):
     """Represents a single node in the workflow"""
-    id: str = Field(..., description="Unique node identifier")
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
     type: str = Field(..., description="Node type (tool, condition, etc.)")
-    tool_definition_id: Optional[str] = Field(None, description="Tool definition ID if this is a tool node")
-    instance_id: Optional[str] = Field(None, description="Tool instance ID if configured")
-    
+    tool_definition_id: Optional[uuid.UUID] = Field(None, description="Tool definition ID if this is a tool node")
+    instance_id: Optional[uuid.UUID] = Field(None, description="Tool instance ID if configured")
+
     # Node configuration
     name: str = Field(..., description="Human-readable node name")
     description: Optional[str] = Field(None, description="Node description")
@@ -60,13 +60,18 @@ class WorkflowNode(BaseModel):
     timeout_seconds: Optional[int] = Field(None, description="Execution timeout")
     retry_count: int = Field(default=0, description="Number of retries on failure")
 
+    class Config:
+        # Allow UUID objects to be converted to/from strings
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 class WorkflowEdge(BaseModel):
     """Represents a connection between workflow nodes"""
-    id: str = Field(..., description="Unique edge identifier")
-    source_node_id: str = Field(..., description="Source node ID")
-    target_node_id: str = Field(..., description="Target node ID")
-    
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    source_node_id: uuid.UUID = Field(..., description="Source node ID")
+    target_node_id: uuid.UUID = Field(..., description="Target node ID")
+
     # Edge properties
     condition: Optional[Dict[str, Any]] = Field(None, description="Conditional logic for this edge")
     data_mapping: Optional[Dict[str, str]] = Field(None, description="Maps output fields to input fields")
@@ -75,14 +80,20 @@ class WorkflowEdge(BaseModel):
     label: Optional[str] = Field(None, description="Edge label for UI")
     is_conditional: bool = Field(default=False, description="Whether this edge has conditions")
 
+    class Config:
+        # Allow UUID objects to be converted to/from strings
+        json_encoders = {
+            uuid.UUID: str
+        }
+
 
 class Workflow(BaseModel):
     """Main workflow schema"""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
     name: str = Field(..., description="Workflow name")
     description: Optional[str] = Field(None, description="Workflow description")
-    owner_id: str = Field(..., description="Workflow owner user ID")
-    
+    owner_id: uuid.UUID = Field(..., description="Workflow owner user ID")
+
     # Workflow structure
     nodes: List[WorkflowNode] = Field(default_factory=list, description="Workflow nodes")
     edges: List[WorkflowEdge] = Field(default_factory=list, description="Workflow connections")
@@ -102,7 +113,7 @@ class Workflow(BaseModel):
     is_template: bool = Field(default=False)
     
     # Execution tracking
-    last_execution_id: Optional[str] = None
+    last_execution_id: Optional[uuid.UUID] = None
     total_executions: int = 0
     successful_executions: int = 0
     
@@ -126,17 +137,23 @@ class Workflow(BaseModel):
         if len(v) > 255:
             raise ValueError('Workflow name too long (max 255 characters)')
         return v.strip()
+    
+    class Config:
+        # Allow UUID objects to be converted to/from strings
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 
 class CreateWorkflowRequest(BaseModel):
     """Request to create a new workflow"""
     name: str = Field(..., description="Workflow name")
     description: Optional[str] = Field(None, description="Workflow description")
+    owner_id: uuid.UUID = Field(..., description="Workflow owner user ID")
     
     # Creation method
     generation_prompt: Optional[str] = Field(None, description="Natural language prompt for LangGraph")
-    template_id: Optional[str] = Field(None, description="Template ID if creating from template")
-    
+
     # Initial structure (if not using prompt or template)
     nodes: Optional[List[WorkflowNode]] = Field(None, description="Initial nodes")
     edges: Optional[List[WorkflowEdge]] = Field(None, description="Initial edges")
@@ -153,6 +170,11 @@ class CreateWorkflowRequest(BaseModel):
             raise ValueError('Workflow name cannot be empty')
         return v.strip()
 
+    class Config:
+        # Allow UUID objects to be converted to/from strings
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 class UpdateWorkflowRequest(BaseModel):
     """Request to update workflow"""
@@ -168,7 +190,7 @@ class UpdateWorkflowRequest(BaseModel):
 
 class WorkflowExecution(BaseModel):
     """Workflow execution record"""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
     workflow_id: str = Field(..., description="Workflow ID")
     user_id: str = Field(..., description="User who triggered execution")
     
@@ -212,17 +234,23 @@ class WorkflowExecution(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+    class Config:
+        # Allow UUID objects to be converted to/from strings
+        json_encoders = {
+            uuid.UUID: str
+        }
+
 
 class CreateWorkflowExecutionRequest(BaseModel):
     """Request to execute a workflow"""
-    workflow_id: str = Field(..., description="Workflow to execute")
+    workflow_id: uuid.UUID = Field(..., description="Workflow to execute")
     input_parameters: Dict[str, Any] = Field(default_factory=dict, description="Input parameters")
     trigger_type: TriggerType = Field(default=TriggerType.MANUAL)
 
 
 class WorkflowTemplate(BaseModel):
     """Workflow template schema"""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
     name: str = Field(..., description="Template name")
     description: Optional[str] = Field(None, description="Template description")
     category: Optional[str] = None
@@ -233,10 +261,10 @@ class WorkflowTemplate(BaseModel):
     
     # Configuration
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Template parameters")
-    required_tools: List[str] = Field(default_factory=list, description="Required tool definition IDs")
+    required_tools: List[uuid.UUID] = Field(default_factory=list, description="Required tool definition IDs")
     
     # Metadata
-    author_id: Optional[str] = None
+    author_id: Optional[uuid.UUID] = None
     tags: List[str] = Field(default_factory=list)
     difficulty_level: str = Field(default='BEGINNER')
     estimated_time_minutes: Optional[int] = None
@@ -254,13 +282,19 @@ class WorkflowTemplate(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+    class Config:
+        # Allow UUID objects to be converted to/from strings
+        json_encoders = {
+            uuid.UUID: str
+        }
+
 
 class WorkflowShare(BaseModel):
     """Workflow sharing schema"""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    workflow_id: str = Field(..., description="Shared workflow ID")
-    owner_id: str = Field(..., description="Workflow owner ID")
-    shared_with_id: Optional[str] = Field(None, description="User ID (null for public)")
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    workflow_id: uuid.UUID = Field(..., description="Shared workflow ID")
+    owner_id: uuid.UUID = Field(..., description="Workflow owner ID")
+    shared_with_id: Optional[uuid.UUID] = Field(None, description="User ID (null for public)")
     
     # Permissions
     permission_type: PermissionType = Field(default=PermissionType.VIEW)
@@ -277,6 +311,12 @@ class WorkflowShare(BaseModel):
     # Timestamps
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        # Allow UUID objects to be converted to/from strings
+        json_encoders = {
+            uuid.UUID: str
+        }
 
 
 # Response schemas

@@ -2,6 +2,7 @@
 import logging
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime, timezone
 
 from app.tools.registry import tool_registry
 from app.services.tool_registry import ToolRegistryService
@@ -54,19 +55,19 @@ class ToolSyncService:
                 summary = {
                     "total_memory_tools": len(memory_tools),
                     "total_db_tools": len(db_tools),
-                    "synced_from_db": len(self.synced_tools),
-                    "created_in_db": len(self.created_tools),  # NEW
+                    "synced_successfully": len(self.synced_tools),  # FIXED: Use correct key
+                    "created_in_db": len(self.created_tools),
                     "failed_tools": len(self.failed_tools),
                     "skipped_tools": len(self.skipped_tools),
                     "synced_tool_ids": self.synced_tools,
-                    "created_tool_ids": self.created_tools,  # NEW
+                    "created_tool_ids": self.created_tools,
                     "failed_tool_details": self.failed_tools,
                     "skipped_tool_details": self.skipped_tools
                 }
                 
                 logger.info(
                     f"Tool synchronization completed: "
-                    f"{summary['synced_from_db']} synced from DB, "
+                    f"{summary['synced_successfully']} synced from DB, "
                     f"{summary['created_in_db']} created in DB, "
                     f"{summary['failed_tools']} failed, "
                     f"{summary['skipped_tools']} skipped"
@@ -124,6 +125,7 @@ class ToolSyncService:
     async def _sync_db_to_memory(self, tool_definition: ToolDefinition):
         """
         Existing functionality: Sync single tool from DB to memory
+        FIXED: Handle timezone-aware datetime comparisons
         """
         try:
             tool_id = tool_definition.id
@@ -167,16 +169,41 @@ class ToolSyncService:
             logger.error(f"Failed to sync tool {tool_definition.id}: {str(e)}")
     
     async def _handle_existing_tool(self, db_definition: ToolDefinition, memory_definition: ToolDefinition):
-        """Handle case where tool exists in both DB and memory"""
-        db_updated = db_definition.updated_at
-        memory_updated = memory_definition.updated_at
-        
-        if db_updated > memory_updated:
-            # Update in-memory registry with DB version
+        """
+        Handle case where tool exists in both DB and memory
+        FIXED: Proper timezone handling for datetime comparison
+        """
+        try:
+            # Normalize datetime objects to UTC for comparison
+            db_updated = self._normalize_datetime(db_definition.updated_at)
+            memory_updated = self._normalize_datetime(memory_definition.updated_at)
+            
+            if db_updated > memory_updated:
+                # Update in-memory registry with DB version
+                tool_registry._definitions[db_definition.id] = db_definition
+                logger.debug(f"Updated tool {db_definition.id} in memory registry (DB version newer)")
+            else:
+                logger.debug(f"Kept existing tool {db_definition.id} in memory registry (memory version newer or same)")
+                
+        except Exception as e:
+            logger.warning(f"Could not compare timestamps for tool {db_definition.id}: {str(e)}. Using DB version.")
+            # Fallback: use DB version if comparison fails
             tool_registry._definitions[db_definition.id] = db_definition
-            logger.debug(f"Updated tool {db_definition.id} in memory registry (DB version newer)")
+    
+    def _normalize_datetime(self, dt: datetime) -> datetime:
+        """
+        Normalize datetime to UTC timezone for safe comparison
+        FIXED: Handle both timezone-aware and timezone-naive datetimes
+        """
+        if dt is None:
+            return datetime.now(timezone.utc)
+        
+        if dt.tzinfo is None:
+            # Timezone-naive datetime - assume UTC
+            return dt.replace(tzinfo=timezone.utc)
         else:
-            logger.debug(f"Kept existing tool {db_definition.id} in memory registry (memory version newer or same)")
+            # Timezone-aware datetime - convert to UTC
+            return dt.astimezone(timezone.utc)
     
     async def _register_db_tool(self, tool_definition: ToolDefinition, executor_class):
         """Register a tool from DB that doesn't exist in memory registry"""
