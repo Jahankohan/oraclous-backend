@@ -13,7 +13,7 @@ from app.services.instance_manager import InstanceManagerService
 from app.repositories.instance_repository import InstanceRepository
 from app.services.tool_registry import ToolRegistryService
 from app.services.credential_client import CredentialClient
-from app.services.async_execution_service import AsyncToolExecutionService
+from app.services.tool_execution_service import ToolExecutionService
 from app.services.validation_service import ValidationService
 from fastapi.responses import StreamingResponse
 from app.core.database import get_session
@@ -41,13 +41,21 @@ async def get_instance_service(db: AsyncSession = Depends(get_session)) -> Insta
         credential_client=credential_client
     )
 
-async def get_async_execution_service(
+async def get_execution_service(
     instance_service: InstanceManagerService = Depends(get_instance_service)
-) -> AsyncToolExecutionService:
+) -> ToolExecutionService:
     credential_client = CredentialClient()
-    return AsyncToolExecutionService(
+    
+    # Optionally include validation service
+    validation_service = ValidationService(
+        credential_client=credential_client,
+        tool_registry_service=instance_service.tool_registry
+    )
+    
+    return ToolExecutionService(
         instance_manager=instance_service,
-        credential_client=credential_client
+        credential_client=credential_client,
+        validation_service=validation_service
     )
 
 async def get_validation_service(
@@ -229,14 +237,14 @@ async def execute_tool_instance_async(
     input_data: Dict[str, Any],
     max_retries: int = Query(3, ge=0, le=10),
     user_id: UUID = Depends(get_current_user_id),
-    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+    execution_service: ToolExecutionService = Depends(get_execution_service)
 ):
     """
     Execute tool instance asynchronously for long-running tasks
     Returns job information for tracking progress
     """
     try:
-        job_info = await async_service.submit_execution_job(
+        job_info = await execution_service.execute_async(
             instance_id=instance_id,
             user_id=user_id,
             input_data=input_data,
@@ -256,18 +264,16 @@ async def get_job_progress(
     instance_id: str,
     job_id: str,
     user_id: UUID = Depends(get_current_user_id),
-    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+    execution_service: ToolExecutionService = Depends(get_execution_service)
 ):
-    """
-    Get current progress of an execution job
-    """
+    """Get current progress of an execution job"""
     try:
-        # First verify user owns this instance (security check)
-        instance = await async_service.instance_manager.get_user_instance(instance_id, user_id)
+        # Verify user owns this instance (security check)
+        instance = await execution_service.instance_manager.get_user_instance(instance_id, user_id)
         if not instance:
             raise HTTPException(status_code=404, detail="Instance not found")
         
-        progress = await async_service.get_job_progress(job_id)
+        progress = await execution_service.get_job_progress(job_id)
         return progress
         
     except ValueError as e:
@@ -281,24 +287,20 @@ async def get_job_result(
     instance_id: str,
     job_id: str,
     user_id: UUID = Depends(get_current_user_id),
-    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+    execution_service: ToolExecutionService = Depends(get_execution_service)
 ):
-    """
-    Get final result of a completed execution job
-    """
+    """Get final result of a completed execution job"""
     try:
         # Verify user owns this instance
-        instance = await async_service.instance_manager.get_user_instance(instance_id, user_id)
+        instance = await execution_service.instance_manager.get_user_instance(instance_id, user_id)
         if not instance:
             raise HTTPException(status_code=404, detail="Instance not found")
         
-        result = await async_service.get_job_result(job_id)
+        result = await execution_service.get_job_result(job_id)
         return result
         
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get job result: {str(e)}")
 
 
 @router.post("/{instance_id}/jobs/{job_id}/cancel", response_model=dict)
@@ -306,19 +308,19 @@ async def cancel_execution_job(
     instance_id: str,
     job_id: str,
     user_id: UUID = Depends(get_current_user_id),
-    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+    execution_service: ToolExecutionService = Depends(get_execution_service)
 ):
     """
     Cancel a running execution job
     """
     try:
         # Verify user owns this instance
-        instance = await async_service.instance_manager.get_user_instance(instance_id, user_id)
+        instance = await execution_service.instance_manager.get_user_instance(instance_id, user_id)
         if not instance:
             raise HTTPException(status_code=404, detail="Instance not found")
-        
-        success = await async_service.cancel_job(job_id)
-        
+
+        success = await execution_service.cancel_job(job_id)
+
         if success:
             return {"message": "Job cancelled successfully", "job_id": job_id}
         else:
@@ -335,21 +337,21 @@ async def stream_job_progress(
     instance_id: str,
     job_id: str,
     user_id: UUID = Depends(get_current_user_id),
-    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+    execution_service: ToolExecutionService = Depends(get_execution_service)
 ):
     """
     Stream job progress updates (Server-Sent Events)
     """
     try:
         # Verify user owns this instance
-        instance = await async_service.instance_manager.get_user_instance(instance_id, user_id)
+        instance = await execution_service.instance_manager.get_user_instance(instance_id, user_id)
         if not instance:
             raise HTTPException(status_code=404, detail="Instance not found")
         
         async def generate_progress_stream():
             """Generate SSE stream of progress updates"""
             try:
-                async for progress_update in async_service.stream_job_progress(job_id):
+                async for progress_update in execution_service.stream_job_progress(job_id):
                     # Format as Server-Sent Event
                     data = json.dumps(progress_update)
                     yield f"data: {data}\n\n"
@@ -424,32 +426,39 @@ async def delete_instance(
         raise HTTPException(status_code=500, detail=f"Failed to delete instance: {str(e)}")
 
 
-@router.post("/{instance_id}/execute", response_model=Execution, status_code=201)
-async def create_execution(
+@router.post("/{instance_id}/execute-sync", response_model=dict)
+async def execute_tool_instance_sync(
     instance_id: str,
-    request: CreateExecutionRequest,
+    input_data: Dict[str, Any],
+    max_retries: int = Query(3, ge=0, le=10),
     user_id: UUID = Depends(get_current_user_id),
-    service: InstanceManagerService = Depends(get_instance_service)
+    execution_service: ToolExecutionService = Depends(get_execution_service)
 ):
-    """Create an execution for a tool instance"""
+    """
+    Execute tool instance synchronously and return result immediately
+    Use this for quick operations or testing
+    """
     try:
-        # Update request with instance_id if not provided
-        if not request.instance_id:
-            request.instance_id = instance_id
-        elif request.instance_id != instance_id:
-            raise ValueError("Instance ID mismatch between path and body")
-        
-        execution = await service.create_execution(
+        result = await execution_service.execute_sync(
             instance_id=instance_id,
             user_id=user_id,
-            input_data=request.input_data,
-            max_retries=request.max_retries
+            input_data=input_data,
+            max_retries=max_retries
         )
-        return execution
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        
+        return {
+            "success": result.success,
+            "data": result.data,
+            "error_message": result.error_message,
+            "error_type": result.error_type,
+            "credits_consumed": float(result.credits_consumed),
+            "processing_time_ms": result.processing_time_ms,
+            "metadata": result.metadata
+        }
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create execution: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Execution failed: {str(e)}")
+
 
 
 @router.get("/{instance_id}/executions", response_model=List[Execution])

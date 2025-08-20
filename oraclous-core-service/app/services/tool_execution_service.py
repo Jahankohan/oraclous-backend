@@ -1,10 +1,9 @@
-# app/services/async_execution_service.py
+# app/services/tool_execution_service.py
 import asyncio
-import json
 import logging
 from typing import Dict, Any, Optional, AsyncGenerator
 from uuid import UUID, uuid4
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 
 from app.services.instance_manager import InstanceManagerService
@@ -19,23 +18,11 @@ from app.schemas.common import InstanceStatus
 logger = logging.getLogger(__name__)
 
 
-class AsyncToolExecutionService:
+class ToolExecutionService:
     """
-    Service for handling asynchronous tool execution with job queue
-    Supports long-running tasks, progress tracking, and result streaming
+    Unified service for tool execution - handles both sync and async execution,
+    job tracking, progress monitoring, and tool capabilities
     """
-    
-    def __init__(
-        self,
-        instance_manager: InstanceManagerService,
-        credential_client: CredentialClient
-    ):
-        self.instance_manager = instance_manager
-        self.credential_client = credential_client
-        
-        # In-memory job storage (replace with Redis/DB in production)
-        self.active_jobs: Dict[str, Dict[str, Any]] = {}
-        self.job_results: Dict[str, Dict[str, Any]] = {}
     
     def __init__(
         self,
@@ -46,8 +33,95 @@ class AsyncToolExecutionService:
         self.instance_manager = instance_manager
         self.credential_client = credential_client
         self.validation_service = validation_service
+        
+        # In-memory job storage (replace with Redis/DB in production)
+        self.active_jobs: Dict[str, Dict[str, Any]] = {}
+        self.job_results: Dict[str, Dict[str, Any]] = {}
     
-    async def submit_execution_job(
+    # ================== SYNCHRONOUS EXECUTION ==================
+    
+    async def execute_sync(
+        self,
+        instance_id: str,
+        user_id: UUID,
+        input_data: Dict[str, Any],
+        max_retries: int = 3
+    ) -> ExecutionResult:
+        """
+        Execute a tool instance synchronously (for quick operations)
+        Returns execution result immediately
+        """
+        try:
+            # 1. Validate instance readiness
+            validation_result = await self._validate_execution_readiness(instance_id, user_id)
+            if not validation_result["is_ready"]:
+                return ExecutionResult(
+                    success=False,
+                    error_message=validation_result["error_message"],
+                    error_type="VALIDATION_FAILED",
+                    metadata=validation_result.get("metadata", {})
+                )
+            
+            instance = validation_result["instance"]
+            
+            # 2. Create execution record
+            execution = await self.instance_manager.create_execution(
+                instance_id=instance_id,
+                user_id=user_id,
+                input_data=input_data,
+                max_retries=max_retries
+            )
+            
+            # 3. Execute directly
+            start_time = datetime.utcnow()
+            
+            try:
+                # Update execution to RUNNING
+                await self.instance_manager.repo.update_execution(
+                    execution.id, 
+                    {
+                        "status": "RUNNING",
+                        "started_at": start_time
+                    }
+                )
+                
+                # Build context and execute
+                context = await self._build_execution_context(instance, execution, user_id)
+                result = await self._execute_tool(instance, input_data, context)
+                
+                # Calculate processing time
+                processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                result.processing_time_ms = processing_time
+                
+                # Update records
+                await self._update_execution_with_result(execution.id, result)
+                await self._update_instance_stats(instance, result)
+                
+                logger.info(f"Sync execution completed for instance {instance_id}")
+                return result
+                
+            except Exception as e:
+                error_result = ExecutionResult(
+                    success=False,
+                    error_message=str(e),
+                    error_type=type(e).__name__,
+                    processing_time_ms=int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                )
+                
+                await self._update_execution_with_result(execution.id, error_result)
+                return error_result
+                
+        except Exception as e:
+            logger.error(f"Sync execution failed for instance {instance_id}: {str(e)}")
+            return ExecutionResult(
+                success=False,
+                error_message=f"Execution service error: {str(e)}",
+                error_type="EXECUTION_SERVICE_ERROR"
+            )
+    
+    # ================== ASYNCHRONOUS EXECUTION ==================
+    
+    async def execute_async(
         self,
         instance_id: str,
         user_id: UUID,
@@ -55,17 +129,16 @@ class AsyncToolExecutionService:
         max_retries: int = 3
     ) -> Dict[str, Any]:
         """
-        Submit a tool execution as an async job
+        Execute a tool instance asynchronously (for long-running operations)
         Returns job information for tracking
         """
         try:
-            # 1. Validate instance
-            instance = await self.instance_manager.get_user_instance(instance_id, user_id)
-            if not instance:
-                raise ValueError("Tool instance not found")
+            # 1. Validate instance readiness
+            validation_result = await self._validate_execution_readiness(instance_id, user_id)
+            if not validation_result["is_ready"]:
+                raise ValueError(validation_result["error_message"])
             
-            if instance.status != InstanceStatus.READY:
-                raise ValueError(f"Tool instance not ready. Status: {instance.status}")
+            instance = validation_result["instance"]
             
             # 2. Create execution record
             execution = await self.instance_manager.create_execution(
@@ -108,25 +181,25 @@ class AsyncToolExecutionService:
             }
             
             # 6. Start processing (fire and forget)
-            asyncio.create_task(self._process_job(job_id))
+            asyncio.create_task(self._process_async_job(job_id))
             
             return {
                 "job_id": job_id,
                 "execution_id": execution.id,
                 "status": "QUEUED",
                 "estimated_duration": self._estimate_execution_duration(instance),
-                "progress_url": f"/api/v1/jobs/{job_id}/progress",
-                "result_url": f"/api/v1/jobs/{job_id}/result"
+                "progress_url": f"/api/v1/instances/{instance_id}/jobs/{job_id}/progress",
+                "result_url": f"/api/v1/instances/{instance_id}/jobs/{job_id}/result"
             }
             
         except Exception as e:
-            logger.error(f"Failed to submit execution job: {str(e)}")
+            logger.error(f"Failed to submit async execution job: {str(e)}")
             raise
     
+    # ================== JOB MANAGEMENT ==================
+    
     async def get_job_progress(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get current progress of a job
-        """
+        """Get current progress of a job"""
         if job_id in self.active_jobs:
             job_info = self.active_jobs[job_id]
             return {
@@ -151,9 +224,7 @@ class AsyncToolExecutionService:
             raise ValueError(f"Job {job_id} not found")
     
     async def get_job_result(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get final result of a completed job
-        """
+        """Get final result of a completed job"""
         if job_id in self.job_results:
             return self.job_results[job_id]
         elif job_id in self.active_jobs:
@@ -166,48 +237,8 @@ class AsyncToolExecutionService:
         else:
             raise ValueError(f"Job {job_id} not found")
     
-    async def stream_job_progress(self, job_id: str) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Stream job progress updates (for WebSocket or SSE)
-        """
-        last_progress = -1
-        last_status = None
-        
-        while True:
-            try:
-                progress_info = await self.get_job_progress(job_id)
-                
-                # Yield update if progress or status changed
-                if (progress_info["progress"] != last_progress or 
-                    progress_info["status"] != last_status):
-                    
-                    yield progress_info
-                    last_progress = progress_info["progress"]
-                    last_status = progress_info["status"]
-                
-                # Break if job is completed or failed
-                if progress_info["status"] in ["COMPLETED", "FAILED", "CANCELLED"]:
-                    break
-                
-                # Wait before next check
-                await asyncio.sleep(1)
-                
-            except ValueError:
-                # Job not found
-                break
-            except Exception as e:
-                logger.error(f"Error streaming progress for job {job_id}: {str(e)}")
-                yield {
-                    "job_id": job_id,
-                    "status": "ERROR",
-                    "error_message": str(e)
-                }
-                break
-    
     async def cancel_job(self, job_id: str) -> bool:
-        """
-        Cancel a running job
-        """
+        """Cancel a running job"""
         if job_id in self.active_jobs:
             job_info = self.active_jobs[job_id]
             if job_info["status"] in ["QUEUED", "RUNNING"]:
@@ -236,18 +267,183 @@ class AsyncToolExecutionService:
                 logger.info(f"Job {job_id} cancelled successfully")
                 return True
             else:
-                logger.warning(f"Cannot cancel job {job_id} in status {job_info['status']}")
                 return False
         else:
-            logger.warning(f"Job {job_id} not found for cancellation")
             return False
     
-    # ================== INTERNAL PROCESSING ==================
+    async def stream_job_progress(self, job_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream job progress updates (for WebSocket or SSE)"""
+        last_progress = -1
+        last_status = None
+        
+        while True:
+            try:
+                progress_info = await self.get_job_progress(job_id)
+                
+                # Yield update if progress or status changed
+                if (progress_info["progress"] != last_progress or 
+                    progress_info["status"] != last_status):
+                    
+                    yield progress_info
+                    last_progress = progress_info["progress"]
+                    last_status = progress_info["status"]
+                
+                # Break if job is completed or failed
+                if progress_info["status"] in ["COMPLETED", "FAILED", "CANCELLED"]:
+                    break
+                
+                # Wait before next check
+                await asyncio.sleep(1)
+                
+            except ValueError:
+                break
+            except Exception as e:
+                logger.error(f"Error streaming progress for job {job_id}: {str(e)}")
+                yield {
+                    "job_id": job_id,
+                    "status": "ERROR",
+                    "error_message": str(e)
+                }
+                break
     
-    async def _process_job(self, job_id: str):
-        """
-        Internal method to process a job asynchronously
-        """
+    # ================== TOOL CAPABILITIES ==================
+    
+    async def get_tool_capabilities(self, tool_definition_id: str) -> Dict[str, Any]:
+        """Get capabilities and metadata for a tool definition"""
+        try:
+            # Get tool definition from registry
+            tool_definition = await self.instance_manager.tool_registry.get_tool(tool_definition_id)
+            if not tool_definition:
+                return {
+                    "error": "Tool definition not found",
+                    "capabilities": []
+                }
+            
+            # Check implementation availability
+            try:
+                executor = ToolFactory.create_executor(tool_definition_id)
+                implementation_available = True
+                implementation_type = executor.__class__.__name__
+            except Exception:
+                implementation_available = False
+                implementation_type = None
+            
+            return {
+                "tool_definition": {
+                    "id": tool_definition.id,
+                    "name": tool_definition.name,
+                    "description": tool_definition.description,
+                    "version": tool_definition.version,
+                    "category": tool_definition.category,
+                    "type": tool_definition.type
+                },
+                "capabilities": [
+                    {
+                        "name": cap.name,
+                        "description": cap.description,
+                        "parameters": cap.parameters
+                    } for cap in tool_definition.capabilities
+                ],
+                "input_schema": tool_definition.input_schema,
+                "output_schema": tool_definition.output_schema,
+                "configuration_schema": tool_definition.configuration_schema,
+                "credential_requirements": [
+                    {
+                        "type": req.type.value,
+                        "required": req.required,
+                        "scopes": req.scopes,
+                        "description": req.description
+                    } for req in tool_definition.credential_requirements
+                ],
+                "implementation": {
+                    "available": implementation_available,
+                    "type": implementation_type
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get tool capabilities for {tool_definition_id}: {str(e)}")
+            return {
+                "error": str(e),
+                "capabilities": []
+            }
+    
+    async def list_available_tools(self) -> Dict[str, Any]:
+        """List all available tools with their capabilities"""
+        try:
+            tools = await self.instance_manager.tool_registry.list_tools(limit=1000)
+            
+            available_tools = []
+            for tool in tools:
+                tool_info = await self.get_tool_capabilities(tool.id)
+                if "error" not in tool_info:
+                    available_tools.append(tool_info)
+            
+            return {
+                "tools": available_tools,
+                "total": len(available_tools)
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to list available tools: {str(e)}")
+            return {
+                "error": str(e),
+                "tools": []
+            }
+    
+    # ================== INTERNAL METHODS ==================
+    
+    async def _validate_execution_readiness(self, instance_id: str, user_id: UUID) -> Dict[str, Any]:
+        """Validate if instance is ready for execution"""
+        instance = await self.instance_manager.get_user_instance(instance_id, user_id)
+        if not instance:
+            return {
+                "is_ready": False,
+                "error_message": "Tool instance not found",
+                "metadata": {"error_type": "INSTANCE_NOT_FOUND"}
+            }
+        
+        # Enhanced validation if validation service is available
+        if self.validation_service:
+            validation_report = await self.validation_service.validate_execution_readiness(
+                instance, user_id
+            )
+            
+            if not validation_report["is_ready"]:
+                error_messages = [error["message"] for error in validation_report["errors"]]
+                action_items = [
+                    {
+                        "action": action["action"],
+                        "message": action["message"],
+                        "url": action.get("url"),
+                        "priority": action["priority"]
+                    } for action in validation_report["action_items"]
+                ]
+                
+                return {
+                    "is_ready": False,
+                    "error_message": "; ".join(error_messages),
+                    "metadata": {
+                        "validation_report": validation_report,
+                        "action_items": action_items
+                    }
+                }
+        else:
+            # Fallback to basic status check
+            if instance.status != InstanceStatus.READY:
+                return {
+                    "is_ready": False,
+                    "error_message": f"Tool instance not ready for execution. Status: {instance.status}",
+                    "metadata": {"error_type": "INSTANCE_NOT_READY"}
+                }
+        
+        return {
+            "is_ready": True,
+            "instance": instance
+        }
+    
+    async def _process_async_job(self, job_id: str):
+        """Internal method to process a job asynchronously"""
         job_info = self.active_jobs.get(job_id)
         if not job_info:
             logger.error(f"Job {job_id} not found in active jobs")
@@ -279,7 +475,7 @@ class AsyncToolExecutionService:
             job_info["current_step"] = "Executing tool"
             job_info["progress"] = 30
             
-            result = await self._execute_with_progress(job_id, instance, job.job_data["input_data"], context)
+            result = await self._execute_tool_with_progress(job_id, instance, job.job_data["input_data"], context)
             
             # Store result
             job_info["progress"] = 100
@@ -350,29 +546,29 @@ class AsyncToolExecutionService:
             # Clean up active job
             del self.active_jobs[job_id]
     
-    async def _execute_with_progress(
+    async def _execute_tool(self, instance: ToolInstance, input_data: Dict[str, Any], context: ExecutionContext) -> ExecutionResult:
+        """Execute tool directly"""
+        executor = ToolFactory.create_executor(instance.tool_definition_id)
+        return await ToolFactory.execute_tool(instance, input_data, context)
+    
+    async def _execute_tool_with_progress(
         self, 
         job_id: str,
         instance: ToolInstance, 
         input_data: Dict[str, Any], 
         context: ExecutionContext
     ) -> ExecutionResult:
-        """
-        Execute tool with progress updates
-        """
+        """Execute tool with progress updates"""
         job_info = self.active_jobs.get(job_id)
         
         try:
-            # Create executor
-            executor = ToolFactory.create_executor(instance.tool_definition_id)
-            
             # Update progress
             if job_info:
                 job_info["progress"] = 40
                 job_info["current_step"] = "Starting tool execution"
             
-            # Execute (this would be enhanced to support progress callbacks in real tools)
-            result = await ToolFactory.execute_tool(instance, input_data, context)
+            # Execute
+            result = await self._execute_tool(instance, input_data, context)
             
             # Update progress
             if job_info:
@@ -385,8 +581,6 @@ class AsyncToolExecutionService:
             logger.error(f"Tool execution failed for job {job_id}: {str(e)}")
             raise
     
-    # ================== HELPER METHODS ==================
-    
     async def _build_execution_context(
         self,
         instance: ToolInstance,
@@ -394,7 +588,6 @@ class AsyncToolExecutionService:
         user_id: UUID
     ) -> ExecutionContext:
         """Build execution context with resolved credentials"""
-        # Same logic as synchronous service
         credentials = {}
         
         if instance.credential_mappings:
@@ -449,24 +642,28 @@ class AsyncToolExecutionService:
         
         await self.instance_manager.repo.update_execution(execution_id, update_data)
     
-    def _estimate_execution_duration(self, instance: ToolInstance) -> Optional[int]:
-        """
-        Estimate execution duration based on tool type and history
-        Returns estimated seconds
-        """
-        # This would be enhanced with ML-based estimation based on:
-        # - Tool type
-        # - Input data size
-        # - Historical execution times
-        # - Current system load
+    async def _update_instance_stats(self, instance: ToolInstance, result: ExecutionResult):
+        """Update instance statistics"""
+        new_execution_count = instance.execution_count + 1
+        new_credits = instance.total_credits_consumed + result.credits_consumed
         
-        # Simple heuristic for now
+        # Update via repository  
+        await self.instance_manager.repo.update_instance(
+            instance.id,
+            UUID(instance.user_id),
+            {
+                "execution_count": new_execution_count,
+                "total_credits_consumed": new_credits,
+                "last_execution_id": instance.id  # This should be execution_id
+            }
+        )
+    
+    def _estimate_execution_duration(self, instance: ToolInstance) -> Optional[int]:
+        """Estimate execution duration based on tool type and history"""
         tool_estimates = {
             "GoogleDriveReader": 30,
             "PostgreSQLReader": 15,
             "MySQLReader": 15,
             "NotionReader": 45
         }
-        
-        # Get tool name from instance (would need tool definition lookup)
         return tool_estimates.get("default", 60)

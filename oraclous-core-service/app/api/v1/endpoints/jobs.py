@@ -4,7 +4,8 @@ from app.repositories.instance_repository import InstanceRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.tool_registry import ToolRegistryService
 from app.services.credential_client import CredentialClient
-from app.services.async_execution_service import AsyncToolExecutionService
+from app.services.validation_service import ValidationService
+from app.services.tool_execution_service import ToolExecutionService
 from app.core.database import get_session
 from typing import List, Optional
 from uuid import UUID
@@ -27,13 +28,21 @@ async def get_instance_service(db: AsyncSession = Depends(get_session)) -> Insta
         credential_client=credential_client
     )
 
-async def get_async_execution_service(
+async def get_execution_service(
     instance_service: InstanceManagerService = Depends(get_instance_service)
-) -> AsyncToolExecutionService:
+) -> ToolExecutionService:
     credential_client = CredentialClient()
-    return AsyncToolExecutionService(
+    
+    # Optionally include validation service
+    validation_service = ValidationService(
+        credential_client=credential_client,
+        tool_registry_service=instance_service.tool_registry
+    )
+    
+    return ToolExecutionService(
         instance_manager=instance_service,
-        credential_client=credential_client
+        credential_client=credential_client,
+        validation_service=validation_service
     )
 
 router = APIRouter()
@@ -42,11 +51,11 @@ router = APIRouter()
 async def get_job_info(
     job_id: str,
     user_id: UUID = Depends(get_current_user_id),
-    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+    execution_service: ToolExecutionService = Depends(get_execution_service)
 ):
     """Get job information by job ID"""
     try:
-        progress = await async_service.get_job_progress(job_id)
+        progress = await execution_service.get_job_progress(job_id)
         return progress
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
