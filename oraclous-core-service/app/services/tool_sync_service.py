@@ -13,57 +13,64 @@ logger = logging.getLogger(__name__)
 
 class ToolSyncService:
     """
-    Service to synchronize tool definitions between database and in-memory registry
-    Used during application startup to ensure all DB tools are available in memory
+    Enhanced service to synchronize tool definitions between database and in-memory registry
+    Now supports bidirectional sync: DB ↔ Memory
     """
     
     def __init__(self):
         self.synced_tools: List[str] = []
         self.failed_tools: List[Dict[str, Any]] = []
         self.skipped_tools: List[Dict[str, Any]] = []
+        self.created_tools: List[str] = []  # NEW: Track DB-created tools
     
     async def sync_tools_on_startup(self) -> Dict[str, Any]:
         """
-        Main method to sync all tools from DB to in-memory registry
-        Returns summary of sync operation
+        Complete tool synchronization:
+        1. Load memory tools from code
+        2. Sync DB → Memory (existing functionality)
+        3. Sync Memory → DB (NEW: auto-create missing DB tools)
         """
-        logger.info("Starting tool synchronization from database to in-memory registry...")
+        logger.info("Starting complete tool synchronization...")
         
         try:
-            # Create database session
             async with AsyncSessionLocal() as session:
                 db_registry = ToolRegistryService(session)
                 
-                # Get all tool definitions from database
-                db_tools = await db_registry.list_tools(limit=1000)  # Get all tools
+                # STEP 1: Get tools from both sources
+                memory_tools = tool_registry.list_definitions()
+                db_tools = await db_registry.list_tools(limit=1000)
                 
-                logger.info(f"Found {len(db_tools)} tool definitions in database")
+                logger.info(f"Found {len(memory_tools)} tools in memory registry")
+                logger.info(f"Found {len(db_tools)} tools in database")
                 
-                # Process each tool
+                # STEP 2: Sync DB → Memory (existing functionality)
                 for tool_definition in db_tools:
-                    await self._sync_single_tool(tool_definition)
+                    await self._sync_db_to_memory(tool_definition)
                 
-                # Log summary
+                # STEP 3: Sync Memory → DB (NEW: auto-create missing tools)
+                await self._sync_memory_to_db(memory_tools, db_registry)
+                
+                # STEP 4: Build summary
                 summary = {
+                    "total_memory_tools": len(memory_tools),
                     "total_db_tools": len(db_tools),
-                    "synced_successfully": len(self.synced_tools),
+                    "synced_from_db": len(self.synced_tools),
+                    "created_in_db": len(self.created_tools),  # NEW
                     "failed_tools": len(self.failed_tools),
                     "skipped_tools": len(self.skipped_tools),
                     "synced_tool_ids": self.synced_tools,
+                    "created_tool_ids": self.created_tools,  # NEW
                     "failed_tool_details": self.failed_tools,
                     "skipped_tool_details": self.skipped_tools
                 }
                 
                 logger.info(
-                    f"Tool synchronization completed: {summary['synced_successfully']}/{summary['total_db_tools']} "
-                    f"tools synced successfully"
+                    f"Tool synchronization completed: "
+                    f"{summary['synced_from_db']} synced from DB, "
+                    f"{summary['created_in_db']} created in DB, "
+                    f"{summary['failed_tools']} failed, "
+                    f"{summary['skipped_tools']} skipped"
                 )
-                
-                if self.failed_tools:
-                    logger.warning(f"Failed to sync {len(self.failed_tools)} tools")
-                
-                if self.skipped_tools:
-                    logger.info(f"Skipped {len(self.skipped_tools)} tools (no implementation)")
                 
                 return summary
                 
@@ -71,6 +78,111 @@ class ToolSyncService:
             logger.error(f"Tool synchronization failed: {str(e)}")
             raise
     
+    async def _sync_memory_to_db(self, memory_tools: List[ToolDefinition], db_registry: ToolRegistryService):
+        """
+        NEW: Sync tools from memory to database
+        Creates DB records for tools that exist in memory but not in DB
+        """
+        logger.info("Syncing memory tools to database...")
+        
+        for tool_definition in memory_tools:
+            try:
+                # Check if tool exists in DB
+                existing_db_tool = await db_registry.get_tool(tool_definition.id)
+                
+                if existing_db_tool:
+                    logger.debug(f"Tool {tool_definition.name} already exists in DB")
+                    continue
+                
+                # Tool doesn't exist in DB - create it
+                logger.info(f"Creating tool in DB: {tool_definition.name} ({tool_definition.id})")
+                
+                success = await db_registry.register_tool(tool_definition)
+                
+                if success:
+                    self.created_tools.append(tool_definition.id)
+                    logger.info(f"✅ Created tool in DB: {tool_definition.name}")
+                else:
+                    logger.error(f"❌ Failed to create tool in DB: {tool_definition.name}")
+                    self.failed_tools.append({
+                        "id": tool_definition.id,
+                        "name": tool_definition.name,
+                        "error": "Database registration failed",
+                        "operation": "create_in_db"
+                    })
+                
+            except Exception as e:
+                logger.error(f"Error creating tool {tool_definition.name} in DB: {str(e)}")
+                self.failed_tools.append({
+                    "id": tool_definition.id,
+                    "name": tool_definition.name,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "operation": "create_in_db"
+                })
+    
+    async def _sync_db_to_memory(self, tool_definition: ToolDefinition):
+        """
+        Existing functionality: Sync single tool from DB to memory
+        """
+        try:
+            tool_id = tool_definition.id
+            
+            # Check if implementation exists in in-memory registry
+            executor_class = tool_registry.get_executor_class(tool_id)
+            
+            if executor_class is None:
+                # No implementation found - this is expected for some tools
+                self.skipped_tools.append({
+                    "id": tool_id,
+                    "name": tool_definition.name,
+                    "reason": "No implementation class found in in-memory registry",
+                    "category": tool_definition.category.value,
+                    "type": tool_definition.type.value
+                })
+                logger.debug(f"Skipped tool {tool_id} - no implementation available")
+                return
+            
+            # Check if definition already exists in memory (from code registration)
+            existing_definition = tool_registry.get_definition(tool_id)
+            
+            if existing_definition:
+                # Compare versions or update if DB is newer
+                await self._handle_existing_tool(tool_definition, existing_definition)
+            else:
+                # Register new tool from DB
+                await self._register_db_tool(tool_definition, executor_class)
+            
+            self.synced_tools.append(tool_id)
+            logger.debug(f"Successfully synced tool: {tool_definition.name} ({tool_id})")
+            
+        except Exception as e:
+            self.failed_tools.append({
+                "id": tool_definition.id,
+                "name": tool_definition.name,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "operation": "sync_db_to_memory"
+            })
+            logger.error(f"Failed to sync tool {tool_definition.id}: {str(e)}")
+    
+    async def _handle_existing_tool(self, db_definition: ToolDefinition, memory_definition: ToolDefinition):
+        """Handle case where tool exists in both DB and memory"""
+        db_updated = db_definition.updated_at
+        memory_updated = memory_definition.updated_at
+        
+        if db_updated > memory_updated:
+            # Update in-memory registry with DB version
+            tool_registry._definitions[db_definition.id] = db_definition
+            logger.debug(f"Updated tool {db_definition.id} in memory registry (DB version newer)")
+        else:
+            logger.debug(f"Kept existing tool {db_definition.id} in memory registry (memory version newer or same)")
+    
+    async def _register_db_tool(self, tool_definition: ToolDefinition, executor_class):
+        """Register a tool from DB that doesn't exist in memory registry"""
+        tool_registry._definitions[tool_definition.id] = tool_definition
+        logger.info(f"Registered DB-only tool: {tool_definition.name}")
+
     async def _sync_single_tool(self, tool_definition: ToolDefinition):
         """
         Sync a single tool definition to in-memory registry
@@ -114,46 +226,6 @@ class ToolSyncService:
                 "error_type": type(e).__name__
             })
             logger.error(f"Failed to sync tool {tool_definition.id}: {str(e)}")
-    
-    async def _handle_existing_tool(
-        self, 
-        db_definition: ToolDefinition, 
-        memory_definition: ToolDefinition
-    ):
-        """
-        Handle case where tool exists in both DB and memory
-        Decide whether to update or keep existing
-        """
-        # For now, prefer DB version (assuming it's more up-to-date)
-        # In production, you might want more sophisticated version comparison
-        
-        db_updated = db_definition.updated_at
-        memory_updated = memory_definition.updated_at
-        
-        if db_updated > memory_updated:
-            # Update in-memory registry with DB version
-            tool_registry._definitions[db_definition.id] = db_definition
-            logger.debug(
-                f"Updated tool {db_definition.id} in memory registry "
-                f"(DB version newer: {db_updated} > {memory_updated})"
-            )
-        else:
-            logger.debug(
-                f"Kept existing tool {db_definition.id} in memory registry "
-                f"(memory version newer or same)"
-            )
-    
-    async def _register_db_tool(self, tool_definition: ToolDefinition, executor_class):
-        """
-        Register a tool from DB that doesn't exist in memory registry
-        """
-        # This should not happen in normal flow since implementations 
-        # should register themselves, but we handle it for completeness
-        
-        tool_registry._definitions[tool_definition.id] = tool_definition
-        # Note: executor_class should already be registered if we found it
-        
-        logger.info(f"Registered DB-only tool: {tool_definition.name}")
     
     async def get_sync_status(self) -> Dict[str, Any]:
         """

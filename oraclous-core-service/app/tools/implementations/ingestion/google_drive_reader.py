@@ -4,6 +4,7 @@ import pandas as pd
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
+from app.utils.tool_id_generator import generate_tool_id
 from app.tools.base.auth_tool import OAuthTool
 from app.schemas.tool_instance import ExecutionContext, ExecutionResult
 from app.schemas.tool_definition import (
@@ -22,6 +23,7 @@ class GoogleDriveReader(OAuthTool):
     def get_tool_definition(cls) -> ToolDefinition:
         """Return the tool definition for Google Drive Reader"""
         return ToolDefinition(
+            id=generate_tool_id("Google Drive Reader", "1.0.0", "INGESTION"),
             name="Google Drive Reader",
             description="Read and extract data from Google Drive files including Sheets, Docs, CSV, and Excel files",
             version="1.0.0",

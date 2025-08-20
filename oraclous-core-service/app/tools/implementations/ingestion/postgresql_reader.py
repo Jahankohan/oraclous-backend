@@ -3,6 +3,7 @@ import asyncio
 import asyncpg
 import pandas as pd
 
+from app.utils.tool_id_generator import generate_tool_id
 from app.tools.base.database_tool import DatabaseTool
 from app.schemas.tool_instance import ExecutionContext, ExecutionResult
 from app.schemas.tool_definition import (
@@ -20,6 +21,7 @@ class PostgreSQLReader(DatabaseTool):
     def get_tool_definition(cls) -> ToolDefinition:
         """Return the tool definition for PostgreSQL Reader"""
         return ToolDefinition(
+            id=generate_tool_id("PostgreSQL Reader", "1.0.0", "INGESTION"),
             name="PostgreSQL Reader",
             description="Execute queries and read data from PostgreSQL databases",
             version="1.0.0",

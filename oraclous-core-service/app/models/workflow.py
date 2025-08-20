@@ -183,15 +183,3 @@ class WorkflowShareDB(Base, UUIDMixin, TimestampMixin):
     
     def __repr__(self):
         return f"<WorkflowShare {self.workflow_id} -> {self.shared_with_id or 'PUBLIC'}>"
-
-
-# Update the tool_instance model to add the relationship
-# app/models/tool_instance.py (add this to existing model)
-# Add this import at the top: from sqlalchemy.orm import relationship
-# Add this to the ToolInstanceDB class:
-#
-# # Relationships
-# workflow = relationship("WorkflowDB", back_populates="instances")
-#
-# And update the existing relationship line to:
-# tool_definition = relationship("ToolDefinitionDB", back_populates="instances")

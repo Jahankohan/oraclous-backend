@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime
 import httpx
 
+from app.utils.tool_id_generator import generate_tool_id
 from app.tools.base.internal_tool import InternalTool
 from app.schemas.tool_instance import ExecutionContext, ExecutionResult
 from app.schemas.tool_definition import (
@@ -20,14 +21,14 @@ class NotionReader(InternalTool):
     NOTION_API_BASE = "https://api.notion.com/v1"
     NOTION_VERSION = "2022-06-28"
     
-    def __init__(self):
-        super().__init__()
-        self.http_client = httpx.AsyncClient(timeout=30.0)
+    def __init__(self, definition: ToolDefinition):
+        super().__init__(definition)
     
     @classmethod
     def get_tool_definition(cls) -> ToolDefinition:
         """Return the tool definition for Notion Reader"""
         return ToolDefinition(
+            id=generate_tool_id("Notion Reader", "1.0.0", "INGESTION"),
             name="Notion Reader",
             description="Read and extract data from Notion databases and pages",
             version="1.0.0",
