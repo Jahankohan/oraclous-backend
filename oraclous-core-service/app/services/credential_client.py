@@ -11,6 +11,19 @@ logger = logging.getLogger(__name__)
 
 
 class CredentialClient:
+    """
+    Client for communicating with the Credential Broker Service
+    Handles all credential-related operations for the orchestrator
+    """
+    def __init__(self):
+        self.credential_broker_url = settings.CREDENTIAL_BROKER_URL
+        self.internal_service_key = settings.INTERNAL_SERVICE_KEY
+        self.headers = {
+            "X-Internal-Key": self.internal_service_key,
+            "Content-Type": "application/json"
+        }
+        self.timeout = 30.0
+
     async def get_runtime_token(
         self,
         user_id: UUID,
@@ -40,20 +53,6 @@ class CredentialClient:
         except Exception as e:
             logger.error(f"Error getting runtime token: {e}")
             return None
-
-
-    """
-    Client for communicating with the Credential Broker Service
-    Handles all credential-related operations for the orchestrator
-    """
-    def __init__(self):
-        self.credential_broker_url = settings.CREDENTIAL_BROKER_URL
-        self.internal_service_key = settings.INTERNAL_SERVICE_KEY
-        self.headers = {
-            "X-Internal-Key": self.internal_service_key,
-            "Content-Type": "application/json"
-        }
-        self.timeout = 30.0
 
     async def validate_credentials(
         self,

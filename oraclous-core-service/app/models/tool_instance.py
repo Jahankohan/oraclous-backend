@@ -4,6 +4,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.models.base import Base, TimestampMixin, UUIDMixin
 from app.models.workflow import WorkflowDB
+from app.models.tool_definition import ToolDefinitionDB
 
 
 class ToolInstanceDB(Base, UUIDMixin, TimestampMixin):
@@ -41,8 +42,8 @@ class ToolInstanceDB(Base, UUIDMixin, TimestampMixin):
     total_credits_consumed = Column(Numeric(10, 4), default=0)
     
     # Relationships
-    tool_definition = relationship("ToolDefinitionDB", back_populates="instances")
     tool_definition_id = Column(UUID, ForeignKey("tool_definitions.id"), nullable=False, index=True)
-    
+    tool_definition = relationship("ToolDefinitionDB", back_populates="instances")
+
     def __repr__(self):
         return f"<ToolInstance {self.name} ({self.id})>"

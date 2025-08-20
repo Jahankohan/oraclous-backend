@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from fastapi.security import OAuth2PasswordBearer
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from uuid import UUID
-
 from app.schemas.tool_instance import (
     ToolInstance, CreateInstanceRequest, UpdateInstanceRequest,
     ConfigureCredentialsRequest, InstanceStatusResponse, InstanceCredentialStatus,
@@ -14,7 +13,11 @@ from app.services.instance_manager import InstanceManagerService
 from app.repositories.instance_repository import InstanceRepository
 from app.services.tool_registry import ToolRegistryService
 from app.services.credential_client import CredentialClient
+from app.services.async_execution_service import AsyncToolExecutionService
+from app.services.validation_service import ValidationService
+from fastapi.responses import StreamingResponse
 from app.core.database import get_session
+import json
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 router = APIRouter()
@@ -36,6 +39,24 @@ async def get_instance_service(db: AsyncSession = Depends(get_session)) -> Insta
         instance_repo=instance_repo,
         tool_registry=tool_registry,
         credential_client=credential_client
+    )
+
+async def get_async_execution_service(
+    instance_service: InstanceManagerService = Depends(get_instance_service)
+) -> AsyncToolExecutionService:
+    credential_client = CredentialClient()
+    return AsyncToolExecutionService(
+        instance_manager=instance_service,
+        credential_client=credential_client
+    )
+
+async def get_validation_service(
+    service: InstanceManagerService = Depends(get_instance_service)
+) -> ValidationService:
+    credential_client = CredentialClient()
+    return ValidationService(
+        credential_client=credential_client,
+        tool_registry_service=service.tool_registry
     )
 
 # Simple endpoint to refresh instance credentials and status
@@ -201,6 +222,162 @@ async def get_instance_status(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get instance status: {str(e)}")
+
+@router.post("/{instance_id}/execute-async", response_model=dict)
+async def execute_tool_instance_async(
+    instance_id: str,
+    input_data: Dict[str, Any],
+    max_retries: int = Query(3, ge=0, le=10),
+    user_id: UUID = Depends(get_current_user_id),
+    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+):
+    """
+    Execute tool instance asynchronously for long-running tasks
+    Returns job information for tracking progress
+    """
+    try:
+        job_info = await async_service.submit_execution_job(
+            instance_id=instance_id,
+            user_id=user_id,
+            input_data=input_data,
+            max_retries=max_retries
+        )
+        
+        return job_info
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to submit execution job: {str(e)}")
+
+
+@router.get("/{instance_id}/jobs/{job_id}/progress", response_model=dict)
+async def get_job_progress(
+    instance_id: str,
+    job_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+):
+    """
+    Get current progress of an execution job
+    """
+    try:
+        # First verify user owns this instance (security check)
+        instance = await async_service.instance_manager.get_user_instance(instance_id, user_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        
+        progress = await async_service.get_job_progress(job_id)
+        return progress
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get job progress: {str(e)}")
+
+
+@router.get("/{instance_id}/jobs/{job_id}/result", response_model=dict)
+async def get_job_result(
+    instance_id: str,
+    job_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+):
+    """
+    Get final result of a completed execution job
+    """
+    try:
+        # Verify user owns this instance
+        instance = await async_service.instance_manager.get_user_instance(instance_id, user_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        
+        result = await async_service.get_job_result(job_id)
+        return result
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get job result: {str(e)}")
+
+
+@router.post("/{instance_id}/jobs/{job_id}/cancel", response_model=dict)
+async def cancel_execution_job(
+    instance_id: str,
+    job_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+):
+    """
+    Cancel a running execution job
+    """
+    try:
+        # Verify user owns this instance
+        instance = await async_service.instance_manager.get_user_instance(instance_id, user_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        
+        success = await async_service.cancel_job(job_id)
+        
+        if success:
+            return {"message": "Job cancelled successfully", "job_id": job_id}
+        else:
+            raise HTTPException(status_code=400, detail="Job could not be cancelled")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cancel job: {str(e)}")
+
+
+@router.get("/{instance_id}/jobs/{job_id}/stream")
+async def stream_job_progress(
+    instance_id: str,
+    job_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+    async_service: AsyncToolExecutionService = Depends(get_async_execution_service)
+):
+    """
+    Stream job progress updates (Server-Sent Events)
+    """
+    try:
+        # Verify user owns this instance
+        instance = await async_service.instance_manager.get_user_instance(instance_id, user_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        
+        async def generate_progress_stream():
+            """Generate SSE stream of progress updates"""
+            try:
+                async for progress_update in async_service.stream_job_progress(job_id):
+                    # Format as Server-Sent Event
+                    data = json.dumps(progress_update)
+                    yield f"data: {data}\n\n"
+                    
+                # Send completion event
+                yield f"data: {json.dumps({'status': 'stream_ended'})}\n\n"
+                
+            except Exception as e:
+                error_data = json.dumps({
+                    "status": "error",
+                    "error_message": str(e)
+                })
+                yield f"data: {error_data}\n\n"
+        
+        return StreamingResponse(
+            generate_progress_stream(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to stream progress: {str(e)}")
 
 
 @router.get("/", response_model=InstanceListResponse)
@@ -397,3 +574,82 @@ async def get_available_credentials(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get available credentials: {str(e)}")
+
+
+@router.get("/{instance_id}/validate-execution", response_model=dict)
+async def validate_execution_readiness(
+    instance_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+    service: InstanceManagerService = Depends(get_instance_service),
+    validation_service: ValidationService = Depends(get_validation_service)
+):
+    """
+    Comprehensive validation of tool instance readiness for execution
+    Returns detailed report with user-friendly error messages and action items
+    """
+    try:
+        # Get instance
+        instance = await service.get_user_instance(instance_id, user_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        
+        # Run comprehensive validation
+        validation_report = await validation_service.validate_execution_readiness(
+            instance, user_id
+        )
+        
+        return validation_report
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+
+
+@router.get("/{instance_id}/health", response_model=dict)
+async def get_instance_health(
+    instance_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+    service: InstanceManagerService = Depends(get_instance_service),
+    validation_service: ValidationService = Depends(get_validation_service)
+):
+    """
+    Get instance health status with simplified success/failure and action items
+    Useful for dashboards and quick status checks
+    """
+    try:
+        instance = await service.get_user_instance(instance_id, user_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        
+        validation_report = await validation_service.validate_execution_readiness(
+            instance, user_id
+        )
+        
+        # Simplify the report for health check
+        health_status = {
+            "instance_id": instance_id,
+            "is_healthy": validation_report["is_ready"],
+            "status": instance.status.value,
+            "summary": {
+                "tool_available": validation_report["validations"]["implementation"]["status"] == "passed",
+                "credentials_valid": validation_report["validations"]["credentials"]["status"] == "passed",
+                "configuration_valid": validation_report["validations"]["configuration"]["status"] == "passed"
+            },
+            "issues_count": len(validation_report["errors"]),
+            "warnings_count": len(validation_report["warnings"]),
+            "action_items": validation_report["action_items"][:3]  # Limit to top 3 actions
+        }
+        
+        # Add quick fix suggestions
+        if not health_status["is_healthy"]:
+            critical_errors = [e for e in validation_report["errors"] if e.get("severity") == "critical"]
+            if critical_errors:
+                health_status["primary_issue"] = critical_errors[0]["message"]
+                
+        return health_status
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")

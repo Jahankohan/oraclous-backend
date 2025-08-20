@@ -24,7 +24,7 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
-
+@asynccontextmanager
 async def get_session() -> AsyncSession:
     """
     Dependency to get database session for FastAPI endpoints

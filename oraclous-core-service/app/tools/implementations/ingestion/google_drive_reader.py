@@ -179,6 +179,45 @@ class GoogleDriveReader(OAuthTool):
                 error_message=f"Failed to read Google Drive file: {str(e)}"
             )
     
+    async def _list_drive_files(
+        self,
+        input_data: Dict[str, Any],
+        credentials
+    ) -> Dict[str, Any]:
+        """
+        List files in a Google Drive folder.
+        input_data can include 'folder_id' (optional), 'query' (optional), 'page_size' (optional)
+        """
+        drive_service = build('drive', 'v3', credentials=credentials)
+        folder_id = input_data.get("folder_id")
+        query = input_data.get("query")
+        page_size = input_data.get("page_size", 100)
+
+        # Build query for files().list()
+        q = []
+        if folder_id:
+            q.append(f"'{folder_id}' in parents")
+        if query:
+            q.append(query)
+        query_str = " and ".join(q) if q else None
+
+        results = drive_service.files().list(
+            q=query_str,
+            pageSize=page_size,
+            fields="files(id, name, mimeType, modifiedTime, size)"
+        ).execute()
+
+        files = results.get("files", [])
+        data = [[f["id"], f["name"], f["mimeType"], f.get("size"), f["modifiedTime"]] for f in files]
+        headers = ["id", "name", "mimeType", "size", "modifiedTime"]
+
+        return {
+            "data": data,
+            "headers": headers,
+            "row_count": len(data),
+            "metadata": {"operation": "list_drive_files"}
+        }
+    
     def _detect_file_type(self, mime_type: str) -> str:
         """Detect file type from MIME type"""
         mime_mapping = {
