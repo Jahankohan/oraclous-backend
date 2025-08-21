@@ -174,6 +174,7 @@ class EnhancedGraphService:
                 chunk_data = {
                     "id": chunk_id,
                     "text": chunk_text,
+                    "graph_id": str(graph_id),
                     "source": "document_ingestion",
                     "chunk_index": i // (chunk_size - chunk_overlap)
                 }
@@ -197,7 +198,7 @@ class EnhancedGraphService:
             logger.error(f"Failed to create text chunks: {e}")
     
     def _sanitize_label(self, label: str) -> str:
-        """Sanitize Neo4j labels (unchanged from original)"""
+        """Sanitize Neo4j labels"""
         if not label:
             return ""
         
@@ -206,4 +207,152 @@ class EnhancedGraphService:
         sanitized = sanitized.strip('_')
         
         if sanitized and sanitized[0].isdigit():
-        ####################### CODING AGENT STOPPED HERE ########################
+            sanitized = f"Type_{sanitized}"
+        
+        # Handle common cases
+        label_mapping = {
+            "Job_title": "JobTitle",
+            "Organization_type": "OrganizationType", 
+            "AI_models": "AIModels",
+            "software_engineer": "SoftwareEngineer",
+            "Job_Title": "JobTitle",
+            "Organization_Type": "OrganizationType"
+        }
+        
+        return label_mapping.get(sanitized, sanitized) if sanitized else "Entity"
+    
+    async def generate_embeddings_for_existing_nodes(
+        self,
+        graph_id: UUID,
+        user_id: str,
+        batch_size: int = 50
+    ) -> int:
+        """Generate embeddings for existing nodes that don't have them"""
+        
+        try:
+            # Initialize embeddings
+            if not embedding_service.is_initialized():
+                success = await embedding_service.initialize_embeddings(
+                    provider="openai", user_id=user_id
+                )
+                if not success:
+                    raise ValueError("Failed to initialize embeddings")
+            
+            # Create vector indexes if needed
+            await vector_service.create_vector_indexes(
+                dimension=embedding_service.dimension
+            )
+            
+            # Find nodes without embeddings
+            query = """
+            MATCH (n)
+            WHERE n.graph_id = $graph_id 
+            AND n.embedding IS NULL
+            AND n.name IS NOT NULL
+            RETURN n.id as id, n.name as name, 
+                   coalesce(n.description, '') as description
+            LIMIT $batch_size
+            """
+            
+            nodes_processed = 0
+            
+            while True:
+                result = await neo4j_client.execute_query(query, {
+                    "graph_id": str(graph_id),
+                    "batch_size": batch_size
+                })
+                
+                if not result:
+                    break
+                
+                # Process batch
+                for record in result:
+                    try:
+                        # Create text for embedding
+                        text = record["name"]
+                        if record["description"]:
+                            text += f" {record['description']}"
+                        
+                        # Generate embedding
+                        embedding = await embedding_service.embed_text(text)
+                        
+                        # Update node
+                        await vector_service.add_entity_embedding(
+                            entity_id=record["id"],
+                            embedding=embedding,
+                            graph_id=graph_id
+                        )
+                        
+                        nodes_processed += 1
+                        
+                    except Exception as e:
+                        logger.warning(f"Failed to process node {record['id']}: {e}")
+                
+                # If we processed fewer than batch_size, we're done
+                if len(result) < batch_size:
+                    break
+            
+            logger.info(f"Generated embeddings for {nodes_processed} existing nodes")
+            return nodes_processed
+            
+        except Exception as e:
+            logger.error(f"Failed to generate embeddings for existing nodes: {e}")
+            raise
+    
+    async def get_embedding_stats(self, graph_id: UUID) -> Dict[str, int]:
+        """Get statistics about embeddings in the graph"""
+        
+        try:
+            stats_query = """
+            MATCH (n)
+            WHERE n.graph_id = $graph_id
+            RETURN 
+                count(n) as total_nodes,
+                count(n.embedding) as nodes_with_embeddings,
+                count(n) - count(n.embedding) as nodes_without_embeddings
+            """
+            
+            chunk_stats_query = """
+            MATCH (c:Chunk)
+            WHERE c.graph_id = $graph_id
+            RETURN 
+                count(c) as total_chunks,
+                count(c.embedding) as chunks_with_embeddings
+            """
+            
+            node_result = await neo4j_client.execute_query(
+                stats_query, {"graph_id": str(graph_id)}
+            )
+            
+            chunk_result = await neo4j_client.execute_query(
+                chunk_stats_query, {"graph_id": str(graph_id)}
+            )
+            
+            node_stats = node_result[0] if node_result else {}
+            chunk_stats = chunk_result[0] if chunk_result else {}
+            
+            return {
+                "total_nodes": node_stats.get("total_nodes", 0),
+                "nodes_with_embeddings": node_stats.get("nodes_with_embeddings", 0),
+                "nodes_without_embeddings": node_stats.get("nodes_without_embeddings", 0),
+                "total_chunks": chunk_stats.get("total_chunks", 0),
+                "chunks_with_embeddings": chunk_stats.get("chunks_with_embeddings", 0),
+                "embedding_coverage": (
+                    node_stats.get("nodes_with_embeddings", 0) / 
+                    max(node_stats.get("total_nodes", 1), 1) * 100
+                )
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get embedding stats: {e}")
+            return {
+                "total_nodes": 0,
+                "nodes_with_embeddings": 0,
+                "nodes_without_embeddings": 0,
+                "total_chunks": 0,
+                "chunks_with_embeddings": 0,
+                "embedding_coverage": 0.0
+            }
+
+# Global enhanced graph service
+enhanced_graph_service = EnhancedGraphService()
