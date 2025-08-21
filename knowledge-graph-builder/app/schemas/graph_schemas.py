@@ -1,0 +1,64 @@
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, Dict, Any, List
+from datetime import datetime
+from uuid import UUID
+
+class GraphCreate(BaseModel):
+    """Schema for creating a new knowledge graph"""
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=1000)
+    schema_config: Optional[Dict[str, Any]] = Field(None)
+
+class GraphUpdate(BaseModel):
+    """Schema for updating a knowledge graph"""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=1000)
+    schema_config: Optional[Dict[str, Any]] = Field(None)
+
+class GraphResponse(BaseModel):
+    """Schema for knowledge graph response"""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: UUID
+    name: str
+    description: Optional[str]
+    user_id: UUID
+    neo4j_database: Optional[str]
+    schema_config: Optional[Dict[str, Any]]
+    created_at: datetime
+    updated_at: datetime
+    node_count: int
+    relationship_count: int
+    status: str
+
+class IngestDataRequest(BaseModel):
+    """Schema for data ingestion request"""
+    content: str = Field(..., min_length=1)
+    source_type: str = Field(default="text", pattern="^(text|pdf|url|api)$")
+    schema: Optional[Dict[str, Any]] = Field(None)
+    instructions: Optional[str] = Field(None)
+
+class IngestionJobResponse(BaseModel):
+    """Schema for ingestion job response"""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: UUID
+    graph_id: UUID
+    source_type: str
+    status: str
+    progress: int
+    error_message: Optional[str]
+    extracted_entities: int
+    extracted_relationships: int
+    credits_consumed: str
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    created_at: datetime
+
+class HealthResponse(BaseModel):
+    """Health check response schema"""
+    status: str
+    service: str
+    version: str
+    timestamp: datetime
+    dependencies: Dict[str, Any]

@@ -1,141 +1,120 @@
-from neo4j import GraphDatabase, Driver
+from neo4j import AsyncGraphDatabase, AsyncDriver
 from typing import Optional, Dict, Any, List
-import logging
-from contextlib import asynccontextmanager
+import asyncio
+from app.core.config import settings
+from app.core.logging import get_logger
 
-from app.config.settings import get_settings
-from app.core.exceptions import Neo4jConnectionError
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class Neo4jClient:
-    def __init__(self, uri: str, username: str, password: str, database: str = "neo4j"):
-        self.uri = uri
-        self.username = username
-        self.password = password
-        self.database = database
-        self._driver: Optional[Driver] = None
-        
-    def connect(self) -> None:
+    """Neo4j database client with async support"""
+    
+    def __init__(self):
+        self.driver: Optional[AsyncDriver] = None
+        self._lock = asyncio.Lock()
+    
+    async def connect(self) -> None:
         """Establish connection to Neo4j"""
-        try:
-            self._driver = GraphDatabase.driver(
-                self.uri,
-                auth=(self.username, self.password),
-                user_agent=get_settings().neo4j_user_agent
-            )
-            # Test connection
-            self._driver.verify_connectivity()
-            logger.info(f"Connected to Neo4j at {self.uri}")
-        except Exception as e:
-            logger.error(f"Failed to connect to Neo4j: {e}")
-            raise Neo4jConnectionError(f"Cannot connect to Neo4j: {e}")
+        if self.driver is None:
+            async with self._lock:
+                if self.driver is None:
+                    try:
+                        self.driver = AsyncGraphDatabase.driver(
+                            settings.NEO4J_URI,
+                            auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD)
+                        )
+                        # Test connection
+                        await self.driver.verify_connectivity()
+                        logger.info("Successfully connected to Neo4j")
+                    except Exception as e:
+                        logger.error(f"Failed to connect to Neo4j: {e}")
+                        raise
     
-    def close(self) -> None:
+    async def disconnect(self) -> None:
         """Close Neo4j connection"""
-        if self._driver:
-            self._driver.close()
-            logger.info("Neo4j connection closed")
+        if self.driver:
+            await self.driver.close()
+            self.driver = None
+            logger.info("Disconnected from Neo4j")
     
-    def execute_query(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Execute a Cypher query"""
-        if not self._driver:
-            raise Neo4jConnectionError("No active Neo4j connection")
+    async def execute_query(
+        self, 
+        query: str, 
+        parameters: Optional[Dict[str, Any]] = None,
+        database: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Execute a Cypher query and return results"""
+        if not self.driver:
+            await self.connect()
+        
+        db_name = database or settings.NEO4J_DATABASE
         
         try:
-            with self._driver.session(database=self.database) as session:
-                result = session.run(query, parameters or {})
-                return [record.data() for record in result]
+            async with self.driver.session(database=db_name) as session:
+                result = await session.run(query, parameters or {})
+                records = await result.data()
+                return records
         except Exception as e:
             logger.error(f"Query execution failed: {e}")
+            logger.error(f"Query: {query}")
+            logger.error(f"Parameters: {parameters}")
             raise
     
-    def execute_write_query(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Execute a write query"""
-        if not self._driver:
-            raise Neo4jConnectionError("No active Neo4j connection")
+    async def execute_write_query(
+        self,
+        query: str,
+        parameters: Optional[Dict[str, Any]] = None,
+        database: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Execute a write query in a transaction"""
+        if not self.driver:
+            await self.connect()
+        
+        db_name = database or settings.NEO4J_DATABASE
         
         try:
-            with self._driver.session(database=self.database) as session:
-                result = session.execute_write(
-                    lambda tx: list(tx.run(query, parameters or {}))
+            async with self.driver.session(database=db_name) as session:
+                result = await session.execute_write(
+                    self._execute_query_tx, query, parameters or {}
                 )
-                return [record.data() for record in result]
+                return result
         except Exception as e:
             logger.error(f"Write query execution failed: {e}")
             raise
     
-    def get_schema(self) -> Dict[str, Any]:
-        """Get database schema information"""
-        schema_queries = {
-            "node_labels": "CALL db.labels()",
-            "relationship_types": "CALL db.relationshipTypes()",
-            "property_keys": "CALL db.propertyKeys()",
-            "indexes": "SHOW INDEXES",
-            "constraints": "SHOW CONSTRAINTS"
-        }
-        
-        schema = {}
-        for key, query in schema_queries.items():
-            try:
-                result = self.execute_query(query)
-                schema[key] = result
-            except Exception as e:
-                logger.warning(f"Failed to get {key}: {e}")
-                schema[key] = []
-        
-        return schema
+    @staticmethod
+    async def _execute_query_tx(tx, query: str, parameters: Dict[str, Any]):
+        """Transaction function for write queries"""
+        result = await tx.run(query, parameters)
+        return await result.data()
     
-    def check_vector_index_dimensions(self) -> Optional[int]:
-        """Check existing vector index dimensions"""
-        query = """
-        SHOW INDEXES 
-        WHERE type = 'VECTOR'
-        RETURN name, options
-        """
+    async def health_check(self) -> Dict[str, Any]:
+        """Check Neo4j connection health"""
         try:
-            result = self.execute_query(query)
-            if result:
-                options = result[0].get('options', {})
-                return options.get('indexConfig', {}).get('vector.dimensions')
+            if not self.driver:
+                await self.connect()
+            
+            result = await self.execute_query("RETURN 1 as health")
+            
+            # Get database info
+            db_info = await self.execute_query(
+                "CALL dbms.components() YIELD name, versions, edition"
+            )
+            
+            return {
+                "status": "healthy",
+                "connected": True,
+                "database_info": db_info[0] if db_info else None,
+                "uri": settings.NEO4J_URI
+            }
         except Exception as e:
-            logger.warning(f"Failed to check vector dimensions: {e}")
-        return None
-    
-    def create_vector_index(self, index_name: str = "vector", label: str = "Chunk", 
-                          property_name: str = "embedding", dimensions: int = 384) -> None:
-        """Create vector index"""
-        query = f"""
-        CREATE VECTOR INDEX `{index_name}` IF NOT EXISTS
-        FOR (n:`{label}`) ON (n.`{property_name}`)
-        OPTIONS {{
-            indexConfig: {{
-                `vector.dimensions`: {dimensions},
-                `vector.similarity_function`: 'cosine'
-            }}
-        }}
-        """
-        self.execute_write_query(query)
-        logger.info(f"Vector index '{index_name}' created/updated")
-    
-    def drop_vector_index(self, index_name: str = "vector") -> None:
-        """Drop vector index"""
-        query = f"DROP INDEX `{index_name}` IF EXISTS"
-        self.execute_write_query(query)
-        logger.info(f"Vector index '{index_name}' dropped")
+            logger.error(f"Neo4j health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "connected": False,
+                "error": str(e),
+                "uri": settings.NEO4J_URI
+            }
 
-# Dependency for FastAPI
-def get_neo4j_client() -> Neo4jClient:
-    """Get Neo4j client instance"""
-    settings = get_settings()
-    client = Neo4jClient(
-        uri=settings.neo4j_uri,
-        username=settings.neo4j_username,
-        password=settings.neo4j_password,
-        database=settings.neo4j_database
-    )
-    client.connect()
-    try:
-        yield client
-    finally:
-        client.close()
+# Global client instance
+neo4j_client = Neo4jClient()
