@@ -17,9 +17,12 @@ class Settings(BaseSettings):
     
     # External Services
     AUTH_SERVICE_URL: str = "http://auth-service:8000"
-    CREDENTIAL_BROKER_URL: str = "http://credential-broker:8002"
-    CORE_SERVICE_URL: str = "http://oraclous-core:8001"
-    
+    CREDENTIAL_BROKER_URL: str = "http://credential-broker:8000"
+    CORE_SERVICE_URL: str = "http://oraclous-core:8000"
+    REDIS_URL: str = "redis://redis:6379/0"
+    CELERY_BROKER_URL: str = "redis://redis:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://redis:6379/0"
+
     # Security
     INTERNAL_SERVICE_KEY: str = "your-internal-service-key"
     JWT_SECRET_KEY: str = "your-jwt-secret"

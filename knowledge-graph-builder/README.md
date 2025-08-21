@@ -166,3 +166,53 @@ This service integrates with:
 - Uses async/await throughout for optimal performance
 - Follows FastAPI best practices and patterns
 - Comprehensive error handling and logging
+
+## 🚀 Development Workflow
+
+### Using the Main Docker Compose
+
+The knowledge-graph-builder integrates with the main project docker-compose.yml:
+
+```bash
+# From project root directory
+
+# Start all services
+docker-compose up -d
+
+# Or start specific services for development
+docker-compose up -d neo4j postgres redis auth-service credential-broker-service
+
+# Start knowledge graph services
+docker-compose up -d knowledge-graph-builder knowledge-graph-worker
+
+# View logs
+docker-compose logs -f knowledge-graph-builder
+docker-compose logs -f knowledge-graph-worker
+
+# Development with auto-reload
+cd knowledge-graph-builder
+chmod +x scripts/dev.sh
+./scripts/dev.sh
+```
+
+### Service Dependencies
+
+The knowledge-graph-builder depends on:
+1. **neo4j** - Graph database
+2. **postgres** - Metadata storage  
+3. **redis** - Celery message broker
+4. **auth-service** - User authentication
+5. **credential-broker-service** - API key management
+
+### Environment Variables
+
+Add to your root `.env` file:
+```bash
+# Redis for background jobs
+REDIS_URL=redis://redis:6379/0
+
+# Knowledge Graph Builder specific
+LOG_LEVEL=DEBUG
+```
+
+All services use the same network (`app-network`) for inter-service communication.

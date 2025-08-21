@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from typing import List
 from uuid import UUID
 import uuid
+from datetime import datetime
 
 from app.api.dependencies import get_current_user_id, get_database
 from app.models.graph import KnowledgeGraph, IngestionJob
@@ -11,6 +12,9 @@ from app.schemas.graph_schemas import (
     GraphCreate, GraphUpdate, GraphResponse, 
     IngestDataRequest, IngestionJobResponse
 )
+from app.services.background_jobs import process_ingestion_job
+from app.services.entity_extractor import entity_extractor
+from app.services.schema_service import schema_service
 from app.core.logging import get_logger
 
 router = APIRouter()
@@ -38,6 +42,16 @@ async def create_graph(
     db.add(graph)
     await db.commit()
     await db.refresh(graph)
+    
+    # Create schema constraints if provided
+    if graph_data.schema_config:
+        try:
+            await schema_service.create_graph_constraints(
+                graph_data.schema_config,
+                neo4j_db_name
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create schema constraints: {e}")
     
     logger.info(f"Created new graph: {graph.id} for user: {user_id}")
     return graph
@@ -154,10 +168,11 @@ async def delete_graph(
 async def ingest_data(
     graph_id: UUID,
     data: IngestDataRequest,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database)
 ):
-    """Ingest data into a knowledge graph"""
+    """Ingest data into a knowledge graph (async processing)"""
     
     # Check if graph exists and belongs to user
     result = await db.execute(
@@ -174,6 +189,26 @@ async def ingest_data(
             detail="Graph not found"
         )
     
+    # Learn schema from text if not provided
+    if not data.schema and not graph.schema_config:
+        try:
+            learned_schema = await entity_extractor.learn_schema_from_text(
+                data.content, user_id
+            )
+            
+            # Update graph with learned schema
+            await db.execute(
+                update(KnowledgeGraph)
+                .where(KnowledgeGraph.id == graph_id)
+                .values(schema_config=learned_schema)
+            )
+            await db.commit()
+            
+            logger.info(f"Learned schema for graph {graph_id}: {learned_schema}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to learn schema: {e}")
+    
     # Create ingestion job
     job = IngestionJob(
         graph_id=graph_id,
@@ -186,10 +221,33 @@ async def ingest_data(
     await db.commit()
     await db.refresh(job)
     
-    # TODO: Trigger background processing
+    # Trigger background processing
+    try:
+        # Use Celery for background processing
+        task = process_ingestion_job.delay(str(job.id), user_id)
+        logger.info(f"Started background job {task.id} for ingestion {job.id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to start background job: {e}")
+        # Fall back to immediate processing for development
+        background_tasks.add_task(
+            _process_sync_ingestion, 
+            str(job.id), 
+            user_id, 
+            db
+        )
+    
     logger.info(f"Created ingestion job: {job.id} for graph: {graph_id}")
     
     return job
+
+async def _process_sync_ingestion(job_id: str, user_id: str, db: AsyncSession):
+    """Fallback sync processing for development"""
+    try:
+        from app.services.background_jobs import _process_ingestion_job_async
+        await _process_ingestion_job_async(None, job_id, user_id)
+    except Exception as e:
+        logger.error(f"Sync ingestion processing failed: {e}")
 
 @router.get("/graphs/{graph_id}/jobs", response_model=List[IngestionJobResponse])
 async def list_ingestion_jobs(
@@ -216,8 +274,109 @@ async def list_ingestion_jobs(
     
     # Get jobs
     result = await db.execute(
-        select(IngestionJob).where(IngestionJob.graph_id == graph_id)
+        select(IngestionJob)
+        .where(IngestionJob.graph_id == graph_id)
+        .order_by(IngestionJob.created_at.desc())
     )
     jobs = result.scalars().all()
     
     return jobs
+
+@router.get("/graphs/{graph_id}/jobs/{job_id}", response_model=IngestionJobResponse)
+async def get_ingestion_job(
+    graph_id: UUID,
+    job_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Get details of a specific ingestion job"""
+    
+    # Verify graph ownership first
+    result = await db.execute(
+        select(KnowledgeGraph).where(
+            KnowledgeGraph.id == graph_id,
+            KnowledgeGraph.user_id == UUID(user_id)
+        )
+    )
+    graph = result.scalar_one_or_none()
+    
+    if not graph:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Graph not found"
+        )
+    
+    # Get the specific job
+    result = await db.execute(
+        select(IngestionJob).where(
+            IngestionJob.id == job_id,
+            IngestionJob.graph_id == graph_id
+        )
+    )
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ingestion job not found"
+        )
+    
+    return job
+
+@router.post("/graphs/{graph_id}/schema/learn")
+async def learn_graph_schema(
+    graph_id: UUID,
+    text_sample: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Learn schema from a text sample"""
+    
+    # Verify graph ownership
+    result = await db.execute(
+        select(KnowledgeGraph).where(
+            KnowledgeGraph.id == graph_id,
+            KnowledgeGraph.user_id == UUID(user_id)
+        )
+    )
+    graph = result.scalar_one_or_none()
+    
+    if not graph:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Graph not found"
+        )
+    
+    try:
+        # Learn schema from text
+        learned_schema = await entity_extractor.learn_schema_from_text(
+            text_sample, user_id
+        )
+        
+        # Get existing schema
+        existing_schema = await schema_service.get_existing_schema(
+            graph.neo4j_database
+        )
+        
+        # Consolidate schemas
+        consolidated_schema = await schema_service.consolidate_schema(
+            existing_schema.get("entities", []),
+            learned_schema
+        )
+        
+        # Update graph schema
+        await db.execute(
+            update(KnowledgeGraph)
+            .where(KnowledgeGraph.id == graph_id)
+            .values(schema_config=consolidated_schema)
+        )
+        await db.commit()
+        
+        return consolidated_schema
+        
+    except Exception as e:
+        logger.error(f"Schema learning failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to learn schema"
+        )

@@ -1,0 +1,165 @@
+from celery import Celery
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
+from typing import Dict, Any
+import asyncio
+import os
+from datetime import datetime
+from uuid import UUID
+
+from app.core.config import settings
+from app.core.database import async_session_maker
+from app.core.neo4j_client import neo4j_client
+from app.models.graph import IngestionJob, KnowledgeGraph
+from app.services.entity_extractor import entity_extractor
+from app.services.graph_service import graph_service
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Configure Celery
+celery_app = Celery(
+    "knowledge_graph_builder",
+    broker=settings.CELERY_BROKER_URL,
+    backend=settings.CELERY_RESULT_BACKEND
+)
+
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+    task_track_started=True,
+    task_time_limit=30 * 60,  # 30 minutes
+    task_soft_time_limit=25 * 60,  # 25 minutes
+    worker_prefetch_multiplier=1,
+    worker_max_tasks_per_child=1000,
+)
+
+@celery_app.task(bind=True)
+def process_ingestion_job(self, job_id: str, user_id: str):
+    """Background task to process ingestion job"""
+    return asyncio.run(_process_ingestion_job_async(self, job_id, user_id))
+
+async def _process_ingestion_job_async(task, job_id: str, user_id: str):
+    """Async function to process ingestion job"""
+    
+    async with async_session_maker() as db:
+        try:
+            # Get the ingestion job
+            result = await db.execute(
+                select(IngestionJob).where(IngestionJob.id == UUID(job_id))
+            )
+            job = result.scalar_one_or_none()
+            
+            if not job:
+                logger.error(f"Ingestion job {job_id} not found")
+                return {"status": "error", "message": "Job not found"}
+            
+            # Get the associated graph
+            result = await db.execute(
+                select(KnowledgeGraph).where(KnowledgeGraph.id == job.graph_id)
+            )
+            graph = result.scalar_one_or_none()
+            
+            if not graph:
+                logger.error(f"Graph {job.graph_id} not found")
+                await _update_job_status(db, job_id, "failed", "Graph not found")
+                return {"status": "error", "message": "Graph not found"}
+            
+            # Update job status to processing
+            await _update_job_status(db, job_id, "processing", None, 10)
+            task.update_state(state="PROGRESS", meta={"progress": 10})
+            
+            # Initialize entity extractor with Neo4j connection
+            await neo4j_client.connect()
+            # entity_extractor.neo4j_graph = neo4j_client  # Set the connection
+            
+            # Extract entities and relationships
+            logger.info(f"Starting entity extraction for job {job_id}")
+            
+            graph_documents = await entity_extractor.extract_entities_from_text(
+                text=job.source_content,
+                user_id=user_id,
+                graph_id=job.graph_id,
+                schema=graph.schema_config,
+                provider="openai"  # TODO: Make configurable
+            )
+            
+            # Update progress
+            await _update_job_status(db, job_id, "processing", None, 60)
+            task.update_state(state="PROGRESS", meta={"progress": 60})
+            
+            # Store graph documents in Neo4j
+            logger.info(f"Storing {len(graph_documents)} graph documents")
+            
+            entities_count, relationships_count = await graph_service.store_graph_documents(
+                graph_id=job.graph_id,
+                graph_documents=graph_documents,
+                neo4j_database=graph.neo4j_database
+            )
+            
+            # Update progress
+            await _update_job_status(db, job_id, "processing", None, 90)
+            task.update_state(state="PROGRESS", meta={"progress": 90})
+            
+            # Update graph statistics
+            await db.execute(
+                update(KnowledgeGraph)
+                .where(KnowledgeGraph.id == job.graph_id)
+                .values(
+                    node_count=KnowledgeGraph.node_count + entities_count,
+                    relationship_count=KnowledgeGraph.relationship_count + relationships_count
+                )
+            )
+            
+            # Mark job as completed
+            await db.execute(
+                update(IngestionJob)
+                .where(IngestionJob.id == UUID(job_id))
+                .values(
+                    status="completed",
+                    progress=100,
+                    extracted_entities=entities_count,
+                    extracted_relationships=relationships_count,
+                    completed_at=datetime.utcnow()
+                )
+            )
+            await db.commit()
+            
+            logger.info(f"Ingestion job {job_id} completed successfully")
+            return {
+                "status": "completed",
+                "entities_count": entities_count,
+                "relationships_count": relationships_count
+            }
+            
+        except Exception as e:
+            logger.error(f"Ingestion job {job_id} failed: {e}")
+            await _update_job_status(db, job_id, "failed", str(e))
+            return {"status": "error", "message": str(e)}
+
+async def _update_job_status(
+    db: AsyncSession, 
+    job_id: str, 
+    status: str, 
+    error_message: str = None,
+    progress: int = None
+):
+    """Update job status in database"""
+    update_data = {"status": status}
+    
+    if error_message:
+        update_data["error_message"] = error_message
+    if progress is not None:
+        update_data["progress"] = progress
+    if status == "processing" and progress == 10:
+        update_data["started_at"] = datetime.utcnow()
+    
+    await db.execute(
+        update(IngestionJob)
+        .where(IngestionJob.id == UUID(job_id))
+        .values(**update_data)
+    )
+    await db.commit()

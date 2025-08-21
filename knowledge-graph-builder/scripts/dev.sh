@@ -2,29 +2,38 @@
 
 echo "🔧 Starting Knowledge Graph Builder in development mode..."
 
-# Check if .env exists
-if [ ! -f .env ]; then
-    echo "❌ .env file not found. Please run setup.sh first."
+# Go to project root
+cd "$(dirname "$0")/../.."
+
+# Check if .env exists in knowledge-graph-builder
+if [ ! -f knowledge-graph-builder/.env ]; then
+    echo "❌ .env file not found in knowledge-graph-builder/. Please create it."
     exit 1
 fi
 
-# Check if virtual environment exists
-if [ ! -d "venv" ]; then
-    echo "📦 Creating virtual environment..."
-    python -m venv venv
-fi
+# Start all required services using the main docker-compose
+echo "📦 Starting required services (neo4j, postgres, redis)..."
+docker-compose up -d neo4j postgres redis
 
-# Activate virtual environment
-source venv/bin/activate
+# Wait for services to be ready
+echo "⏳ Waiting for services to be ready..."
+sleep 10
 
-# Install dependencies
-echo "📦 Installing dependencies..."
-pip install -r requirements.txt
+# Start the knowledge graph builder service
+echo "🚀 Starting knowledge-graph-builder service..."
+docker-compose up -d knowledge-graph-builder
 
-# Run database migrations
-echo "📊 Running database migrations..."
-alembic upgrade head
+# Start the Celery worker
+echo "👷 Starting Celery worker..."
+docker-compose up -d knowledge-graph-worker
 
-# Start the service
-echo "🚀 Starting service on port 8003..."
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8003 --log-level info
+echo "✅ All services started!"
+echo ""
+echo "Services running:"
+echo "- Knowledge Graph Builder: http://localhost:8003"
+echo "- Neo4j Browser: http://localhost:7474"
+echo "- API Docs: http://localhost:8003/docs"
+echo ""
+echo "To view logs:"
+echo "  docker-compose logs -f knowledge-graph-builder"
+echo "  docker-compose logs -f knowledge-graph-worker"
