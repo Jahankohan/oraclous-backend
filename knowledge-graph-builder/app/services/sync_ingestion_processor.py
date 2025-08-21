@@ -115,10 +115,21 @@ async def run_extraction(content: str, user_id: str, graph_id: UUID, schema: dic
             relationships_count = 0
             
             for graph_doc in graph_documents:
-                for node in graph_doc.nodes:
-                    await store_node_direct(driver, node, str(graph_id))
-                    entities_count += 1
+                # FILTER OUT ORPHAN NODES
+                connected_node_ids = set()
+                for rel in graph_doc.relationships:
+                    connected_node_ids.add(rel.source.id)
+                    connected_node_ids.add(rel.target.id)
                 
+                # Store only connected nodes
+                for node in graph_doc.nodes:
+                    if node.id in connected_node_ids:
+                        await store_node_direct(driver, node, str(graph_id))
+                        entities_count += 1
+                    else:
+                        logger.info(f"Skipping orphan node: {node.id} ({node.properties.get('name', 'Unknown')})")
+                
+                # Store relationships
                 for rel in graph_doc.relationships:
                     await store_relationship_direct(driver, rel, str(graph_id))
                     relationships_count += 1
@@ -141,6 +152,9 @@ async def store_node_direct(driver, node, graph_id: str):
     properties = dict(node.properties) if hasattr(node, 'properties') and node.properties else {}
     properties["graph_id"] = graph_id
     properties["id"] = node.id
+
+    # ADD: Log what's being stored
+    logger.info(f"Storing node: ID={node.id}, Name={properties.get('name')}")
     
     # Sanitize labels
     import re
@@ -167,18 +181,32 @@ async def store_relationship_direct(driver, rel, graph_id: str):
     """Store relationship directly with driver"""
     properties = dict(rel.properties) if hasattr(rel, 'properties') and rel.properties else {}
     properties["graph_id"] = graph_id
+
+    logger.info(f"Looking for nodes: source_id={rel.source.id}, target_id={rel.target.id}")
+    
+    # ADD: Sanitize relationship type (same as node labels)
+    import re
+    rel_type = re.sub(r'[^a-zA-Z0-9_]', '_', rel.type).strip('_') if rel.type else "RELATED_TO"
+    if not rel_type:
+        rel_type = "RELATED_TO"
     
     query = f"""
     MATCH (source {{id: $source_id, graph_id: $graph_id}})
     MATCH (target {{id: $target_id, graph_id: $graph_id}})
-    MERGE (source)-[r:{rel.type}]->(target)
+    MERGE (source)-[r:{rel_type}]->(target)
     SET r += $properties
     """
     
-    async with driver.session() as session:
-        await session.run(query, {
-            "source_id": rel.source.id,
-            "target_id": rel.target.id,
-            "graph_id": graph_id,
-            "properties": properties
-        })
+    # ADD: Error handling and logging
+    try:
+        async with driver.session() as session:
+            await session.run(query, {
+                "source_id": rel.source.id,
+                "target_id": rel.target.id,
+                "graph_id": graph_id,
+                "properties": properties
+            })
+        logger.info(f"Stored relationship: {rel.source.id} -[{rel_type}]-> {rel.target.id}")
+    except Exception as e:
+        logger.error(f"Failed to store relationship {rel_type}: {e}")
+        logger.error(f"Source: {rel.source.id}, Target: {rel.target.id}")

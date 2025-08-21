@@ -249,38 +249,103 @@ class EntityExtractor:
             if hasattr(doc, 'source') and doc.source:
                 source_documents.append(doc.source)
         
-        # Deduplicate nodes by name (case-insensitive)
-        unique_nodes = {}
-        for node in all_nodes:
-            name = node.properties.get("name", "").lower().strip()
-            if name and name not in unique_nodes:
-                unique_nodes[name] = node
-            elif name in unique_nodes:
-                # Merge properties from duplicate (prefer higher confidence)
-                existing = unique_nodes[name]
-                existing_conf = existing.properties.get("confidence", 0.0)
-                new_conf = node.properties.get("confidence", 0.0)
-                
-                if new_conf > existing_conf:
-                    # Update with higher confidence version
-                    existing.properties.update(node.properties)
+        # DEBUG: Log node properties to understand structure
+        for i, node in enumerate(all_nodes[:3]):  # Log first 3 nodes
+            logger.info(f"Node {i}: ID={node.id}, Type={node.type}, Properties={node.properties}")
         
-        # Return deduplicated results with proper source document
+        # IMPROVED: Get node name from multiple possible sources
+        unique_nodes = {}
+        
+        for node in all_nodes:
+            # Try multiple ways to get node name
+            name = None
+            
+            if hasattr(node, 'properties') and node.properties:
+                name = node.properties.get("name") or node.properties.get("id")
+            
+            # Fallback to node.id if no name in properties
+            if not name:
+                name = getattr(node, 'id', str(node))
+            
+            # Clean and normalize the name
+            if name:
+                name = str(name).strip()
+                if name.startswith("http://"):
+                    # Extract entity name from Wikidata URLs
+                    name = name.split("/")[-1]
+                
+                name_key = name.lower()
+                
+                if name_key and name_key not in unique_nodes:
+                    # Ensure node has proper name property
+                    if not hasattr(node, 'properties'):
+                        node.properties = {}
+                    node.properties["name"] = name
+                    node.id = name.replace(" ", "_").lower()
+                    unique_nodes[name_key] = node
+                    logger.info(f"Added node: {name} -> {node.id}")
+        
+        # IMPROVED: Update relationships with proper node matching
+        updated_relationships = []
+        
+        for rel in all_relationships:
+            # Get source and target names
+            source_name = None
+            target_name = None
+            
+            # Try to get source name
+            if hasattr(rel.source, 'properties') and rel.source.properties:
+                source_name = rel.source.properties.get("name")
+            if not source_name:
+                source_name = getattr(rel.source, 'id', None)
+            
+            # Try to get target name  
+            if hasattr(rel.target, 'properties') and rel.target.properties:
+                target_name = rel.target.properties.get("name")
+            if not target_name:
+                target_name = getattr(rel.target, 'id', None)
+            
+            # Clean names
+            if source_name and target_name:
+                source_name = str(source_name).strip()
+                target_name = str(target_name).strip()
+                
+                # Handle Wikidata URLs
+                if source_name.startswith("http://"):
+                    source_name = source_name.split("/")[-1]
+                if target_name.startswith("http://"):
+                    target_name = target_name.split("/")[-1]
+                
+                source_key = source_name.lower()
+                target_key = target_name.lower()
+                
+                logger.info(f"Processing relationship: {source_name} -[{rel.type}]-> {target_name}")
+                
+                if source_key in unique_nodes and target_key in unique_nodes:
+                    rel.source = unique_nodes[source_key]
+                    rel.target = unique_nodes[target_key]
+                    updated_relationships.append(rel)
+                    logger.info(f"✅ Relationship added: {source_name} -[{rel.type}]-> {target_name}")
+                else:
+                    logger.warning(f"❌ Skipping relationship - missing nodes: {source_name} -> {target_name}")
+                    logger.warning(f"Available nodes: {list(unique_nodes.keys())}")
+        
+        # Return results
         final_nodes = list(unique_nodes.values())
         
-        # Use the first source document or create a combined one
         if source_documents:
-            combined_source = source_documents[0]  # Use first document as primary source
+            combined_source = source_documents[0]
         else:
-            # Create a dummy source document if none exist
             combined_source = Document(
                 page_content="Combined extraction results",
                 metadata={"source": "combined_extraction"}
             )
         
+        logger.info(f"Final result: {len(final_nodes)} nodes and {len(updated_relationships)} relationships")
+        
         return [GraphDocument(
             nodes=final_nodes, 
-            relationships=all_relationships,
+            relationships=updated_relationships,
             source=combined_source
         )]
 
