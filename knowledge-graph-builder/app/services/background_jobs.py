@@ -39,11 +39,23 @@ celery_app.conf.update(
 
 @celery_app.task(bind=True)
 def process_ingestion_job(self, job_id: str, user_id: str):
-    """Background task to process ingestion job"""
-    return asyncio.run(_process_ingestion_job_async(self, job_id, user_id))
+    """Synchronous background task to process ingestion job"""
+    import asyncio
+    
+    # Create a new event loop for this task
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Import here to avoid circular imports
+        from app.services.sync_ingestion_processor import process_job_sync
+        return process_job_sync(self, job_id, user_id)
+    finally:
+        loop.close()
+
 
 async def _process_ingestion_job_async(task, job_id: str, user_id: str):
-    """Async function to process ingestion job"""
+    """Async function to process ingestion job with Diffbot support"""
     
     async with async_session_maker() as db:
         try:
@@ -72,18 +84,18 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
             await _update_job_status(db, job_id, "processing", None, 10)
             task.update_state(state="PROGRESS", meta={"progress": 10})
             
-            # Initialize entity extractor with Neo4j connection
+            # Initialize Neo4j connection
             await neo4j_client.connect()
-            # entity_extractor.neo4j_graph = neo4j_client  # Set the connection
             
-            # Extract entities and relationships
-            logger.info(f"Starting entity extraction for job {job_id}")
+            # Extract entities and relationships using hybrid approach
+            logger.info(f"Starting hybrid entity extraction for job {job_id}")
             
-            graph_documents = await entity_extractor.extract_entities_from_text(
+            graph_documents = await entity_extractor.extract_entities_hybrid(
                 text=job.source_content,
                 user_id=user_id,
                 graph_id=job.graph_id,
                 schema=graph.schema_config,
+                use_diffbot=True,  # Enable Diffbot
                 provider="openai"  # TODO: Make configurable
             )
             
@@ -127,7 +139,7 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
             )
             await db.commit()
             
-            logger.info(f"Ingestion job {job_id} completed successfully")
+            logger.info(f"Ingestion job {job_id} completed successfully with Diffbot+LLM")
             return {
                 "status": "completed",
                 "entities_count": entities_count,

@@ -55,12 +55,23 @@ class GraphService:
         properties["graph_id"] = graph_id
         properties["id"] = node.id
         
-        # Create node with label
-        labels = ":".join(node.type) if isinstance(node.type, list) else node.type
-        
+        # Sanitize node labels - Neo4j labels cannot contain spaces or special characters
+        if isinstance(node.type, list):
+            labels = [self._sanitize_label(label) for label in node.type]
+        else:
+            labels = [self._sanitize_label(node.type)]
+
+        labels = [label for label in labels if label]
+
+        # If no valid labels, use default
+        if not labels:
+            labels = ["Entity"]
+
+        labels_str = ":".join(labels)
+
         # Use MERGE to avoid duplicates
         query = f"""
-        MERGE (n:{labels} {{id: $id, graph_id: $graph_id}})
+        MERGE (n:{labels_str} {{id: $id, graph_id: $graph_id}})
         SET n += $properties
         RETURN n
         """
@@ -80,24 +91,32 @@ class GraphService:
         # Prepare relationship properties
         properties = dict(rel.properties) if hasattr(rel, 'properties') and rel.properties else {}
         properties["graph_id"] = graph_id
-        
+
+        rel_type = self._sanitize_label(rel.type) if rel.type else "RELATED_TO"
+
+        print("Relationship:", rel)
+
         query = f"""
         MATCH (source {{id: $source_id, graph_id: $graph_id}})
         MATCH (target {{id: $target_id, graph_id: $graph_id}})
-        MERGE (source)-[r:{rel.type}]->(target)
+        MERGE (source)-[r:{rel_type}]->(target)
         SET r += $properties
         RETURN r
         """
         
-        await neo4j_client.execute_write_query(
-            query,
-            {
-                "source_id": rel.source.id,
-                "target_id": rel.target.id,
-                "graph_id": graph_id,
-                "properties": properties
-            }
-        )
+        try:
+            await neo4j_client.execute_write_query(
+                query,
+                {
+                    "source_id": rel.source.id,
+                    "target_id": rel.target.id,
+                    "graph_id": graph_id,
+                    "properties": properties
+                }
+            )
+        except Exception as e:
+            logger.error(f"Failed to store relationship {rel.type}: {e}")
+            logger.error(f"Source: {rel.source.id}, Target: {rel.target.id}")
     
     async def get_graph_stats(self, graph_id: UUID, db: AsyncSession) -> Dict[str, int]:
         """Get statistics for a graph using graph_id filtering"""
@@ -175,5 +194,32 @@ class GraphService:
         except Exception as e:
             logger.error(f"Error deleting graph data for {graph_id}: {e}")
             raise
+    
+    def _sanitize_label(self, label: str) -> str:
+        """Sanitize Neo4j labels to be valid identifiers"""
+        if not label:
+            return ""
+        
+        import re
+        
+        # Replace spaces and special characters with underscores
+        sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', label)
+        sanitized = sanitized.strip('_')
+        
+        # Ensure it starts with a letter
+        if sanitized and sanitized[0].isdigit():
+            sanitized = f"Type_{sanitized}"
+        
+        # Handle common cases
+        label_mapping = {
+            "Job_title": "JobTitle",
+            "Organization_type": "OrganizationType", 
+            "AI_models": "AIModels",
+            "software_engineer": "SoftwareEngineer",
+            "Job_Title": "JobTitle",
+            "Organization_Type": "OrganizationType"
+        }
+        
+        return label_mapping.get(sanitized, sanitized) if sanitized else "Entity"
 
 graph_service = GraphService()

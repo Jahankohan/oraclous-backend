@@ -175,7 +175,7 @@ async def ingest_data(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database)
 ):
-    """Ingest data into a knowledge graph (async processing)"""
+    """Ingest data into a knowledge graph (async processing with Diffbot)"""
     
     # Check if graph exists and belongs to user
     result = await db.execute(
@@ -224,7 +224,7 @@ async def ingest_data(
     await db.commit()
     await db.refresh(job)
     
-    # Trigger background processing
+    # Trigger background processing with Diffbot support
     try:
         # Use Celery for background processing
         task = process_ingestion_job.delay(str(job.id), user_id)

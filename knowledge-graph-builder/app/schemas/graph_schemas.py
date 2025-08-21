@@ -36,6 +36,8 @@ class IngestDataRequest(BaseModel):
     source_type: str = Field(default="text", pattern="^(text|pdf|url|api)$")
     schema: Optional[Dict[str, Any]] = Field(None)
     instructions: Optional[str] = Field(None)
+    use_diffbot: bool = Field(default=True, description="Enable Diffbot NLP extraction")
+    llm_provider: str = Field(default="openai", description="LLM provider for extraction")
 
 class IngestionJobResponse(BaseModel):
     """Schema for ingestion job response"""
