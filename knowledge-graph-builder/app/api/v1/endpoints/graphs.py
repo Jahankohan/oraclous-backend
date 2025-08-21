@@ -15,6 +15,7 @@ from app.schemas.graph_schemas import (
 from app.services.background_jobs import process_ingestion_job
 from app.services.entity_extractor import entity_extractor
 from app.services.schema_service import schema_service
+from app.services.graph_service import graph_service
 from app.core.logging import get_logger
 
 router = APIRouter()
@@ -28,14 +29,11 @@ async def create_graph(
 ):
     """Create a new knowledge graph"""
     
-    # Generate unique database name for Neo4j
-    neo4j_db_name = f"graph_{uuid.uuid4().hex[:8]}"
-    
+    # Create graph without neo4j_database field
     graph = KnowledgeGraph(
         name=graph_data.name,
         description=graph_data.description,
         user_id=UUID(user_id),
-        neo4j_database=neo4j_db_name,
         schema_config=graph_data.schema_config or {}
     )
     
@@ -47,8 +45,7 @@ async def create_graph(
     if graph_data.schema_config:
         try:
             await schema_service.create_graph_constraints(
-                graph_data.schema_config,
-                neo4j_db_name
+                graph_data.schema_config
             )
         except Exception as e:
             logger.warning(f"Failed to create schema constraints: {e}")
@@ -138,7 +135,7 @@ async def delete_graph(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database)
 ):
-    """Delete a graph"""
+    """Delete a graph and all its data"""
     
     # Check if graph exists and belongs to user
     result = await db.execute(
@@ -155,8 +152,14 @@ async def delete_graph(
             detail="Graph not found"
         )
     
-    # TODO: Clean up Neo4j database and related data
+    # Delete Neo4j data
+    try:
+        await graph_service.delete_graph_data(graph_id)
+    except Exception as e:
+        logger.error(f"Failed to delete Neo4j data: {e}")
+        # Continue with metadata deletion even if Neo4j cleanup fails
     
+    # Delete metadata
     await db.execute(
         delete(KnowledgeGraph).where(KnowledgeGraph.id == graph_id)
     )

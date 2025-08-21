@@ -82,12 +82,11 @@ class LLMService:
                 logger.error(f"Unsupported LLM provider: {provider}")
                 return False
             
-            # Initialize graph transformer
+            # Initialize graph transformer with correct import
             self.graph_transformer = LLMGraphTransformer(
                 llm=self.llm,
                 allowed_nodes=None,  # Will be set based on schema
                 allowed_relationships=None,  # Will be set based on schema
-                prompt=None,  # Will use default or custom prompt
                 strict_mode=False
             )
             

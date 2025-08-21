@@ -23,7 +23,6 @@ class GraphResponse(BaseModel):
     name: str
     description: Optional[str]
     user_id: UUID
-    neo4j_database: Optional[str]
     schema_config: Optional[Dict[str, Any]]
     created_at: datetime
     updated_at: datetime

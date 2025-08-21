@@ -12,7 +12,7 @@ import json
 logger = get_logger(__name__)
 
 class GraphService:
-    """Enhanced service for managing knowledge graphs"""
+    """Enhanced service for managing knowledge graphs - Single Database Edition"""
     
     def __init__(self):
         pass
@@ -21,7 +21,7 @@ class GraphService:
         self,
         graph_id: UUID,
         graph_documents: List[GraphDocument],
-        neo4j_database: str = None
+        neo4j_database: str = None  # Ignored - always use default
     ) -> Tuple[int, int]:
         """Store graph documents in Neo4j and return counts"""
         
@@ -32,32 +32,33 @@ class GraphService:
             for graph_doc in graph_documents:
                 # Store nodes
                 for node in graph_doc.nodes:
-                    await self._store_node(node, str(graph_id), neo4j_database)
+                    await self._store_node(node, str(graph_id))
                     entities_count += 1
                 
                 # Store relationships
                 for rel in graph_doc.relationships:
-                    await self._store_relationship(rel, str(graph_id), neo4j_database)
+                    await self._store_relationship(rel, str(graph_id))
                     relationships_count += 1
             
-            logger.info(f"Stored {entities_count} entities and {relationships_count} relationships")
+            logger.info(f"Stored {entities_count} entities and {relationships_count} relationships for graph {graph_id}")
             return entities_count, relationships_count
             
         except Exception as e:
             logger.error(f"Error storing graph documents: {e}")
             raise
     
-    async def _store_node(self, node, graph_id: str, neo4j_database: str = None):
-        """Store a single node in Neo4j"""
+    async def _store_node(self, node, graph_id: str):
+        """Store a single node in Neo4j with graph_id isolation"""
         
         # Prepare node properties
-        properties = dict(node.properties)
+        properties = dict(node.properties) if hasattr(node, 'properties') and node.properties else {}
         properties["graph_id"] = graph_id
         properties["id"] = node.id
         
         # Create node with label
         labels = ":".join(node.type) if isinstance(node.type, list) else node.type
         
+        # Use MERGE to avoid duplicates
         query = f"""
         MERGE (n:{labels} {{id: $id, graph_id: $graph_id}})
         SET n += $properties
@@ -70,15 +71,14 @@ class GraphService:
                 "id": node.id,
                 "graph_id": graph_id,
                 "properties": properties
-            },
-            database=neo4j_database
+            }
         )
     
-    async def _store_relationship(self, rel, graph_id: str, neo4j_database: str = None):
-        """Store a single relationship in Neo4j"""
+    async def _store_relationship(self, rel, graph_id: str):
+        """Store a single relationship in Neo4j with graph_id isolation"""
         
         # Prepare relationship properties
-        properties = dict(rel.properties)
+        properties = dict(rel.properties) if hasattr(rel, 'properties') and rel.properties else {}
         properties["graph_id"] = graph_id
         
         query = f"""
@@ -96,12 +96,11 @@ class GraphService:
                 "target_id": rel.target.id,
                 "graph_id": graph_id,
                 "properties": properties
-            },
-            database=neo4j_database
+            }
         )
     
     async def get_graph_stats(self, graph_id: UUID, db: AsyncSession) -> Dict[str, int]:
-        """Get statistics for a graph"""
+        """Get statistics for a graph using graph_id filtering"""
         result = await db.execute(
             select(KnowledgeGraph).where(KnowledgeGraph.id == graph_id)
         )
@@ -111,7 +110,7 @@ class GraphService:
             return {"node_count": 0, "relationship_count": 0}
         
         try:
-            # Query Neo4j for actual counts
+            # Query Neo4j for actual counts using graph_id filter
             node_query = """
             MATCH (n) 
             WHERE n.graph_id = $graph_id 
@@ -126,14 +125,12 @@ class GraphService:
             
             node_result = await neo4j_client.execute_query(
                 node_query, 
-                {"graph_id": str(graph_id)},
-                database=graph.neo4j_database
+                {"graph_id": str(graph_id)}
             )
             
             rel_result = await neo4j_client.execute_query(
                 rel_query,
-                {"graph_id": str(graph_id)},
-                database=graph.neo4j_database
+                {"graph_id": str(graph_id)}
             )
             
             node_count = node_result[0]["count"] if node_result else 0
@@ -153,16 +150,30 @@ class GraphService:
             logger.error(f"Error getting graph stats for {graph_id}: {e}")
             return {"node_count": graph.node_count, "relationship_count": graph.relationship_count}
     
-    async def create_graph_schema(self, graph_id: UUID, schema_config: Dict[str, Any]):
-        """Create or update graph schema in Neo4j"""
+    async def delete_graph_data(self, graph_id: UUID):
+        """Delete all nodes and relationships for a specific graph"""
         try:
-            # Get the graph to find Neo4j database
-            # This would need the database session - simplified for now
-            await schema_service.create_graph_constraints(schema_config)
-            logger.info(f"Created graph schema for {graph_id}")
+            # Delete all relationships first
+            rel_query = """
+            MATCH ()-[r]->()
+            WHERE r.graph_id = $graph_id
+            DELETE r
+            """
+            
+            # Delete all nodes
+            node_query = """
+            MATCH (n)
+            WHERE n.graph_id = $graph_id
+            DELETE n
+            """
+            
+            await neo4j_client.execute_write_query(rel_query, {"graph_id": str(graph_id)})
+            await neo4j_client.execute_write_query(node_query, {"graph_id": str(graph_id)})
+            
+            logger.info(f"Deleted all data for graph {graph_id}")
             
         except Exception as e:
-            logger.error(f"Error creating graph schema: {e}")
+            logger.error(f"Error deleting graph data for {graph_id}: {e}")
             raise
 
 graph_service = GraphService()

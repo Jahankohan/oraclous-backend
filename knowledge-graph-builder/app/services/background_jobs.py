@@ -96,8 +96,7 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
             
             entities_count, relationships_count = await graph_service.store_graph_documents(
                 graph_id=job.graph_id,
-                graph_documents=graph_documents,
-                neo4j_database=graph.neo4j_database
+                graph_documents=graph_documents
             )
             
             # Update progress

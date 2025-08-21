@@ -75,6 +75,7 @@ class EntityExtractor:
                 
                 # Extract entities from batch
                 try:
+                    # FIXED METHOD CALL - Use correct async method
                     batch_graph_docs = await llm_service.graph_transformer.aconvert_to_graph_documents(
                         documents
                     )
@@ -83,10 +84,14 @@ class EntityExtractor:
                     for graph_doc in batch_graph_docs:
                         # Add graph_id to all nodes
                         for node in graph_doc.nodes:
+                            if not hasattr(node, 'properties'):
+                                node.properties = {}
                             node.properties["graph_id"] = str(graph_id)
                         
                         # Add graph_id to all relationships
                         for rel in graph_doc.relationships:
+                            if not hasattr(rel, 'properties'):
+                                rel.properties = {}
                             rel.properties["graph_id"] = str(graph_id)
                     
                     all_graph_documents.extend(batch_graph_docs)

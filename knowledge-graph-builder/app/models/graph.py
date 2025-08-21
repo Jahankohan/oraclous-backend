@@ -12,7 +12,6 @@ class KnowledgeGraph(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text)
     user_id = Column(UUID(as_uuid=True), nullable=False)
-    neo4j_database = Column(String(100))
     schema_config = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
