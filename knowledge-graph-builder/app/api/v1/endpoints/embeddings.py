@@ -46,7 +46,7 @@ async def generate_embeddings(
     db: AsyncSession = Depends(get_database)
 ):
     """Generate embeddings for entities in a knowledge graph"""
-    
+    logger.info(f"Generating embeddings for graph {graph_id} with provider {request.provider} and model {request.model}, {request.generate_for_existing}")
     try:
         # Verify graph ownership
         result = await db.execute(
@@ -75,32 +75,35 @@ async def generate_embeddings(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Failed to initialize {request.provider} embeddings"
             )
-        
+        logger.info(f"Initialized {request.provider} embeddings with model {request.model} generate for existing {request.generate_for_existing}")
         # Generate embeddings for existing nodes if requested
         if request.generate_for_existing:
             # Add to background tasks for async processing
-            background_tasks.add_task(
-                _process_embedding_generation,
-                graph_id,
-                user_id
-            )
-            
-            return EmbeddingResponse(
-                status="processing",
-                message="Embedding generation started in background",
-                nodes_processed=None
-            )
-        else:
-            # Just initialize the service and create indexes
-            await vector_service.create_vector_indexes(
-                dimension=embedding_service.dimension
-            )
-            
-            return EmbeddingResponse(
-                status="ready",
-                message="Embedding service initialized. New entities will get embeddings automatically.",
-                nodes_processed=0
-            )
+            try:
+                # Start Celery task
+                from app.services.background_jobs import process_embedding_generation_job
+                task = process_embedding_generation_job.delay(str(graph_id), user_id)
+                logger.info(f"Started background embedding job {task.id} for graph {graph_id}")
+                
+                return EmbeddingResponse(
+                    status="processing",
+                    message=f"Embedding generation started in background. Job ID: {task.id}",
+                    nodes_processed=None
+                )
+            except Exception as e:
+                logger.error(f"Failed to start background embedding job: {e}")
+                # Fallback to FastAPI background task for development
+                background_tasks.add_task(
+                    _process_embedding_generation,
+                    graph_id,
+                    user_id
+                )
+                
+                return EmbeddingResponse(
+                    status="processing",
+                    message="Embedding generation started in background (fallback mode)",
+                    nodes_processed=None
+                )
         
     except HTTPException:
         raise

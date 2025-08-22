@@ -53,6 +53,100 @@ def process_ingestion_job(self, job_id: str, user_id: str):
     finally:
         loop.close()
 
+@celery_app.task(bind=True)
+def process_embedding_generation_job(self, graph_id: str, user_id: str):
+    """Celery task to process embedding generation"""
+    import asyncio
+    
+    # Create a new event loop for this task
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        return loop.run_until_complete(
+            _process_embedding_generation_async(self, graph_id, user_id)
+        )
+    finally:
+        loop.close()
+
+
+async def _process_embedding_generation_async(task, graph_id: str, user_id: str):
+    """Async function to process embedding generation"""
+    
+    async with async_session_maker() as db:
+        try:
+            # Import here to avoid circular imports
+            from app.services.enhanced_graph_service import enhanced_graph_service
+            
+            logger.info(f"Starting embedding generation for graph {graph_id}")
+            
+            # Update progress - Starting
+            if task:
+                task.update_state(state="PROGRESS", meta={
+                    "progress": 10, 
+                    "status": "Starting embedding generation",
+                    "graph_id": graph_id
+                })
+            
+            # Verify graph exists and user has access
+            result = await db.execute(
+                select(KnowledgeGraph).where(
+                    KnowledgeGraph.id == UUID(graph_id),
+                    KnowledgeGraph.user_id == UUID(user_id)
+                )
+            )
+            graph = result.scalar_one_or_none()
+            
+            if not graph:
+                logger.error(f"Graph {graph_id} not found or user {user_id} doesn't have access")
+                if task:
+                    task.update_state(state="FAILURE", meta={"error": "Graph not found or access denied"})
+                return {"status": "error", "message": "Graph not found"}
+            
+            # Update progress - Processing
+            if task:
+                task.update_state(state="PROGRESS", meta={
+                    "progress": 30, 
+                    "status": "Processing nodes for embedding generation",
+                    "graph_id": graph_id
+                })
+            
+            # Initialize Neo4j connection
+            await neo4j_client.connect()
+            
+            # Generate embeddings for existing nodes
+            nodes_processed = await enhanced_graph_service.generate_embeddings_for_existing_nodes(
+                graph_id=UUID(graph_id),
+                user_id=user_id,
+                batch_size=50
+            )
+            
+            # Update progress - Completed
+            if task:
+                task.update_state(state="PROGRESS", meta={
+                    "progress": 100, 
+                    "status": "Embedding generation completed",
+                    "nodes_processed": nodes_processed,
+                    "graph_id": graph_id
+                })
+            
+            logger.info(f"Background embedding generation completed for graph {graph_id}: {nodes_processed} nodes processed")
+            
+            return {
+                "status": "completed", 
+                "nodes_processed": nodes_processed,
+                "graph_id": graph_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Background embedding generation failed for graph {graph_id}: {e}")
+            if task:
+                task.update_state(state="FAILURE", meta={
+                    "error": str(e),
+                    "graph_id": graph_id
+                })
+            return {"status": "error", "message": str(e)}
+
 
 async def _process_ingestion_job_async(task, job_id: str, user_id: str):
     """Async function to process ingestion job with Diffbot support"""
