@@ -111,6 +111,27 @@ class LLMService:
             if relationships:
                 self.graph_transformer.allowed_relationships = relationships
     
+    def set_dynamic_schema(self, schema: Dict[str, Any]):
+        """Configure LLM transformer with dynamic schema"""
+        
+        if not self.llm:
+            return
+        
+        # Create new transformer with evolved schema
+        from langchain_community.graphs.graph_transformer import LLMGraphTransformer
+        
+        self.graph_transformer = LLMGraphTransformer(
+            llm=self.llm,
+            allowed_nodes=schema.get("entities", []),
+            allowed_relationships=schema.get("relationships", []),
+            strict_mode=False,  # Allow creative discovery within boundaries
+            node_properties=["name", "description", "type", "confidence"],
+            relationship_properties=["confidence", "source"]
+        )
+        
+        logger.info(f"Updated schema with {len(schema.get('entities', []))} entity types and {len(schema.get('relationships', []))} relationship types")
+
+    
     def is_initialized(self) -> bool:
         """Check if LLM is properly initialized"""
         return self.llm is not None and self.graph_transformer is not None

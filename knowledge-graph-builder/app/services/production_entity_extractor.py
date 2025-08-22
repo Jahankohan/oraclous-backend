@@ -13,7 +13,7 @@ from app.services.vector_service import vector_service
 
 logger = get_logger(__name__)
 
-class EntityExtractor:
+class ProductionEntityExtractor:
     """Production-grade entity extractor following Neo4j Labs patterns"""
     
     def __init__(self):
@@ -494,4 +494,4 @@ class EntityExtractor:
         return dot_product / (magnitude1 * magnitude2)
 
 # Global instance
-entity_extractor = EntityExtractor()
+production_entity_extractor = ProductionEntityExtractor()

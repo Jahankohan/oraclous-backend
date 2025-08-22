@@ -267,37 +267,3 @@ async def search_chunks(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Chunk search failed: {str(e)}"
         )
-
-@router.post("/graphs/{graph_id}/embeddings/generate")
-async def generate_embeddings(
-    graph_id: UUID,
-    user_id: str = Depends(get_current_user_id)
-):
-    """Generate embeddings for all entities in a graph"""
-    
-    try:
-        # Initialize embeddings
-        if not embedding_service.is_initialized():
-            success = await embedding_service.initialize_embeddings(
-                provider="openai", user_id=user_id
-            )
-            if not success:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Embedding service unavailable"
-                )
-        
-        # This would be implemented in the embedding service
-        # For now, return a placeholder
-        return {
-            "status": "success",
-            "message": "Embedding generation started",
-            "graph_id": str(graph_id)
-        }
-        
-    except Exception as e:
-        logger.error(f"Embedding generation failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Embedding generation failed: {str(e)}"
-        )

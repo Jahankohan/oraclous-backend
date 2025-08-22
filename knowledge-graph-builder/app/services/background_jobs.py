@@ -70,86 +70,8 @@ def process_embedding_generation_job(self, graph_id: str, user_id: str):
         loop.close()
 
 
-async def _process_embedding_generation_async(task, graph_id: str, user_id: str):
-    """Async function to process embedding generation"""
-    
-    async with async_session_maker() as db:
-        try:
-            # Import here to avoid circular imports
-            from app.services.enhanced_graph_service import enhanced_graph_service
-            
-            logger.info(f"Starting embedding generation for graph {graph_id}")
-            
-            # Update progress - Starting
-            if task:
-                task.update_state(state="PROGRESS", meta={
-                    "progress": 10, 
-                    "status": "Starting embedding generation",
-                    "graph_id": graph_id
-                })
-            
-            # Verify graph exists and user has access
-            result = await db.execute(
-                select(KnowledgeGraph).where(
-                    KnowledgeGraph.id == UUID(graph_id),
-                    KnowledgeGraph.user_id == UUID(user_id)
-                )
-            )
-            graph = result.scalar_one_or_none()
-            
-            if not graph:
-                logger.error(f"Graph {graph_id} not found or user {user_id} doesn't have access")
-                if task:
-                    task.update_state(state="FAILURE", meta={"error": "Graph not found or access denied"})
-                return {"status": "error", "message": "Graph not found"}
-            
-            # Update progress - Processing
-            if task:
-                task.update_state(state="PROGRESS", meta={
-                    "progress": 30, 
-                    "status": "Processing nodes for embedding generation",
-                    "graph_id": graph_id
-                })
-            
-            # Initialize Neo4j connection
-            await neo4j_client.connect()
-            
-            # Generate embeddings for existing nodes
-            nodes_processed = await enhanced_graph_service.generate_embeddings_for_existing_nodes(
-                graph_id=UUID(graph_id),
-                user_id=user_id,
-                batch_size=50
-            )
-            
-            # Update progress - Completed
-            if task:
-                task.update_state(state="PROGRESS", meta={
-                    "progress": 100, 
-                    "status": "Embedding generation completed",
-                    "nodes_processed": nodes_processed,
-                    "graph_id": graph_id
-                })
-            
-            logger.info(f"Background embedding generation completed for graph {graph_id}: {nodes_processed} nodes processed")
-            
-            return {
-                "status": "completed", 
-                "nodes_processed": nodes_processed,
-                "graph_id": graph_id
-            }
-            
-        except Exception as e:
-            logger.error(f"Background embedding generation failed for graph {graph_id}: {e}")
-            if task:
-                task.update_state(state="FAILURE", meta={
-                    "error": str(e),
-                    "graph_id": graph_id
-                })
-            return {"status": "error", "message": str(e)}
-
-
 async def _process_ingestion_job_async(task, job_id: str, user_id: str):
-    """Async function to process ingestion job with Diffbot support"""
+    """Enhanced ingestion processing with dual graph approach"""
     
     async with async_session_maker() as db:
         try:
@@ -163,63 +85,58 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
                 logger.error(f"Ingestion job {job_id} not found")
                 return {"status": "error", "message": "Job not found"}
             
-            # Get the associated graph
-            result = await db.execute(
-                select(KnowledgeGraph).where(KnowledgeGraph.id == job.graph_id)
-            )
-            graph = result.scalar_one_or_none()
-            
-            if not graph:
-                logger.error(f"Graph {job.graph_id} not found")
-                await _update_job_status(db, job_id, "failed", "Graph not found")
-                return {"status": "error", "message": "Graph not found"}
-            
             # Update job status to processing
             await _update_job_status(db, job_id, "processing", None, 10)
             task.update_state(state="PROGRESS", meta={"progress": 10})
             
-            # Initialize Neo4j connection
+            # Initialize services
             await neo4j_client.connect()
             
-            # Extract entities and relationships using hybrid approach
-            logger.info(f"Starting hybrid entity extraction for job {job_id}")
+            # Step 1: Extract using dual graph approach (NEW)
+            logger.info(f"Starting enhanced dual graph extraction for job {job_id}")
+            task.update_state(state="PROGRESS", meta={"progress": 20, "status": "Analyzing document structure"})
             
-            graph_documents = await entity_extractor.extract_entities_hybrid(
-                text=job.source_content,
+            entity_graph_docs, lexical_chunks = await production_entity_extractor.extract_with_dual_graph(
+                text=job.content,
                 user_id=user_id,
                 graph_id=job.graph_id,
-                schema=graph.schema_config,
-                use_diffbot=True,  # Enable Diffbot
-                provider="openai"  # TODO: Make configurable
+                domain_context=job.metadata.get("domain") if job.metadata else None
             )
             
-            # Update progress
-            await _update_job_status(db, job_id, "processing", None, 60)
-            task.update_state(state="PROGRESS", meta={"progress": 60})
+            # Step 2: Store lexical graph (document chunks)
+            task.update_state(state="PROGRESS", meta={"progress": 40, "status": "Storing document chunks"})
             
-            # Store graph documents in Neo4j
-            logger.info(f"Storing {len(graph_documents)} graph documents")
-            
-            entities_count, relationships_count = await graph_service.store_graph_documents(
+            chunks_stored = await vector_service.create_text_chunks(
                 graph_id=job.graph_id,
-                graph_documents=graph_documents
+                text_chunks=lexical_chunks
+            )
+            logger.info(f"Stored {chunks_stored} document chunks")
+            
+            # Step 3: Store entity graph (entities + relationships)
+            task.update_state(state="PROGRESS", meta={"progress": 60, "status": "Storing entities and relationships"})
+            
+            entities_count, relationships_count = await enhanced_graph_service.store_graph_documents_with_embeddings(
+                graph_id=job.graph_id,
+                graph_documents=entity_graph_docs,
+                user_id=user_id,
+                generate_embeddings=True
             )
             
-            # Update progress
-            await _update_job_status(db, job_id, "processing", None, 90)
-            task.update_state(state="PROGRESS", meta={"progress": 90})
+            # Step 4: Create cross-graph similarity relationships (NEW)
+            task.update_state(state="PROGRESS", meta={"progress": 80, "status": "Creating similarity relationships"})
             
-            # Update graph statistics
-            await db.execute(
-                update(KnowledgeGraph)
-                .where(KnowledgeGraph.id == job.graph_id)
-                .values(
-                    node_count=KnowledgeGraph.node_count + entities_count,
-                    relationship_count=KnowledgeGraph.relationship_count + relationships_count
-                )
+            similarity_count = await _create_similarity_relationships(
+                graph_id=job.graph_id,
+                chunks=lexical_chunks,
+                entities_count=entities_count
             )
             
-            # Mark job as completed
+            # Step 5: Community detection and cleanup (NEW)
+            task.update_state(state="PROGRESS", meta={"progress": 90, "status": "Graph optimization"})
+            
+            communities_found = await _detect_communities_and_cleanup(job.graph_id)
+            
+            # Step 6: Update job completion
             await db.execute(
                 update(IngestionJob)
                 .where(IngestionJob.id == UUID(job_id))
@@ -228,22 +145,315 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
                     progress=100,
                     extracted_entities=entities_count,
                     extracted_relationships=relationships_count,
+                    processed_chunks=chunks_stored,
+                    similarity_relationships=similarity_count,
+                    communities_detected=communities_found,
                     completed_at=datetime.utcnow()
                 )
             )
             await db.commit()
             
-            logger.info(f"Ingestion job {job_id} completed successfully with Diffbot+LLM")
+            logger.info(f"Enhanced ingestion job {job_id} completed successfully")
             return {
                 "status": "completed",
                 "entities_count": entities_count,
-                "relationships_count": relationships_count
+                "relationships_count": relationships_count,
+                "chunks_count": chunks_stored,
+                "similarity_relationships": similarity_count,
+                "communities": communities_found
             }
             
         except Exception as e:
-            logger.error(f"Ingestion job {job_id} failed: {e}")
+            logger.error(f"Enhanced ingestion job {job_id} failed: {e}")
             await _update_job_status(db, job_id, "failed", str(e))
             return {"status": "error", "message": str(e)}
+
+
+async def _create_similarity_relationships(
+    graph_id: UUID,
+    chunks: List[Dict[str, Any]],
+    entities_count: int
+) -> int:
+    """Create SIMILAR relationships between semantically related chunks and entities"""
+    
+    if not embedding_service.is_initialized():
+        logger.warning("Embedding service not initialized, skipping similarity relationships")
+        return 0
+    
+    try:
+        # Create chunk-to-chunk similarities
+        chunk_similarities = await _create_chunk_similarities(graph_id, chunks)
+        
+        # Create entity-to-chunk similarities
+        entity_similarities = await _create_entity_chunk_similarities(graph_id)
+        
+        total_similarities = chunk_similarities + entity_similarities
+        logger.info(f"Created {total_similarities} similarity relationships")
+        
+        return total_similarities
+        
+    except Exception as e:
+        logger.error(f"Failed to create similarity relationships: {e}")
+        return 0
+
+
+async def _create_chunk_similarities(graph_id: UUID, chunks: List[Dict[str, Any]]) -> int:
+    """Create SIMILAR relationships between semantically related chunks"""
+    
+    similarities_created = 0
+    similarity_threshold = 0.85  # Configurable threshold
+    
+    # Compare each chunk with others
+    for i, chunk1 in enumerate(chunks):
+        if not chunk1.get("embedding"):
+            continue
+            
+        for j, chunk2 in enumerate(chunks[i+1:], i+1):
+            if not chunk2.get("embedding"):
+                continue
+            
+            # Calculate similarity
+            similarity = production_entity_extractor._cosine_similarity(
+                chunk1["embedding"], 
+                chunk2["embedding"]
+            )
+            
+            if similarity >= similarity_threshold:
+                # Create SIMILAR relationship
+                query = """
+                MATCH (c1:DocumentChunk {id: $chunk1_id, graph_id: $graph_id})
+                MATCH (c2:DocumentChunk {id: $chunk2_id, graph_id: $graph_id})
+                MERGE (c1)-[s:SIMILAR]->(c2)
+                SET s.similarity_score = $similarity, s.graph_id = $graph_id
+                RETURN s
+                """
+                
+                await neo4j_client.execute_write_query(query, {
+                    "chunk1_id": chunk1["id"],
+                    "chunk2_id": chunk2["id"],
+                    "graph_id": str(graph_id),
+                    "similarity": similarity
+                })
+                
+                similarities_created += 1
+    
+    return similarities_created
+
+
+async def _create_entity_chunk_similarities(graph_id: UUID) -> int:
+    """Create SIMILAR relationships between entities and chunks"""
+    
+    # Query to find entities and chunks, create similarities based on embeddings
+    query = """
+    MATCH (e:Entity {graph_id: $graph_id})
+    WHERE e.embedding IS NOT NULL
+    MATCH (c:DocumentChunk {graph_id: $graph_id})
+    WHERE c.embedding IS NOT NULL
+    WITH e, c, gds.similarity.cosine(e.embedding, c.embedding) AS similarity
+    WHERE similarity >= $threshold
+    MERGE (e)-[s:SIMILAR_TO_CHUNK]->(c)
+    SET s.similarity_score = similarity, s.graph_id = $graph_id
+    RETURN count(s) as similarities_created
+    """
+    
+    try:
+        result = await neo4j_client.execute_write_query(query, {
+            "graph_id": str(graph_id),
+            "threshold": 0.8
+        })
+        
+        return result[0]["similarities_created"] if result else 0
+        
+    except Exception as e:
+        logger.error(f"Failed to create entity-chunk similarities: {e}")
+        return 0
+
+
+async def _detect_communities_and_cleanup(graph_id: UUID) -> int:
+    """Detect communities and perform graph cleanup"""
+    
+    try:
+        # Community detection using Louvain algorithm
+        community_query = """
+        CALL gds.graph.project(
+            'tempGraph_' + $graph_id,
+            ['Entity', 'DocumentChunk'],
+            ['RELATED_TO', 'SIMILAR', 'CONTAINS'],
+            {nodeProperties: ['embedding'], relationshipProperties: ['similarity_score']}
+        )
+        YIELD graphName
+        
+        CALL gds.louvain.write(graphName, {writeProperty: 'community'})
+        YIELD communityCount
+        
+        CALL gds.graph.drop(graphName)
+        
+        RETURN communityCount
+        """
+        
+        result = await neo4j_client.execute_write_query(community_query, {
+            "graph_id": str(graph_id).replace("-", "_")  # Neo4j graph names can't have hyphens
+        })
+        
+        community_count = result[0]["communityCount"] if result else 0
+        
+        # Cleanup orphaned nodes
+        cleanup_query = """
+        MATCH (n {graph_id: $graph_id})
+        WHERE NOT (n)-[]-()
+        DELETE n
+        RETURN count(n) as orphans_removed
+        """
+        
+        cleanup_result = await neo4j_client.execute_write_query(cleanup_query, {
+            "graph_id": str(graph_id)
+        })
+        
+        orphans_removed = cleanup_result[0]["orphans_removed"] if cleanup_result else 0
+        
+        logger.info(f"Detected {community_count} communities, removed {orphans_removed} orphaned nodes")
+        
+        return community_count
+        
+    except Exception as e:
+        logger.error(f"Community detection failed: {e}")
+        return 0
+
+async def _process_embedding_generation_async(task, graph_id: str, user_id: str):
+    """Async function to process embedding generation with better error tracking"""
+    
+    async with async_session_maker() as db:
+        try:
+            from app.services.enhanced_graph_service import enhanced_graph_service
+            from app.services.embedding_service import embedding_service
+            from app.services.vector_service import vector_service
+            
+            logger.info(f"Starting embedding generation for graph {graph_id}")
+            
+            # ... [previous code for graph verification] ...
+            
+            # Initialize Neo4j connection
+            await neo4j_client.connect()
+            
+            # Initialize embedding service
+            success = await embedding_service.initialize_embeddings(
+                provider="openai",
+                model="text-embedding-3-small", 
+                user_id=user_id
+            )
+            
+            if not success:
+                raise Exception("Failed to initialize embedding service in worker")
+            
+            # Process nodes with better tracking
+            batch_size = 10
+            nodes_processed = 0
+            nodes_succeeded = 0
+            nodes_failed = 0
+            
+            while True:
+                # Get nodes without embeddings
+                get_nodes_query = """
+                MATCH (n)
+                WHERE n.graph_id = $graph_id 
+                AND n.embedding IS NULL
+                AND n.name IS NOT NULL
+                RETURN n.id as id, n.name as name, 
+                       coalesce(n.description, '') as description
+                LIMIT $batch_size
+                """
+                
+                result = await neo4j_client.execute_query(get_nodes_query, {
+                    "graph_id": graph_id,
+                    "batch_size": batch_size
+                })
+                
+                if not result:
+                    break
+                
+                logger.info(f"Processing batch of {len(result)} nodes")
+                
+                # Process each node in the batch
+                for record in result:
+                    try:
+                        entity_id = record["id"]
+                        name = record["name"]
+                        description = record["description"]
+                        
+                        logger.info(f"🔄 Processing node: '{name}' (ID: {entity_id})")
+                        
+                        # Create text for embedding
+                        text = name
+                        if description:
+                            text += f" {description}"
+                        
+                        # Generate embedding
+                        embedding = await embedding_service.embed_text(text)
+                        logger.info(f"✅ Generated embedding for '{name}': {len(embedding)} dimensions")
+                        
+                        # Update node
+                        update_result = await vector_service.add_entity_embedding(
+                            entity_id=entity_id,
+                            embedding=embedding,
+                            graph_id=UUID(graph_id)
+                        )
+                        
+                        if update_result:
+                            nodes_succeeded += 1
+                            logger.info(f"✅ Successfully updated '{name}' with embedding")
+                        else:
+                            nodes_failed += 1
+                            logger.error(f"❌ Failed to update '{name}' - node not found or not updated")
+                        
+                        nodes_processed += 1
+                        
+                    except Exception as e:
+                        nodes_failed += 1
+                        logger.error(f"❌ Failed to process node '{record.get('name', record.get('id'))}': {e}")
+                
+                # If we processed fewer than batch_size, we're done
+                if len(result) < batch_size:
+                    break
+                
+                # Update progress
+                if task:
+                    progress = min(90, 30 + (nodes_processed * 60 / 20))  # Assuming ~20 total nodes
+                    task.update_state(state="PROGRESS", meta={
+                        "progress": progress, 
+                        "status": f"Processed {nodes_processed} nodes ({nodes_succeeded} succeeded, {nodes_failed} failed)",
+                        "graph_id": graph_id
+                    })
+            
+            logger.info(f"📊 Final results - Processed: {nodes_processed}, Succeeded: {nodes_succeeded}, Failed: {nodes_failed}")
+            
+            # Update progress - Completed
+            if task:
+                task.update_state(state="PROGRESS", meta={
+                    "progress": 100, 
+                    "status": "Embedding generation completed",
+                    "nodes_processed": nodes_processed,
+                    "nodes_succeeded": nodes_succeeded,
+                    "nodes_failed": nodes_failed,
+                    "graph_id": graph_id
+                })
+            
+            return {
+                "status": "completed", 
+                "nodes_processed": nodes_processed,
+                "nodes_succeeded": nodes_succeeded,
+                "nodes_failed": nodes_failed,
+                "graph_id": graph_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Background embedding generation failed for graph {graph_id}: {e}")
+            if task:
+                task.update_state(state="FAILURE", meta={
+                    "error": str(e),
+                    "graph_id": graph_id
+                })
+            return {"status": "error", "message": str(e)}
+
 
 async def _update_job_status(
     db: AsyncSession, 

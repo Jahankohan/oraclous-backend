@@ -77,31 +77,61 @@ class VectorService:
             raise
     
     async def add_entity_embedding(
-        self, 
-        entity_id: str, 
+        self,
+        entity_id: str,
         embedding: List[float],
         graph_id: UUID
     ):
-        """Add embedding to an entity"""
+        """Add embedding to an existing entity with better error handling"""
         
+        # More explicit query with better parameter handling
         query = """
-        MATCH (e:Entity {id: $entity_id, graph_id: $graph_id})
+        MATCH (e)
+        WHERE e.id = $entity_id AND e.graph_id = $graph_id
         SET e.embedding = $embedding
-        RETURN e
+        RETURN e.id as updated_id, e.name as name, size(e.embedding) as embedding_size
         """
         
         try:
-            await neo4j_client.execute_write_query(query, {
+            result = await neo4j_client.execute_write_query(query, {
                 "entity_id": entity_id,
                 "graph_id": str(graph_id),
                 "embedding": embedding
             })
-            logger.debug(f"Added embedding to entity {entity_id}")
+            
+            if result and len(result) > 0:
+                logger.info(f"Successfully added embedding to entity '{result[0]['name']}' (ID: {entity_id}), dimension: {result[0]['embedding_size']}")
+                return result[0]
+            else:
+                # This is the key issue - we need to catch when no nodes are matched
+                logger.error(f"No entity found with ID '{entity_id}' in graph {graph_id}")
+                
+                # Let's also try to find the node to debug
+                debug_query = """
+                MATCH (e)
+                WHERE e.graph_id = $graph_id
+                AND (e.id = $entity_id OR e.id CONTAINS $partial_id)
+                RETURN e.id, e.name, labels(e)
+                LIMIT 3
+                """
+                
+                debug_result = await neo4j_client.execute_query(debug_query, {
+                    "entity_id": entity_id,
+                    "graph_id": str(graph_id),
+                    "partial_id": entity_id[:10]  # First 10 chars for partial match
+                })
+                
+                if debug_result:
+                    logger.warning(f"🔍 Found similar nodes: {debug_result}")
+                else:
+                    logger.warning(f"🔍 No nodes found with similar ID in graph {graph_id}")
+                
+                return None
             
         except Exception as e:
-            logger.error(f"Failed to add embedding to entity {entity_id}: {e}")
+            logger.error(f"Exception while adding embedding to entity {entity_id}: {e}")
             raise
-    
+
     async def create_text_chunks(
         self, 
         graph_id: UUID,
