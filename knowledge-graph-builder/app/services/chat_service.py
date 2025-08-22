@@ -1,9 +1,5 @@
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from uuid import UUID
-from langchain.chains import GraphCypherQAChain
-from langchain.chains.graph_qa.cypher import GraphCypherQAChain
-from langchain.prompts import PromptTemplate
-from langchain.schema import Document
 import json
 import asyncio
 
@@ -21,6 +17,7 @@ class ChatService:
     def __init__(self):
         self.cypher_chain = None
         self.current_graph_id = None
+        self._current_user_id = None
         self.conversation_history = []
     
     async def initialize_chat(
@@ -33,6 +30,9 @@ class ChatService:
         """Initialize chat service for a specific graph"""
         
         try:
+            # Store user context
+            self._current_user_id = user_id
+            
             # Initialize LLM if needed
             if not llm_service.is_initialized():
                 success = await llm_service.initialize_llm(
@@ -287,55 +287,39 @@ class ChatService:
             }
     
     async def _graphrag_chat(self, query: str) -> Dict[str, Any]:
-        """Advanced GraphRAG implementation"""
+        """Advanced GraphRAG implementation using GraphRAGService"""
         
         try:
-            # Step 1: Entity extraction from query
-            query_entities = await self._extract_entities_from_query(query)
+            # Import here to avoid circular imports
+            from app.services.graphrag_service import graphrag_service
             
-            # Step 2: Vector search for relevant entities and chunks
-            similar_entities = await search_service.similarity_search_entities(
+            # Use the dedicated GraphRAG service for comprehensive retrieval
+            retrieval_result = await graphrag_service.graph_augmented_retrieval(
                 query=query,
                 graph_id=self.current_graph_id,
-                k=8,
-                threshold=0.6
+                user_id=self._current_user_id,  # We'll need to store this
+                retrieval_config={
+                    "max_entities": 10,
+                    "max_chunks": 5,
+                    "max_depth": 2
+                }
             )
             
-            # Step 3: Get neighborhoods of relevant entities
-            neighborhoods = []
-            for entity in similar_entities[:5]:
-                neighborhood = await self._get_entity_neighborhood(
-                    entity["id"], max_depth=2
-                )
-                neighborhoods.append(neighborhood)
-            
-            # Step 4: Get relevant text chunks
-            text_chunks = []
-            try:
-                text_chunks = await search_service.similarity_search_chunks(
-                    query=query,
-                    graph_id=self.current_graph_id,
-                    k=5,
-                    threshold=0.6
-                )
-            except Exception:
-                pass
-            
-            # Step 5: Build comprehensive context
-            rag_context = self._build_graphrag_context(
-                query_entities, similar_entities, neighborhoods, text_chunks
+            # Generate final answer using GraphRAG context
+            answer = await graphrag_service.generate_graphrag_answer(
+                query=query,
+                retrieval_result=retrieval_result,
+                user_id=self._current_user_id
             )
-            
-            # Step 6: Generate answer with rich context
-            answer = await self._generate_graphrag_answer(query, rag_context)
             
             return {
                 "answer": answer,
-                "context": {
-                    "query_entities": query_entities,
-                    "similar_entities": similar_entities[:3],
-                    "neighborhoods": len(neighborhoods),
-                    "text_chunks": len(text_chunks)
+                "context": retrieval_result.get("context", ""),
+                "metadata": retrieval_result.get("metadata", {}),
+                "sources": {
+                    "similar_entities": retrieval_result.get("similar_entities", [])[:3],
+                    "neighborhoods": len(retrieval_result.get("neighborhoods", [])),
+                    "paths": len(retrieval_result.get("paths", []))
                 },
                 "method": "graphrag",
                 "success": True

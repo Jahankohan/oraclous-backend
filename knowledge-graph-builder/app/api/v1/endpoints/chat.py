@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert, update
+from sqlalchemy import select, update, delete as sql_delete
 from typing import List, Optional
 from uuid import UUID, uuid4
 from pydantic import BaseModel
@@ -219,33 +219,33 @@ async def list_chat_sessions(
                 detail="Graph not found"
             )
         
-        # Get sessions with message counts
-        sessions_query = """
-        SELECT s.*, COUNT(m.id) as message_count
-        FROM chat_sessions s
-        LEFT JOIN chat_messages m ON s.id = m.session_id
-        WHERE s.graph_id = :graph_id AND s.user_id = :user_id
-        GROUP BY s.id
-        ORDER BY s.last_message_at DESC
-        """
-        
-        result = await db.execute(
-            sessions_query,
-            {"graph_id": str(graph_id), "user_id": user_id}
+        # Get sessions
+        sessions_result = await db.execute(
+            select(ChatSession).where(
+                ChatSession.graph_id == graph_id,
+                ChatSession.user_id == UUID(user_id)
+            ).order_by(ChatSession.last_message_at.desc())
         )
+        sessions = sessions_result.scalars().all()
         
-        sessions = []
-        for row in result.fetchall():
-            sessions.append(ChatSessionResponse(
-                id=str(row.id),
-                graph_id=str(row.graph_id),
-                name=row.session_name,
-                created_at=row.created_at,
-                last_message_at=row.last_message_at,
-                message_count=row.message_count
+        # Get message counts for each session
+        session_responses = []
+        for session in sessions:
+            message_count_result = await db.execute(
+                select(ChatMessage).where(ChatMessage.session_id == session.id)
+            )
+            message_count = len(message_count_result.scalars().all())
+            
+            session_responses.append(ChatSessionResponse(
+                id=str(session.id),
+                graph_id=str(session.graph_id),
+                name=session.session_name,
+                created_at=session.created_at,
+                last_message_at=session.last_message_at,
+                message_count=message_count
             ))
         
-        return sessions
+        return session_responses
         
     except HTTPException:
         raise
@@ -339,14 +339,14 @@ async def delete_chat_session(
         
         # Delete messages first (foreign key constraint)
         await db.execute(
-            ChatMessage.__table__.delete().where(
+            sql_delete(ChatMessage).where(
                 ChatMessage.session_id == UUID(session_id)
             )
         )
         
         # Delete session
         await db.execute(
-            ChatSession.__table__.delete().where(
+            sql_delete(ChatSession).where(
                 ChatSession.id == UUID(session_id)
             )
         )
@@ -401,12 +401,11 @@ async def execute_cypher_query(
         
         # Add graph_id filter if not present
         if "graph_id" not in query:
-            query = query.replace(
-                "MATCH", 
-                f"MATCH", 
-                1
-            )
-            query += f" WHERE n.graph_id = '{graph_id}'"
+            # Simple injection of graph_id filter - could be made more sophisticated
+            if "WHERE" in query.upper():
+                query = query.replace("WHERE", f"WHERE n.graph_id = '{graph_id}' AND", 1)
+            else:
+                query += f" WHERE n.graph_id = '{graph_id}'"
         
         # Execute query with limit
         if "LIMIT" not in query.upper():
@@ -544,7 +543,7 @@ async def _save_chat_messages(
         session_id=UUID(session_id),
         message_type="assistant",
         content=chat_result["answer"],
-        chat_metadata={
+        chat_metadata={  # Using chat_metadata instead of metadata
             "mode": chat_result.get("mode"),
             "success": chat_result.get("success"),
             "sources": chat_result.get("sources"),
