@@ -99,13 +99,184 @@ class EntityExtractor:
         
         return enhanced_chunks
     
+    async def learn_schema_from_text(
+        self, 
+        text: str, 
+        user_id: str,
+        provider: str = "openai",
+        use_diffbot: bool = True
+    ) -> Dict[str, List[str]]:
+        """Learn schema from text using both Diffbot and LLM approaches"""
+        
+        try:
+            logger.info("Starting schema learning from text...")
+            
+            # Step 1: Try to get schema insights from Diffbot (if available)
+            diffbot_schema = {}
+            if use_diffbot:
+                diffbot_schema = await self._learn_schema_from_diffbot(text, user_id)
+            
+            # Step 2: Get schema insights from LLM
+            llm_schema = await self._learn_schema_from_llm(text, user_id, provider)
+            
+            # Step 3: Combine and consolidate schemas
+            combined_schema = self._combine_schemas(diffbot_schema, llm_schema)
+            
+            logger.info(f"Learned schema: {len(combined_schema.get('entities', []))} entities, {len(combined_schema.get('relationships', []))} relationships")
+            return combined_schema
+            
+        except Exception as e:
+            logger.error(f"Schema learning failed: {e}")
+            return self._get_fallback_schema()
+    
+    async def _learn_schema_from_diffbot(self, text: str, user_id: str) -> Dict[str, List[str]]:
+        """Learn schema from Diffbot graph extraction (if Diffbot service is available)"""
+        
+        try:
+            # Check if diffbot service is available
+            try:
+                from app.services.diffbot_graph_service import diffbot_graph_service
+                
+                # Extract with Diffbot to see what types it finds
+                sample_graph_docs = await diffbot_graph_service.extract_graph_documents(
+                    text=text[:1000],  # Use sample of text
+                    user_id=user_id,
+                    graph_id=UUID("00000000-0000-0000-0000-000000000000")  # Dummy UUID for schema learning
+                )
+                
+                entity_types = set()
+                relationship_types = set()
+                
+                for graph_doc in sample_graph_docs:
+                    # Extract entity types from nodes
+                    for node in graph_doc.nodes:
+                        if hasattr(node, 'type') and node.type:
+                            if isinstance(node.type, list):
+                                entity_types.update(node.type)
+                            else:
+                                entity_types.add(node.type)
+                    
+                    # Extract relationship types
+                    for rel in graph_doc.relationships:
+                        if hasattr(rel, 'type') and rel.type:
+                            relationship_types.add(rel.type)
+                
+                logger.info(f"Diffbot schema learning: {len(entity_types)} entities, {len(relationship_types)} relationships")
+                
+                return {
+                    "entities": sorted(list(entity_types)),
+                    "relationships": sorted(list(relationship_types))
+                }
+                
+            except ImportError:
+                logger.info("Diffbot service not available, skipping Diffbot schema learning")
+                return {"entities": [], "relationships": []}
+            
+        except Exception as e:
+            logger.warning(f"Diffbot schema learning failed: {e}")
+            return {"entities": [], "relationships": []}
+    
+    async def _learn_schema_from_llm(
+        self, 
+        text: str, 
+        user_id: str,
+        provider: str = "openai"
+    ) -> Dict[str, List[str]]:
+        """Learn schema from LLM analysis"""
+        
+        try:
+            # Initialize LLM for schema learning
+            if not llm_service.is_initialized():
+                await llm_service.initialize_llm(user_id, provider)
+            
+            schema_prompt = f"""
+            Analyze this text and identify the optimal entity types and relationship types for knowledge graph extraction.
+
+            Text Sample: {text[:3000]}...
+        
+            Consider:
+            1. What are the main types of entities mentioned?
+            2. What relationships exist between these entities?
+            3. What properties would be valuable to extract?
+        
+            Focus on entities and relationships that appear multiple times or are central to the meaning.
+            """
+            
+            # Use LLM to generate schema
+            response = await llm_service.llm.ainvoke([
+                {"role": "system", "content": "You are a knowledge graph schema expert. Return valid JSON only."},
+                {"role": "user", "content": schema_prompt}
+            ])
+            
+            # Parse JSON response
+            try:
+                schema_text = response.content
+                
+                # Clean up response text
+                if "```json" in schema_text:
+                    schema_text = schema_text.split("```json")[1].split("```")[0]
+                elif "```" in schema_text:
+                    schema_text = schema_text.split("```")[1].split("```")[0]
+                
+                schema = json.loads(schema_text)
+                
+                # Validate schema structure
+                if "entities" in schema and "relationships" in schema:
+                    logger.info(f"LLM schema learning: {len(schema['entities'])} entities, {len(schema['relationships'])} relationships")
+                    # Validate and clean schema
+                    return self._validate_and_clean_schema(schema)
+                else:
+                    logger.warning("Invalid schema format from LLM, using defaults")
+                    return self._get_fallback_schema()
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse schema JSON from LLM: {e}")
+                return self._get_fallback_schema()
+
+        except Exception as e:
+            logger.error(f"LLM schema learning failed: {e}")
+            return self._get_fallback_schema()
+
+    def _combine_schemas(
+        self, 
+        diffbot_schema: Dict[str, List[str]], 
+        llm_schema: Dict[str, List[str]]
+    ) -> Dict[str, List[str]]:
+        """Combine and deduplicate schemas from different sources"""
+        
+        # Combine entity types
+        all_entities = set()
+        all_entities.update(diffbot_schema.get("entities", []))
+        all_entities.update(llm_schema.get("entities", []))
+        
+        # Combine relationship types
+        all_relationships = set()
+        all_relationships.update(diffbot_schema.get("relationships", []))
+        all_relationships.update(llm_schema.get("relationships", []))
+        
+        # Add default types if none found
+        if not all_entities:
+            all_entities.update(self._get_fallback_schema()["entities"])
+
+        if not all_relationships:
+            all_relationships.update(self._get_fallback_schema()["relationships"])
+
+        # Sort and limit to reasonable numbers
+        final_entities = sorted(list(all_entities))[:12]  # Max 12 entity types
+        final_relationships = sorted(list(all_relationships))[:10]  # Max 10 relationship types
+        
+        return {
+            "entities": final_entities,
+            "relationships": final_relationships
+        }
+    
     async def _evolve_schema_from_text(
         self,
         text: str,
         user_id: str,
         domain_context: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Dynamic schema evolution using LLM analysis"""
+        """Dynamic schema evolution using existing learn_schema_from_text method"""
         
         # Check if we have existing schema for this domain
         schema_key = f"{user_id}_{domain_context or 'general'}"
@@ -113,62 +284,32 @@ class EntityExtractor:
         if schema_key in self.evolved_schemas:
             base_schema = self.evolved_schemas[schema_key]
         else:
-            base_schema = await self._extract_initial_schema(text, domain_context)
+            # Use the learn_schema_from_text method
+            base_schema = await self.learn_schema_from_text(
+                text=text,
+                user_id=user_id,
+                provider="openai",
+                use_diffbot=True
+            )
             self.evolved_schemas[schema_key] = base_schema
         
-        # Evolve schema based on new content
+        # Evolve schema based on new content (optional enhancement)
         evolved_schema = await self._refine_schema_with_context(text, base_schema)
         self.evolved_schemas[schema_key] = evolved_schema
         
         return evolved_schema
-    
-    async def _extract_initial_schema(
+
+
+    async def _refine_schema_with_context(
         self,
         text: str,
-        domain_context: Optional[str] = None
+        base_schema: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Extract initial schema using LLM with function calling"""
+        """Refine existing schema with new text context"""
         
-        if not llm_service.is_initialized():
-            return self._get_fallback_schema()
-        
-        schema_prompt = f"""
-        Analyze this text and identify the optimal entity types and relationship types for knowledge graph extraction.
-        
-        Domain Context: {domain_context or 'General'}
-        
-        Text Sample: {text[:3000]}...
-        
-        Consider:
-        1. What are the main types of entities mentioned?
-        2. What relationships exist between these entities?
-        3. What properties would be valuable to extract?
-        
-        Focus on entities and relationships that appear multiple times or are central to the meaning.
-        """
-        
-        try:
-            # Use structured output for consistent schema format
-            response = await llm_service.llm.ainvoke([
-                {"role": "system", "content": "You are a knowledge graph schema expert. Return valid JSON only."},
-                {"role": "user", "content": schema_prompt}
-            ])
-            
-            # Parse schema from LLM response
-            schema_text = response.content
-            if "```json" in schema_text:
-                schema_text = schema_text.split("```json")[1].split("```")[0]
-            elif "```" in schema_text:
-                schema_text = schema_text.split("```")[1].split("```")[0]
-            
-            schema = json.loads(schema_text)
-            
-            # Validate and clean schema
-            return self._validate_and_clean_schema(schema)
-            
-        except Exception as e:
-            logger.warning(f"Schema extraction failed: {e}")
-            return self._get_fallback_schema()
+        # For now, just return the base schema
+        # Future enhancement: analyze text to add new entity/relationship types
+        return base_schema
     
     async def _extract_entities_with_structured_output(
         self,
@@ -285,6 +426,86 @@ class EntityExtractor:
             graph_documents, entity_map
         )
     
+    def _merge_entities(self, node1: Node, node2: Node) -> Node:
+        """Merge two entity nodes"""
+        
+        # Use the node with more properties as the base
+        if hasattr(node1, 'properties') and hasattr(node2, 'properties'):
+            if len(node1.properties or {}) >= len(node2.properties or {}):
+                primary, secondary = node1, node2
+            else:
+                primary, secondary = node2, node1
+        else:
+            primary, secondary = node1, node2
+        
+        # Merge properties
+        merged_properties = dict(primary.properties) if hasattr(primary, 'properties') and primary.properties else {}
+        if hasattr(secondary, 'properties') and secondary.properties:
+            for key, value in secondary.properties.items():
+                if key not in merged_properties and value:
+                    merged_properties[key] = value
+        
+        # Create merged node
+        merged_node = Node(
+            id=primary.id,
+            type=primary.type if hasattr(primary, 'type') else "Entity",
+            properties=merged_properties
+        )
+        
+        return merged_node
+    
+    def _rebuild_graph_documents_with_deduplicated_entities(
+        self,
+        graph_documents: List[GraphDocument],
+        entity_map: Dict[str, Dict[str, Any]]
+    ) -> List[GraphDocument]:
+        """Rebuild graph documents with deduplicated entities"""
+        
+        # Create mapping from old node IDs to new nodes
+        node_id_mapping = {}
+        unique_nodes = []
+        
+        for entity_data in entity_map.values():
+            node = entity_data["node"]
+            unique_nodes.append(node)
+            # Map all variants to this single node
+            for variant in entity_data["variants"]:
+                node_id_mapping[variant] = node.id
+        
+        # Rebuild documents
+        rebuilt_docs = []
+        for doc in graph_documents:
+            # Use deduplicated nodes
+            new_nodes = unique_nodes.copy()
+            
+            # Update relationships to use deduplicated nodes
+            updated_relationships = []
+            for rel in doc.relationships:
+                source_id = node_id_mapping.get(rel.source.id, rel.source.id)
+                target_id = node_id_mapping.get(rel.target.id, rel.target.id)
+                
+                # Find the actual nodes
+                source_node = next((n for n in new_nodes if n.id == source_id), rel.source)
+                target_node = next((n for n in new_nodes if n.id == target_id), rel.target)
+                
+                updated_rel = Relationship(
+                    source=source_node,
+                    target=target_node,
+                    type=rel.type,
+                    properties=rel.properties if hasattr(rel, 'properties') else {}
+                )
+                updated_relationships.append(updated_rel)
+            
+            # Create new document
+            rebuilt_doc = GraphDocument(
+                nodes=new_nodes,
+                relationships=updated_relationships,
+                source=doc.source if hasattr(doc, 'source') else None
+            )
+            rebuilt_docs.append(rebuilt_doc)
+        
+        return rebuilt_docs
+
     async def _are_entities_duplicates(
         self,
         node1: Node,
