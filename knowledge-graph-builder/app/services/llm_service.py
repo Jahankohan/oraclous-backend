@@ -118,9 +118,6 @@ class LLMService:
             logger.warning("LLM not initialized, cannot set dynamic schema")
             return
         
-        # Create new transformer with evolved schema
-        from langchain_community.graphs.graph_transformer import LLMGraphTransformer
-        
         self.graph_transformer = LLMGraphTransformer(
             llm=self.llm,
             allowed_nodes=schema.get("entities", []) if schema.get("entities") else None,

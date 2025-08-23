@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 import uuid
 from datetime import datetime
@@ -10,11 +10,11 @@ from app.api.dependencies import get_current_user_id, get_database
 from app.models.graph import KnowledgeGraph, IngestionJob
 from app.schemas.graph_schemas import (
     GraphCreate, GraphUpdate, GraphResponse, 
-    IngestDataRequest, IngestionJobResponse
+    IngestDataRequest, IngestionJobResponse, SchemaLearnRequest, SchemaUpdateRequest
 )
 from app.core.neo4j_client import neo4j_client
 from app.services.background_jobs import process_ingestion_job, _create_similarity_relationships, _detect_communities_and_cleanup
-from app.services.entity_extractor import entity_extractor
+from app.services.entity_extractor import entity_extractor, SchemaEvolutionConfig
 from app.services.schema_service import schema_service
 from app.services.enhanced_graph_service import enhanced_graph_service
 from app.core.logging import get_logger
@@ -136,9 +136,8 @@ async def delete_graph(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database)
 ):
-    """Delete a graph and all its data"""
-    
-    # Check if graph exists and belongs to user
+    """Delete a knowledge graph"""
+
     result = await db.execute(
         select(KnowledgeGraph).where(
             KnowledgeGraph.id == graph_id,
@@ -153,7 +152,6 @@ async def delete_graph(
             detail="Graph not found"
         )
     
-    # Delete Neo4j data
     try:
         await enhanced_graph_service.delete_graph_data(graph_id)
     except Exception as e:
@@ -169,14 +167,16 @@ async def delete_graph(
     logger.info(f"Deleted graph: {graph_id}")
 
 @router.post("/graphs/{graph_id}/ingest", response_model=IngestionJobResponse)
-async def ingest_data(
+async def ingest_data_corrected(
     graph_id: UUID,
     data: IngestDataRequest,
     background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database)
 ):
-    """Ingest data into a knowledge graph (async processing with Diffbot)"""
+    """
+    CORRECTED: Ingest data with unified schema evolution approach
+    """
     
     # Check if graph exists and belongs to user
     result = await db.execute(
@@ -193,25 +193,41 @@ async def ingest_data(
             detail="Graph not found"
         )
     
-    # Learn schema from text if not provided
-    if not data.schema and not graph.schema_config:
+    # Create evolution config from request or use defaults
+    evolution_config = SchemaEvolutionConfig(
+        mode=data.evolution_mode or "guided",  # Default to guided
+        max_entities=data.max_entities or 20,
+        max_relationships=data.max_relationships or 15
+    )
+    
+    # Handle schema learning if needed
+    saved_schema = data.schema or graph.schema_config
+    
+    if not saved_schema and data.content:
         try:
+            # Learn schema from content using unified approach
             learned_schema = await entity_extractor.learn_schema_from_text(
-                data.content, user_id
+                data.content[:3000],  # Use sample for schema learning
+                user_id
             )
             
             # Update graph with learned schema
             await db.execute(
                 update(KnowledgeGraph)
                 .where(KnowledgeGraph.id == graph_id)
-                .values(schema_config=learned_schema)
+                .values(
+                    schema_config=learned_schema,
+                    # evolution_mode=evolution_config.mode  # If field exists
+                )
             )
             await db.commit()
             
-            logger.info(f"Learned schema for graph {graph_id}: {learned_schema}")
+            saved_schema = learned_schema
+            logger.info(f"Auto-learned schema for graph {graph_id}: {learned_schema}")
             
         except Exception as e:
-            logger.warning(f"Failed to learn schema: {e}")
+            logger.warning(f"Failed to auto-learn schema: {e}")
+            # Continue with extraction without predefined schema
     
     # Create ingestion job
     job = IngestionJob(
@@ -219,31 +235,73 @@ async def ingest_data(
         source_type=data.source_type,
         source_content=data.content,
         status="pending"
+        # evolution_mode=evolution_config.mode  # If field exists in your model
     )
     
     db.add(job)
     await db.commit()
     await db.refresh(job)
     
-    # Trigger background processing with Diffbot support
+    # OPTION 1: Use existing background job system (RECOMMENDED)
     try:
-        # Use Celery for background processing
         task = process_ingestion_job.delay(str(job.id), user_id)
         logger.info(f"Started background job {task.id} for ingestion {job.id}")
-        
     except Exception as e:
         logger.error(f"Failed to start background job: {e}")
-        # Fall back to immediate processing for development
+        # Fallback to background tasks
         background_tasks.add_task(
-            _process_sync_ingestion, 
-            str(job.id), 
-            user_id, 
-            db
+            _process_ingestion_fallback,
+            job.id,
+            user_id,
+            graph_id,
+            data.content,
+            saved_schema,
+            evolution_config
         )
     
-    logger.info(f"Created ingestion job: {job.id} for graph: {graph_id}")
+    logger.info(f"Started ingestion job {job.id} with evolution mode: {evolution_config.mode}")
     
-    return job
+    return IngestionJobResponse(
+        id=job.id,
+        graph_id=job.graph_id,
+        status=job.status,
+        progress=job.progress,
+        created_at=job.created_at,
+        source_type=job.source_type,
+        extracted_entities=0,
+        extracted_relationships=0 
+        # evolution_mode=evolution_config.mode  # If field exists
+    )
+
+async def _process_ingestion_fallback(
+    job_id: UUID,
+    user_id: str,
+    graph_id: UUID,
+    content: str,
+    saved_schema: Optional[dict],
+    evolution_config: SchemaEvolutionConfig
+):
+    """Fallback background task for ingestion processing"""
+    
+    try:
+        # Import here to avoid circular imports
+        from app.services.sync_ingestion_processor import run_extraction_with_schema_evolution
+        
+        # Run extraction with schema evolution
+        result = await run_extraction_with_schema_evolution(
+            content=content,
+            user_id=user_id,
+            graph_id=graph_id,
+            schema=saved_schema,
+            evolution_config=evolution_config
+        )
+        
+        # Update job status (you'll need to implement this)
+        # await update_job_status(str(job_id), "completed" if result["success"] else "failed")
+        
+    except Exception as e:
+        logger.error(f"Background ingestion failed: {e}")
+        # await update_job_status(str(job_id), "failed", error_message=str(e))
 
 async def _process_sync_ingestion(job_id: str, user_id: str, db: AsyncSession):
     """Fallback sync processing for development with new architecture"""
@@ -328,13 +386,15 @@ async def get_ingestion_job(
     return job
 
 @router.post("/graphs/{graph_id}/schema/learn")
-async def learn_graph_schema(
+async def learn_graph_schema_corrected(
     graph_id: UUID,
-    text_sample: str,
+    request: SchemaLearnRequest,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database)
 ):
-    """Learn schema from a text sample"""
+    """
+    CORRECTED: Learn schema from a text sample with evolution support
+    """
     
     # Verify graph ownership
     result = await db.execute(
@@ -352,37 +412,186 @@ async def learn_graph_schema(
         )
     
     try:
-        # Learn schema from text
-        learned_schema = await entity_extractor.learn_schema_from_text(
-            text_sample, user_id
+        # Get current saved schema
+        current_saved_schema = graph.schema_config
+        
+        # Create evolution config from request
+        evolution_config = SchemaEvolutionConfig(
+            mode=request.evolution_mode or "guided",
+            max_entities=request.max_entities or 20,
+            max_relationships=request.max_relationships or 15
         )
         
-        # Get existing schema
-        existing_schema = await schema_service.get_existing_schema(
-            graph.neo4j_database
-        )
+        # Learn/evolve schema using the unified approach
+        if current_saved_schema and evolution_config.mode != "strict":
+            # Evolve existing schema
+            evolved_schema = await entity_extractor._evolve_schema_with_new_content(
+                text=request.text_sample,
+                user_id=user_id,
+                base_schema=current_saved_schema,
+                domain_context=request.domain_context
+            )
+            operation = "evolved"
+        else:
+            # Learn new schema from scratch
+            evolved_schema = await entity_extractor.learn_schema_from_text(
+                text=request.text_sample,
+                user_id=user_id,
+                provider="openai",
+                use_diffbot=True
+            )
+            operation = "learned"
         
-        # Consolidate schemas
-        consolidated_schema = await schema_service.consolidate_schema(
-            existing_schema.get("entities", []),
-            learned_schema
-        )
+        # FIXED: Get existing schema without neo4j_database parameter
+        existing_db_schema = await schema_service.get_existing_schema()
         
-        # Update graph schema
+        # Consolidate with database schema if it exists
+        if existing_db_schema.get("entities"):
+            consolidated_schema = await schema_service.consolidate_schema(
+                existing_db_schema.get("entities", []),
+                evolved_schema
+            )
+        else:
+            consolidated_schema = evolved_schema
+        
+        # Update graph schema with new evolution fields
         await db.execute(
             update(KnowledgeGraph)
             .where(KnowledgeGraph.id == graph_id)
-            .values(schema_config=consolidated_schema)
+            .values(
+                schema_config=consolidated_schema,
+                # Add new evolution tracking fields if they exist in your model
+                # evolution_mode=evolution_config.mode,
+                # last_schema_update=datetime.utcnow()
+            )
         )
         await db.commit()
         
-        return consolidated_schema
+        logger.info(f"Schema {operation} for graph {graph_id}: {len(consolidated_schema.get('entities', []))} entities, {len(consolidated_schema.get('relationships', []))} relationships")
+        
+        return {
+            "operation": operation,
+            "schema": consolidated_schema,
+            "entities_count": len(consolidated_schema.get("entities", [])),
+            "relationships_count": len(consolidated_schema.get("relationships", [])),
+            "evolution_mode": evolution_config.mode
+        }
         
     except Exception as e:
         logger.error(f"Schema learning failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to learn schema"
+            detail=f"Failed to learn schema: {str(e)}"
+        )
+
+@router.get("/graphs/{graph_id}/schema")
+async def get_graph_schema(
+    graph_id: UUID,
+    include_database_schema: bool = False,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Get current graph schema configuration"""
+    
+    # Verify graph ownership
+    result = await db.execute(
+        select(KnowledgeGraph).where(
+            KnowledgeGraph.id == graph_id,
+            KnowledgeGraph.user_id == UUID(user_id)
+        )
+    )
+    graph = result.scalar_one_or_none()
+    
+    if not graph:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Graph not found"
+        )
+    
+    response = {
+        "graph_id": graph_id,
+        "saved_schema": graph.schema_config or {"entities": [], "relationships": []},
+        # "evolution_mode": graph.evolution_mode or "guided"  # If field exists
+    }
+    
+    # Optionally include actual database schema
+    if include_database_schema:
+        try:
+            # FIXED: Remove neo4j_database parameter
+            db_schema = await schema_service.get_existing_schema()
+            response["database_schema"] = db_schema
+        except Exception as e:
+            logger.warning(f"Failed to get database schema: {e}")
+            response["database_schema"] = {"entities": [], "relationships": []}
+    
+    return response
+
+@router.put("/graphs/{graph_id}/schema")
+async def update_graph_schema(
+    graph_id: UUID,
+    request: SchemaUpdateRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Update graph schema configuration"""
+    
+    # Verify graph ownership
+    result = await db.execute(
+        select(KnowledgeGraph).where(
+            KnowledgeGraph.id == graph_id,
+            KnowledgeGraph.user_id == UUID(user_id)
+        )
+    )
+    graph = result.scalar_one_or_none()
+    
+    if not graph:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Graph not found"
+        )
+    
+    try:
+        # Validate schema format
+        if not isinstance(request.schema.get("entities"), list):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Schema entities must be a list"
+            )
+        
+        if not isinstance(request.schema.get("relationships"), list):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Schema relationships must be a list"
+            )
+        
+        # Apply schema size limits
+        evolution_config = SchemaEvolutionConfig()
+        validated_schema = entity_extractor._validate_evolved_schema(request.schema)
+        
+        # Update graph schema
+        await db.execute(
+            update(KnowledgeGraph)
+            .where(KnowledgeGraph.id == graph_id)
+            .values(
+                schema_config=validated_schema,
+                # evolution_mode=request.evolution_mode or "guided"  # If field exists
+            )
+        )
+        await db.commit()
+        
+        return {
+            "success": True,
+            "schema": validated_schema,
+            "evolution_mode": request.evolution_mode or "guided"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Schema update failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update schema: {str(e)}"
         )
 
 @router.post("/graphs/{graph_id}/optimize/similarities")

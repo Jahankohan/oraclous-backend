@@ -13,6 +13,25 @@ from app.services.vector_service import vector_service
 
 logger = get_logger(__name__)
 
+class SchemaEvolutionConfig:
+    """Configuration for schema evolution behavior"""
+    
+    STRICT_MODE = "strict"           # Never add new types
+    GUIDED_MODE = "guided"           # Add new types with LLM validation
+    PERMISSIVE_MODE = "permissive"   # Add any discovered types
+    
+    def __init__(
+        self, 
+        mode: str = "guided",
+        max_entities: int = 20,
+        max_relationships: int = 15,
+        evolution_threshold: float = 0.3  # Only evolve if 30%+ new content
+    ):
+        self.mode = mode
+        self.max_entities = max_entities
+        self.max_relationships = max_relationships
+        self.evolution_threshold = evolution_threshold
+
 class EntityExtractor:
     """Production-grade entity extractor following Neo4j Labs patterns"""
     
@@ -35,19 +54,38 @@ class EntityExtractor:
         text: str,
         user_id: str,
         graph_id: UUID,
-        domain_context: Optional[str] = None
+        domain_context: Optional[str] = None,
+        saved_schema: Optional[Dict[str, Any]] = None,
+        allow_schema_evolution: bool = True  # NEW parameter
     ) -> Tuple[List[GraphDocument], List[Dict[str, Any]]]:
         """
-        Extract both lexical and entity graphs following Neo4j Labs dual approach
+        Extract with schema evolution - can discover new entity/relationship types
         """
         
         # Step 1: Create lexical graph (document chunks)
         chunks = await self._create_enhanced_chunks(text, graph_id)
         
-        # Step 2: Dynamic schema evolution
-        evolved_schema = await self._evolve_schema_from_text(text, user_id, domain_context)
+        # Step 2: Determine extraction schema
+        if saved_schema and saved_schema.get("entities"):
+            if allow_schema_evolution:
+                # HYBRID APPROACH: Use saved schema + discover new types
+                evolved_schema = await self._evolve_schema_with_new_content(
+                    text=text,
+                    user_id=user_id,
+                    base_schema=saved_schema,
+                    domain_context=domain_context
+                )
+                logger.info(f"Schema evolved: {len(evolved_schema.get('entities', []))} entities (+{len(evolved_schema.get('entities', [])) - len(saved_schema.get('entities', []))} new)")
+            else:
+                # STRICT MODE: Only use saved schema
+                evolved_schema = saved_schema
+                logger.info(f"Using strict saved schema: {len(saved_schema.get('entities', []))} entities")
+        else:
+            # No saved schema, learn from scratch
+            evolved_schema = await self._evolve_schema_from_text(text, user_id, domain_context)
+            logger.info(f"New schema created: {len(evolved_schema.get('entities', []))} entities")
         
-        # Step 3: Extract entities using structured output
+        # Step 3: Extract entities using evolved schema
         entity_graph_docs = await self._extract_entities_with_structured_output(
             chunks, user_id, graph_id, evolved_schema
         )
@@ -60,8 +98,183 @@ class EntityExtractor:
             chunks, deduplicated_docs, graph_id
         )
         
+        # Step 6: Update saved schema if new types were found
+        if allow_schema_evolution and saved_schema:
+            await self._update_saved_schema_if_evolved(
+                graph_id, saved_schema, evolved_schema
+            )
+        
         return enhanced_docs, chunks
+
+    async def _evolve_schema_with_new_content(
+        self,
+        text: str,
+        user_id: str,
+        base_schema: Dict[str, Any],
+        domain_context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Evolve existing schema by discovering new entity/relationship types in new content"""
+        
+        try:
+            # Step 1: Analyze new text for potential new entity/relationship types
+            new_discoveries = await self._discover_new_schema_elements(
+                text=text,
+                user_id=user_id,
+                existing_schema=base_schema,
+                domain_context=domain_context
+            )
+            
+            # Step 2: Merge discovered types with existing schema
+            evolved_schema = self._merge_schema_discoveries(base_schema, new_discoveries)
+            
+            # Step 3: Validate and clean merged schema
+            return self._validate_evolved_schema(evolved_schema)
+            
+        except Exception as e:
+            logger.warning(f"Schema evolution failed, using base schema: {e}")
+            return base_schema
+
+    async def _discover_new_schema_elements(
+        self,
+        text: str,
+        user_id: str,
+        existing_schema: Dict[str, Any],
+        domain_context: Optional[str] = None
+    ) -> Dict[str, List[str]]:
+        """Discover new entity/relationship types not in existing schema"""
+        
+        if not llm_service.is_initialized():
+            return {"entities": [], "relationships": []}
+        
+        existing_entities = existing_schema.get("entities", [])
+        existing_relationships = existing_schema.get("relationships", [])
+        
+        discovery_prompt = f"""
+        Analyze this text for NEW entity types and relationship types that are NOT already covered by the existing schema.
+        
+        EXISTING SCHEMA:
+        - Entity types: {existing_entities}
+        - Relationship types: {existing_relationships}
+        
+        NEW TEXT:
+        {text[:2000]}...
+        
+        Find ONLY NEW types that would be valuable additions to the schema. Do not repeat existing types.
+        
+        Respond with JSON:
+        {{
+            "new_entities": ["Type1", "Type2"],
+            "new_relationships": ["NEW_RELATION_1", "NEW_RELATION_2"],
+            "reasoning": "Brief explanation of why these new types are needed"
+        }}
+        
+        If no new types are needed, return empty lists.
+        """
+        
+        try:
+            response = await llm_service.llm.ainvoke([
+                {"role": "system", "content": "You are a knowledge graph schema analyst. Return valid JSON only."},
+                {"role": "user", "content": discovery_prompt}
+            ])
+            
+            # Parse response
+            schema_text = response.content
+            if "```json" in schema_text:
+                schema_text = schema_text.split("```json")[1].split("```")[0]
+            elif "```" in schema_text:
+                schema_text = schema_text.split("```")[1].split("```")[0]
+            
+            discoveries = json.loads(schema_text)
+            
+            logger.info(f"Schema discovery: {len(discoveries.get('new_entities', []))} new entities, {len(discoveries.get('new_relationships', []))} new relationships")
+            
+            return {
+                "entities": discoveries.get("new_entities", []),
+                "relationships": discoveries.get("new_relationships", [])
+            }
+            
+        except Exception as e:
+            logger.warning(f"Schema discovery failed: {e}")
+            return {"entities": [], "relationships": []}
+
+    def _merge_schema_discoveries(
+        self,
+        base_schema: Dict[str, Any],
+        discoveries: Dict[str, List[str]]
+    ) -> Dict[str, Any]:
+        """Merge new discoveries with existing schema"""
+        
+        # Combine entities
+        all_entities = set(base_schema.get("entities", []))
+        all_entities.update(discoveries.get("entities", []))
+        
+        # Combine relationships
+        all_relationships = set(base_schema.get("relationships", []))
+        all_relationships.update(discoveries.get("relationships", []))
+        
+        return {
+            "entities": sorted(list(all_entities)),
+            "relationships": sorted(list(all_relationships))
+        }
     
+    def _validate_evolved_schema(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate evolved schema and apply limits"""
+        
+        entities = schema.get("entities", [])
+        relationships = schema.get("relationships", [])
+        
+        # Limit schema size to prevent bloat
+        MAX_ENTITIES = 20
+        MAX_RELATIONSHIPS = 15
+        
+        if len(entities) > MAX_ENTITIES:
+            logger.warning(f"Schema has {len(entities)} entities, limiting to {MAX_ENTITIES}")
+            entities = entities[:MAX_ENTITIES]
+        
+        if len(relationships) > MAX_RELATIONSHIPS:
+            logger.warning(f"Schema has {len(relationships)} relationships, limiting to {MAX_RELATIONSHIPS}")
+            relationships = relationships[:MAX_RELATIONSHIPS]
+        
+        return {
+            "entities": entities,
+            "relationships": relationships
+        }
+
+    async def _update_saved_schema_if_evolved(
+        self,
+        graph_id: UUID,
+        original_schema: Dict[str, Any],
+        evolved_schema: Dict[str, Any]
+    ) -> None:
+        """Update the saved schema in database if it evolved"""
+        
+        # Check if schema actually changed
+        original_entities = set(original_schema.get("entities", []))
+        evolved_entities = set(evolved_schema.get("entities", []))
+        
+        original_relationships = set(original_schema.get("relationships", []))
+        evolved_relationships = set(evolved_schema.get("relationships", []))
+        
+        if original_entities != evolved_entities or original_relationships != evolved_relationships:
+            try:
+                # Update schema in database
+                from app.core.database import async_session_maker
+                from app.models.graph import KnowledgeGraph
+                from sqlalchemy import update
+                
+                async with async_session_maker() as db:
+                    await db.execute(
+                        update(KnowledgeGraph)
+                        .where(KnowledgeGraph.id == graph_id)
+                        .values(schema_config=evolved_schema)
+                    )
+                    await db.commit()
+                    
+                    logger.info(f"Updated schema for graph {graph_id}: +{len(evolved_entities - original_entities)} entities, +{len(evolved_relationships - original_relationships)} relationships")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to update saved schema: {e}")
+
     async def _create_enhanced_chunks(
         self, 
         text: str, 
@@ -98,7 +311,7 @@ class EntityExtractor:
             enhanced_chunks.append(chunk_data)
         
         return enhanced_chunks
-    
+
     async def learn_schema_from_text(
         self, 
         text: str, 
@@ -298,7 +511,6 @@ class EntityExtractor:
         self.evolved_schemas[schema_key] = evolved_schema
         
         return evolved_schema
-
 
     async def _refine_schema_with_context(
         self,

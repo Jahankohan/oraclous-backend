@@ -138,52 +138,52 @@ async def get_entity_details(
             detail="Failed to retrieve entity details"
         )
 
-@router.get("/graphs/{graph_id}/schema")
-async def get_graph_schema(
-    graph_id: UUID,
-    user_id: str = Depends(get_current_user_id)
-):
-    """Get the schema of a knowledge graph"""
+# @router.get("/graphs/{graph_id}/schema")
+# async def get_graph_schema(
+#     graph_id: UUID,
+#     user_id: str = Depends(get_current_user_id)
+# ):
+#     """Get the schema of a knowledge graph"""
     
-    try:
-        # Get node labels (entity types)
-        labels_query = """
-        MATCH (n)
-        WHERE n.graph_id = $graph_id
-        RETURN DISTINCT labels(n) as labels
-        """
+#     try:
+#         # Get node labels (entity types)
+#         labels_query = """
+#         MATCH (n)
+#         WHERE n.graph_id = $graph_id
+#         RETURN DISTINCT labels(n) as labels
+#         """
         
-        # Get relationship types
-        rels_query = """
-        MATCH ()-[r]->()
-        WHERE r.graph_id = $graph_id
-        RETURN DISTINCT type(r) as relationship_type
-        """
+#         # Get relationship types
+#         rels_query = """
+#         MATCH ()-[r]->()
+#         WHERE r.graph_id = $graph_id
+#         RETURN DISTINCT type(r) as relationship_type
+#         """
         
-        params = {"graph_id": str(graph_id)}
+#         params = {"graph_id": str(graph_id)}
         
-        labels_result = await neo4j_client.execute_query(labels_query, params)
-        rels_result = await neo4j_client.execute_query(rels_query, params)
+#         labels_result = await neo4j_client.execute_query(labels_query, params)
+#         rels_result = await neo4j_client.execute_query(rels_query, params)
         
-        # Extract unique entity types
-        entity_types = set()
-        for record in labels_result:
-            for label in record["labels"]:
-                entity_types.add(label)
+#         # Extract unique entity types
+#         entity_types = set()
+#         for record in labels_result:
+#             for label in record["labels"]:
+#                 entity_types.add(label)
         
-        # Extract relationship types
-        relationship_types = [record["relationship_type"] for record in rels_result]
+#         # Extract relationship types
+#         relationship_types = [record["relationship_type"] for record in rels_result]
         
-        return {
-            "entity_types": sorted(list(entity_types)),
-            "relationship_types": sorted(relationship_types),
-            "node_count": len(entity_types),
-            "relationship_count": len(relationship_types)
-        }
+#         return {
+#             "entity_types": sorted(list(entity_types)),
+#             "relationship_types": sorted(relationship_types),
+#             "node_count": len(entity_types),
+#             "relationship_count": len(relationship_types)
+#         }
         
-    except Exception as e:
-        logger.error(f"Error getting schema for graph {graph_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve graph schema"
-        )
+#     except Exception as e:
+#         logger.error(f"Error getting schema for graph {graph_id}: {e}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="Failed to retrieve graph schema"
+#         )
