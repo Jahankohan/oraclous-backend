@@ -115,6 +115,7 @@ class LLMService:
         """Configure LLM transformer with dynamic schema"""
         
         if not self.llm:
+            logger.warning("LLM not initialized, cannot set dynamic schema")
             return
         
         # Create new transformer with evolved schema
@@ -122,14 +123,15 @@ class LLMService:
         
         self.graph_transformer = LLMGraphTransformer(
             llm=self.llm,
-            allowed_nodes=schema.get("entities", []),
-            allowed_relationships=schema.get("relationships", []),
+            allowed_nodes=schema.get("entities", []) if schema.get("entities") else None,
+            allowed_relationships=schema.get("relationships", []) if schema.get("relationships") else None,
             strict_mode=False,  # Allow creative discovery within boundaries
             node_properties=["name", "description", "type", "confidence"],
             relationship_properties=["confidence", "source"]
         )
         
-        logger.info(f"Updated schema with {len(schema.get('entities', []))} entity types and {len(schema.get('relationships', []))} relationship types")
+        logger.info(f"Updated LLM schema with {len(schema.get('entities', []))} entity types and {len(schema.get('relationships', []))} relationship types")
+
 
     
     def is_initialized(self) -> bool:

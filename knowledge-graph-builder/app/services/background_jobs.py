@@ -1,9 +1,7 @@
 from celery import Celery
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
-from typing import Dict, Any
-import asyncio
-import os
+from typing import Dict, Any, List
 from datetime import datetime
 from uuid import UUID
 
@@ -12,7 +10,9 @@ from app.core.database import async_session_maker
 from app.core.neo4j_client import neo4j_client
 from app.models.graph import IngestionJob, KnowledgeGraph
 from app.services.entity_extractor import entity_extractor
-from app.services.graph_service import graph_service
+from app.services.enhanced_graph_service import enhanced_graph_service
+from app.services.vector_service import vector_service
+from app.services.embedding_service import embedding_service
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -69,9 +69,21 @@ def process_embedding_generation_job(self, graph_id: str, user_id: str):
     finally:
         loop.close()
 
+@celery_app.task(bind=True)
+def optimize_all_graphs(self):
+    """Background task to optimize all graphs periodically"""
+    import asyncio
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        return loop.run_until_complete(_optimize_all_graphs_async(self))
+    finally:
+        loop.close()
 
 async def _process_ingestion_job_async(task, job_id: str, user_id: str):
-    """Enhanced ingestion processing with dual graph approach"""
+    """Enhanced async ingestion processing with dual graph"""
     
     async with async_session_maker() as db:
         try:
@@ -85,35 +97,48 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
                 logger.error(f"Ingestion job {job_id} not found")
                 return {"status": "error", "message": "Job not found"}
             
+            # Get the associated graph
+            result = await db.execute(
+                select(KnowledgeGraph).where(KnowledgeGraph.id == job.graph_id)
+            )
+            graph = result.scalar_one_or_none()
+            
+            if not graph:
+                logger.error(f"Graph {job.graph_id} not found")
+                await _update_job_status(db, job_id, "failed", "Graph not found")
+                return {"status": "error", "message": "Graph not found"}
+            
             # Update job status to processing
             await _update_job_status(db, job_id, "processing", None, 10)
             task.update_state(state="PROGRESS", meta={"progress": 10})
             
-            # Initialize services
+            # Initialize Neo4j connection
             await neo4j_client.connect()
             
-            # Step 1: Extract using dual graph approach (NEW)
-            logger.info(f"Starting enhanced dual graph extraction for job {job_id}")
-            task.update_state(state="PROGRESS", meta={"progress": 20, "status": "Analyzing document structure"})
+            # Step 1: Extract using new dual graph approach
+            logger.info(f"Starting dual graph extraction for job {job_id}")
+            task.update_state(state="PROGRESS", meta={"progress": 30, "status": "Analyzing document structure"})
             
-            entity_graph_docs, lexical_chunks = await production_entity_extractor.extract_with_dual_graph(
-                text=job.content,
+            entity_graph_docs, lexical_chunks = await entity_extractor.extract_with_dual_graph(
+                text=job.source_content,
                 user_id=user_id,
                 graph_id=job.graph_id,
-                domain_context=job.metadata.get("domain") if job.metadata else None
+                domain_context=graph.schema_config.get("domain") if graph.schema_config else None
             )
             
             # Step 2: Store lexical graph (document chunks)
-            task.update_state(state="PROGRESS", meta={"progress": 40, "status": "Storing document chunks"})
+            task.update_state(state="PROGRESS", meta={"progress": 50, "status": "Storing document chunks"})
             
-            chunks_stored = await vector_service.create_text_chunks(
-                graph_id=job.graph_id,
-                text_chunks=lexical_chunks
-            )
+            chunks_stored = 0
+            if lexical_chunks:
+                chunks_stored = await vector_service.create_text_chunks(
+                    graph_id=job.graph_id,
+                    text_chunks=lexical_chunks
+                )
             logger.info(f"Stored {chunks_stored} document chunks")
             
             # Step 3: Store entity graph (entities + relationships)
-            task.update_state(state="PROGRESS", meta={"progress": 60, "status": "Storing entities and relationships"})
+            task.update_state(state="PROGRESS", meta={"progress": 70, "status": "Storing entities and relationships"})
             
             entities_count, relationships_count = await enhanced_graph_service.store_graph_documents_with_embeddings(
                 graph_id=job.graph_id,
@@ -121,22 +146,27 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
                 user_id=user_id,
                 generate_embeddings=True
             )
+
+            similarity_count = 0
+            if settings.ENABLE_SIMILARITY_PROCESSING:  # Config flag
+                task.update_state(state="PROGRESS", meta={"progress": 80, "status": "Creating similarity relationships"})
+                
+                similarity_count = await _create_similarity_relationships(
+                    graph_id=job.graph_id,
+                    chunks=lexical_chunks,
+                    entities_count=entities_count
+                )
+                logger.info(f"Created {similarity_count} similarity relationships")
             
-            # Step 4: Create cross-graph similarity relationships (NEW)
-            task.update_state(state="PROGRESS", meta={"progress": 80, "status": "Creating similarity relationships"})
+            # NEW Step 5: Community detection and cleanup (OPTIONAL)
+            communities_found = 0
+            if settings.ENABLE_COMMUNITY_DETECTION:  # Config flag
+                task.update_state(state="PROGRESS", meta={"progress": 90, "status": "Graph optimization"})
+                
+                communities_found = await _detect_communities_and_cleanup(job.graph_id)
+                logger.info(f"Detected {communities_found} communities")
             
-            similarity_count = await _create_similarity_relationships(
-                graph_id=job.graph_id,
-                chunks=lexical_chunks,
-                entities_count=entities_count
-            )
-            
-            # Step 5: Community detection and cleanup (NEW)
-            task.update_state(state="PROGRESS", meta={"progress": 90, "status": "Graph optimization"})
-            
-            communities_found = await _detect_communities_and_cleanup(job.graph_id)
-            
-            # Step 6: Update job completion
+            # Step 6: Update job completion with new metrics
             await db.execute(
                 update(IngestionJob)
                 .where(IngestionJob.id == UUID(job_id))
@@ -160,7 +190,7 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
                 "relationships_count": relationships_count,
                 "chunks_count": chunks_stored,
                 "similarity_relationships": similarity_count,
-                "communities": communities_found
+                "communities_detected": communities_found
             }
             
         except Exception as e:
@@ -213,7 +243,7 @@ async def _create_chunk_similarities(graph_id: UUID, chunks: List[Dict[str, Any]
                 continue
             
             # Calculate similarity
-            similarity = production_entity_extractor._cosine_similarity(
+            similarity = entity_extractor._cosine_similarity(
                 chunk1["embedding"], 
                 chunk2["embedding"]
             )
@@ -454,6 +484,81 @@ async def _process_embedding_generation_async(task, graph_id: str, user_id: str)
                 })
             return {"status": "error", "message": str(e)}
 
+async def _optimize_all_graphs_async(task):
+    """Optimize all graphs that haven't been optimized recently"""
+    
+    async with async_session_maker() as db:
+        try:
+            # Find graphs that need optimization (no optimization in last 7 days)
+            from datetime import timedelta
+            week_ago = datetime.utcnow() - timedelta(days=7)
+            
+            result = await db.execute(
+                select(KnowledgeGraph).where(
+                    or_(
+                        KnowledgeGraph.last_optimized.is_(None),
+                        KnowledgeGraph.last_optimized < week_ago
+                    )
+                )
+            )
+            graphs = result.scalars().all()
+            
+            total_optimized = 0
+            
+            for i, graph in enumerate(graphs):
+                try:
+                    logger.info(f"Optimizing graph {graph.id} ({i+1}/{len(graphs)})")
+                    
+                    # Get chunks for similarity processing
+                    chunks_query = """
+                    MATCH (c:DocumentChunk {graph_id: $graph_id})
+                    RETURN c.id as id, c.embedding as embedding
+                    """
+                    
+                    chunks_result = await neo4j_client.execute_query(chunks_query, {
+                        "graph_id": str(graph.id)
+                    })
+                    
+                    chunks = [{"id": r["id"], "embedding": r["embedding"]} for r in chunks_result if r["embedding"]]
+                    
+                    # Create similarities
+                    similarity_count = await _create_similarity_relationships(
+                        graph_id=graph.id,
+                        chunks=chunks,
+                        entities_count=graph.node_count
+                    )
+                    
+                    # Detect communities
+                    communities_found = await _detect_communities_and_cleanup(graph.id)
+                    
+                    # Update graph optimization timestamp
+                    await db.execute(
+                        update(KnowledgeGraph)
+                        .where(KnowledgeGraph.id == graph.id)
+                        .values(
+                            last_optimized=datetime.utcnow(),
+                            similarity_relationships=similarity_count,
+                            communities_count=communities_found
+                        )
+                    )
+                    
+                    total_optimized += 1
+                    
+                except Exception as e:
+                    logger.error(f"Failed to optimize graph {graph.id}: {e}")
+                    continue
+            
+            await db.commit()
+            
+            return {
+                "status": "completed",
+                "graphs_processed": len(graphs),
+                "graphs_optimized": total_optimized
+            }
+            
+        except Exception as e:
+            logger.error(f"Batch optimization failed: {e}")
+            return {"status": "error", "message": str(e)}
 
 async def _update_job_status(
     db: AsyncSession, 

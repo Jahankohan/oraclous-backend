@@ -354,5 +354,32 @@ class EnhancedGraphService:
                 "embedding_coverage": 0.0
             }
 
+    async def delete_graph_data(self, graph_id: UUID):
+        """Delete all nodes and relationships for a specific graph"""
+        try:
+            # Delete all relationships first
+            rel_query = """
+            MATCH ()-[r]->()
+            WHERE r.graph_id = $graph_id
+            WHERE r.graph_id = $graph_id
+            DELETE r
+            """
+            
+            # Delete all nodes
+            node_query = """
+            MATCH (n)
+            WHERE n.graph_id = $graph_id
+            DELETE n
+            """
+            
+            await neo4j_client.execute_write_query(rel_query, {"graph_id": str(graph_id)})
+            await neo4j_client.execute_write_query(node_query, {"graph_id": str(graph_id)})
+            
+            logger.info(f"Deleted all data for graph {graph_id}")
+            
+        except Exception as e:
+            logger.error(f"Error deleting graph data for {graph_id}: {e}")
+            raise
+
 # Global enhanced graph service
 enhanced_graph_service = EnhancedGraphService()

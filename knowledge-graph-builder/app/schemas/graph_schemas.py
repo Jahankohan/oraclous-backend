@@ -41,20 +41,24 @@ class IngestDataRequest(BaseModel):
 
 class IngestionJobResponse(BaseModel):
     """Schema for ingestion job response"""
-    model_config = ConfigDict(from_attributes=True)
-    
     id: UUID
     graph_id: UUID
-    source_type: str
+    source_type: Optional[str]
     status: str
     progress: int
     error_message: Optional[str]
     extracted_entities: int
     extracted_relationships: int
-    credits_consumed: str
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
+    processed_chunks: int = 0
+    similarity_relationships: int = 0
+    communities_detected: int = 0
+    error_message: Optional[str] = None
     created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
 
 class HealthResponse(BaseModel):
     """Health check response schema"""

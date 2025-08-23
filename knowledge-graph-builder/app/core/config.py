@@ -31,7 +31,11 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
     DIFFBOT_API_KEY: Optional[str] = None
-    
+
+    # Add config flags to control these features
+    ENABLE_SIMILARITY_PROCESSING: bool = True
+    ENABLE_COMMUNITY_DETECTION: bool = True
+
     # Performance Settings
     MAX_CONCURRENT_EXTRACTIONS: int = 5
     BATCH_SIZE: int = 100

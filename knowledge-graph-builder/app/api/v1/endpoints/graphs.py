@@ -12,10 +12,11 @@ from app.schemas.graph_schemas import (
     GraphCreate, GraphUpdate, GraphResponse, 
     IngestDataRequest, IngestionJobResponse
 )
-from app.services.background_jobs import process_ingestion_job
+from app.core.neo4j_client import neo4j_client
+from app.services.background_jobs import process_ingestion_job, _create_similarity_relationships, _detect_communities_and_cleanup
 from app.services.entity_extractor import entity_extractor
 from app.services.schema_service import schema_service
-from app.services.graph_service import graph_service
+from app.services.enhanced_graph_service import enhanced_graph_service
 from app.core.logging import get_logger
 
 router = APIRouter()
@@ -154,7 +155,7 @@ async def delete_graph(
     
     # Delete Neo4j data
     try:
-        await graph_service.delete_graph_data(graph_id)
+        await enhanced_graph_service.delete_graph_data(graph_id)
     except Exception as e:
         logger.error(f"Failed to delete Neo4j data: {e}")
         # Continue with metadata deletion even if Neo4j cleanup fails
@@ -245,9 +246,9 @@ async def ingest_data(
     return job
 
 async def _process_sync_ingestion(job_id: str, user_id: str, db: AsyncSession):
-    """Fallback sync processing for development"""
+    """Fallback sync processing for development with new architecture"""
     try:
-        from app.services.background_jobs import _process_ingestion_job_async
+        from app.services.background_jobs import _process_ingestion_job_async  # UPDATED
         await _process_ingestion_job_async(None, job_id, user_id)
     except Exception as e:
         logger.error(f"Sync ingestion processing failed: {e}")
@@ -383,3 +384,88 @@ async def learn_graph_schema(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to learn schema"
         )
+
+@router.post("/graphs/{graph_id}/optimize/similarities")
+async def create_similarity_relationships(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Create similarity relationships for existing graph"""
+    
+    # Verify graph ownership
+    result = await db.execute(
+        select(KnowledgeGraph).where(
+            KnowledgeGraph.id == graph_id,
+            KnowledgeGraph.user_id == UUID(user_id)
+        )
+    )
+    graph = result.scalar_one_or_none()
+    
+    if not graph:
+        raise HTTPException(status_code=404, detail="Graph not found")
+    
+    try:
+        # Get chunks for this graph
+        chunks_query = """
+        MATCH (c:DocumentChunk {graph_id: $graph_id})
+        RETURN c.id as id, c.embedding as embedding
+        """
+        
+        result = await neo4j_client.execute_query(chunks_query, {
+            "graph_id": str(graph_id)
+        })
+        
+        chunks = [{"id": r["id"], "embedding": r["embedding"]} for r in result if r["embedding"]]
+        
+        # Create similarities
+        similarity_count = await _create_similarity_relationships(
+            graph_id=graph_id,
+            chunks=chunks,
+            entities_count=graph.node_count
+        )
+        
+        return {
+            "status": "success",
+            "similarity_relationships_created": similarity_count,
+            "message": f"Created {similarity_count} similarity relationships"
+        }
+        
+    except Exception as e:
+        logger.error(f"Similarity creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/graphs/{graph_id}/optimize/communities")
+async def detect_communities(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Detect communities and cleanup graph"""
+    
+    # Verify graph ownership
+    result = await db.execute(
+        select(KnowledgeGraph).where(
+            KnowledgeGraph.id == graph_id,
+            KnowledgeGraph.user_id == UUID(user_id)
+        )
+    )
+    graph = result.scalar_one_or_none()
+    
+    if not graph:
+        raise HTTPException(status_code=404, detail="Graph not found")
+    
+    try:
+        communities_found = await _detect_communities_and_cleanup(graph_id)
+        
+        return {
+            "status": "success",
+            "communities_detected": communities_found,
+            "message": f"Detected {communities_found} communities and cleaned up graph"
+        }
+        
+    except Exception as e:
+        logger.error(f"Community detection failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

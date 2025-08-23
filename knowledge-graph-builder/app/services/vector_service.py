@@ -136,25 +136,29 @@ class VectorService:
         self, 
         graph_id: UUID,
         text_chunks: List[Dict[str, Any]]
-    ):
-        """Create text chunk nodes with embeddings"""
+    ) -> int:
+        """Create text chunk nodes with embeddings in Neo4j"""
+        
+        if not text_chunks:
+            return 0
         
         query = """
         UNWIND $chunks as chunk
-        CREATE (c:Chunk {
+        CREATE (c:DocumentChunk {
             id: chunk.id,
             text: chunk.text,
-            graph_id: $graph_id,
-            source: chunk.source,
-            embedding: chunk.embedding,
-            chunk_index: chunk.chunk_index
+            graph_id: chunk.graph_id,
+            chunk_index: chunk.chunk_index,
+            char_start: chunk.char_start,
+            char_end: chunk.char_end,
+            word_count: chunk.word_count,
+            embedding: chunk.embedding
         })
         RETURN count(c) as created
         """
         
         try:
             result = await neo4j_client.execute_write_query(query, {
-                "graph_id": str(graph_id),
                 "chunks": text_chunks
             })
             

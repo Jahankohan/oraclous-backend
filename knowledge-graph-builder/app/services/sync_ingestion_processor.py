@@ -43,17 +43,21 @@ def process_job_sync(task, job_id: str, user_id: str):
                 )
                 
                 if result["success"]:
-                    # Update success
+                    # Update success with chunk count
                     update_job_status_sync(db, job_id, "completed", None, 100, 
-                                         result["entities"], result["relationships"])
+                                        result["entities"], result["relationships"], 
+                                        result.get("chunks", 0))  # NEW
                     
                     # Update graph counts
                     graph.node_count += result["entities"]
                     graph.relationship_count += result["relationships"]
+                    # Note: We might want to add chunk_count to KnowledgeGraph model too
                     db.commit()
                     
-                    return {"status": "completed", "entities_count": result["entities"], 
-                           "relationships_count": result["relationships"]}
+                    return {"status": "completed", 
+                        "entities_count": result["entities"], 
+                        "relationships_count": result["relationships"],
+                        "chunks_count": result.get("chunks", 0)}  # NEW
                 else:
                     update_job_status_sync(db, job_id, "failed", result["error"])
                     return {"status": "error", "message": result["error"]}
@@ -67,8 +71,9 @@ def process_job_sync(task, job_id: str, user_id: str):
             return {"status": "error", "message": str(e)}
 
 def update_job_status_sync(db, job_id: str, status: str, error: str = None, 
-                          progress: int = None, entities: int = None, relationships: int = None):
-    """Update job status synchronously"""
+                          progress: int = None, entities: int = None, 
+                          relationships: int = None, chunks: int = None):  # NEW parameter
+    """Update job status synchronously with new chunk tracking"""
     job = db.get(IngestionJob, UUID(job_id))
     if job:
         job.status = status
@@ -80,6 +85,8 @@ def update_job_status_sync(db, job_id: str, status: str, error: str = None,
             job.extracted_entities = entities
         if relationships is not None:
             job.extracted_relationships = relationships
+        if chunks is not None:
+            job.processed_chunks = chunks  # NEW field
         if status == "processing" and progress == 10:
             job.started_at = datetime.utcnow()
         if status == "completed":
@@ -87,13 +94,33 @@ def update_job_status_sync(db, job_id: str, status: str, error: str = None,
         db.commit()
 
 async def run_extraction(content: str, user_id: str, graph_id: UUID, schema: dict):
-    """Run the actual extraction logic"""
+    """Run the actual extraction logic with new dual graph approach"""
     try:
+        # Import the new entity extractor
         from app.services.entity_extractor import entity_extractor
-        from app.services.graph_service import graph_service
+        from app.services.vector_service import vector_service
         from app.core.neo4j_client import neo4j_client
         
-        # Create fresh Neo4j connection for this task
+        # Initialize Neo4j connection
+        await neo4j_client.connect()
+        
+        # Use new dual graph extraction method
+        entity_graph_docs, lexical_chunks = await entity_extractor.extract_with_dual_graph(
+            text=content,
+            user_id=user_id,
+            graph_id=graph_id,
+            domain_context=schema.get("domain") if schema else None
+        )
+        
+        # Store lexical graph (document chunks) - NEW
+        chunks_stored = 0
+        if lexical_chunks:
+            chunks_stored = await vector_service.create_text_chunks(
+                graph_id=graph_id,
+                text_chunks=lexical_chunks
+            )
+        
+        # Store entity graph with direct driver (keep existing pattern)
         from neo4j import AsyncGraphDatabase
         from app.core.config import settings
         
@@ -103,19 +130,13 @@ async def run_extraction(content: str, user_id: str, graph_id: UUID, schema: dic
         )
         
         try:
-            # Test connection
             await driver.verify_connectivity()
 
-            graph_documents = await entity_extractor.extract_entities_hybrid(
-                text=content, user_id=user_id, graph_id=graph_id, schema=schema
-            )
-            
-            # Store documents with fresh driver
             entities_count = 0
             relationships_count = 0
             
-            for graph_doc in graph_documents:
-                # FILTER OUT ORPHAN NODES
+            for graph_doc in entity_graph_docs:
+                # Filter out orphan nodes (keep existing logic)
                 connected_node_ids = set()
                 for rel in graph_doc.relationships:
                     connected_node_ids.add(rel.source.id)
@@ -137,15 +158,17 @@ async def run_extraction(content: str, user_id: str, graph_id: UUID, schema: dic
             return {
                 "success": True, 
                 "entities": entities_count, 
-                "relationships": relationships_count
+                "relationships": relationships_count,
+                "chunks": chunks_stored  # NEW field
             }
             
         finally:
             await driver.close()
         
     except Exception as e:
-        logger.error(f"Extraction failed: {e}")
+        logger.error(f"Enhanced extraction failed: {e}")
         return {"success": False, "error": str(e)}
+
 
 async def store_node_direct(driver, node, graph_id: str):
     """Store node directly with driver"""
