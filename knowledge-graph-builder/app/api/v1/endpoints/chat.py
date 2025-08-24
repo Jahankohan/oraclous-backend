@@ -1,19 +1,78 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete as sql_delete
-from typing import List, Optional
+from sqlalchemy import select, update
+from typing import List, Optional, Dict, Any
 from uuid import UUID, uuid4
-from pydantic import BaseModel
 from datetime import datetime
+from pydantic import BaseModel, Field
 
 from app.api.dependencies import get_current_user_id, get_database
 from app.models.graph import KnowledgeGraph
 from app.models.chat import ChatSession, ChatMessage
-from app.services.chat_service import chat_service
+from app.services.enhanced_chat_service import graph_intelligent_chat
+from app.services.schema_service import schema_service
 from app.core.logging import get_logger
+import json
+import asyncio
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+# ==================== REQUEST/RESPONSE MODELS ====================
+
+class AdvancedChatRequest(BaseModel):
+    """Enhanced chat request with graph intelligence parameters"""
+    message: str = Field(..., min_length=1, description="User's question or message")
+    
+    # Reasoning configuration
+    reasoning_mode: str = Field("comprehensive", description="comprehensive, focused, exploratory")
+    include_reasoning_chain: bool = Field(True, description="Include step-by-step reasoning")
+    max_context_tokens: int = Field(4000, description="Maximum context size")
+    
+    # Session management
+    session_id: Optional[str] = Field(None, description="Chat session ID for continuity")
+    message_id: Optional[str] = Field(None, description="Unique message ID")
+    
+    # Response preferences
+    include_related_entities: bool = Field(True, description="Include related entities in response")
+    include_followup_suggestions: bool = Field(True, description="Include suggested follow-up questions")
+    include_performance_metrics: bool = Field(False, description="Include processing performance data")
+
+class AdvancedChatResponse(BaseModel):
+    """Enhanced chat response with rich graph intelligence"""
+    # Core response
+    answer: str
+    success: bool
+    grounded: bool
+    reasoning_mode: str
+    
+    # Context information
+    context_summary: Dict[str, Any]
+    confidence_scores: Dict[str, float]
+    
+    # Enhanced features
+    related_entities: Optional[List[Dict[str, Any]]] = []
+    suggested_followup: Optional[List[str]] = []
+    graph_insights: Optional[Dict[str, Any]] = {}
+    
+    # Transparency
+    reasoning_chain: Optional[List[str]] = []
+    conversation_insight: Optional[Dict[str, Any]] = {}
+    
+    # Performance (optional)
+    performance: Optional[Dict[str, Any]] = {}
+    
+    # Session management
+    session_id: str
+    message_id: str
+
+class ReasoningExplanationResponse(BaseModel):
+    """Response explaining how the system reasons about a query"""
+    query_analysis: Dict[str, Any]
+    graph_analysis_steps: List[str]
+    context_sources: Dict[str, Any]
+    confidence_assessment: Dict[str, float]
+    reasoning_strategy: str
 
 class ChatRequest(BaseModel):
     message: str
@@ -52,6 +111,297 @@ class ChatMessageResponse(BaseModel):
     content: str
     chat_metadata: Optional[dict] = None
     created_at: datetime
+
+# ==================== ADVANCED CHAT ENDPOINTS ====================
+
+@router.post("/graphs/{graph_id}/chat/advanced", response_model=AdvancedChatResponse)
+async def advanced_chat_with_graph(
+    graph_id: UUID,
+    request: AdvancedChatRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Advanced chat with graph intelligence and reasoning"""
+    
+    try:
+        # Verify graph ownership
+        result = await db.execute(
+            select(KnowledgeGraph).where(
+                KnowledgeGraph.id == graph_id,
+                KnowledgeGraph.user_id == UUID(user_id)
+            )
+        )
+        graph = result.scalar_one_or_none()
+        
+        if not graph:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Graph not found"
+            )
+        
+        # Initialize chat service if needed
+        if graph_intelligent_chat.current_graph_id != graph_id:
+            success = await graph_intelligent_chat.initialize_for_graph(
+                graph_id, graph.schema_config or {}
+            )
+            if not success:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to initialize chat service"
+                )
+        
+        # Generate session and message IDs if not provided
+        session_id = request.session_id or str(uuid4())
+        message_id = request.message_id or str(uuid4())
+        
+        # Create session if it doesn't exist
+        await _ensure_chat_session(db, session_id, graph_id, user_id)
+        
+        # Process query with advanced reasoning
+        chat_result = await graph_intelligent_chat.chat_with_advanced_reasoning(
+            query=request.message,
+            reasoning_mode=request.reasoning_mode,
+            max_context_tokens=request.max_context_tokens,
+            include_reasoning_chain=request.include_reasoning_chain
+        )
+        
+        # Save chat messages to database
+        await _save_chat_messages(db, session_id, request.message, chat_result, message_id)
+        
+        # Prepare response
+        response = AdvancedChatResponse(
+            answer=chat_result["answer"],
+            success=chat_result["success"],
+            grounded=chat_result.get("grounded", False),
+            reasoning_mode=chat_result["reasoning_mode"],
+            context_summary=chat_result["context_summary"],
+            confidence_scores=chat_result["confidence_scores"],
+            reasoning_chain=chat_result["reasoning_chain"] if request.include_reasoning_chain else [],
+            conversation_insight=chat_result["conversation_insight"],
+            session_id=session_id,
+            message_id=message_id
+        )
+        
+        # Add optional fields based on request preferences
+        if request.include_related_entities:
+            response.related_entities = chat_result.get("related_entities", [])
+        
+        if request.include_followup_suggestions:
+            response.suggested_followup = chat_result.get("suggested_followup", [])
+        
+        if request.include_performance_metrics:
+            response.performance = chat_result.get("performance", {})
+        
+        response.graph_insights = chat_result.get("graph_insights", {})
+        
+        logger.info(f"Advanced chat completed for graph {graph_id}, grounded: {response.grounded}")
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Advanced chat failed for graph {graph_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Chat processing failed: {str(e)}"
+        )
+
+@router.post("/graphs/{graph_id}/chat/explain", response_model=ReasoningExplanationResponse)
+async def explain_chat_reasoning(
+    graph_id: UUID,
+    query: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Explain how the system would reason about a query without processing it"""
+    
+    try:
+        # Verify graph ownership
+        result = await db.execute(
+            select(KnowledgeGraph).where(
+                KnowledgeGraph.id == graph_id,
+                KnowledgeGraph.user_id == UUID(user_id)
+            )
+        )
+        graph = result.scalar_one_or_none()
+        
+        if not graph:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Graph not found"
+            )
+        
+        # Initialize chat service if needed
+        if graph_intelligent_chat.current_graph_id != graph_id:
+            await graph_intelligent_chat.initialize_for_graph(
+                graph_id, graph.schema_config or {}
+            )
+        
+        # Get reasoning explanation
+        explanation = await graph_intelligent_chat.explain_reasoning(query)
+        
+        if "error" in explanation:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=explanation["error"]
+            )
+        
+        return ReasoningExplanationResponse(**explanation)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Reasoning explanation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to explain reasoning: {str(e)}"
+        )
+
+@router.get("/graphs/{graph_id}/chat/conversation-summary")
+async def get_conversation_summary(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Get summary of current conversation and reasoning patterns"""
+    
+    try:
+        # Verify graph ownership
+        result = await db.execute(
+            select(KnowledgeGraph).where(
+                KnowledgeGraph.id == graph_id,
+                KnowledgeGraph.user_id == UUID(user_id)
+            )
+        )
+        graph = result.scalar_one_or_none()
+        
+        if not graph:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Graph not found"
+            )
+        
+        # Get conversation summary from chat service
+        if graph_intelligent_chat.current_graph_id == graph_id:
+            summary = graph_intelligent_chat.get_conversation_summary()
+        else:
+            summary = {"message": "No active conversation for this graph"}
+        
+        # Add database session information
+        sessions_result = await db.execute(
+            select(ChatSession).where(ChatSession.graph_id == graph_id)
+            .order_by(ChatSession.last_message_at.desc())
+            .limit(5)
+        )
+        recent_sessions = sessions_result.scalars().all()
+        
+        summary["recent_sessions"] = [
+            {
+                "id": str(session.id),
+                "name": session.session_name,
+                "last_message_at": session.last_message_at,
+                "created_at": session.created_at
+            }
+            for session in recent_sessions
+        ]
+        
+        return summary
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get conversation summary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get conversation summary: {str(e)}"
+        )
+
+# ==================== WEBSOCKET STREAMING CHAT ====================
+
+@router.websocket("/graphs/{graph_id}/chat/stream")
+async def stream_chat_with_graph(
+    websocket: WebSocket,
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id)
+):
+    """WebSocket endpoint for streaming chat responses"""
+    
+    await websocket.accept()
+    logger.info(f"WebSocket chat session started for graph {graph_id}")
+    
+    try:
+        # Initialize chat service
+        # Note: You'll need to get the graph schema here
+        # This is a simplified version - you may need to modify based on your auth setup
+        
+        while True:
+            # Receive message from client
+            data = await websocket.receive_text()
+            try:
+                message_data = json.loads(data)
+                query = message_data.get("message", "")
+                reasoning_mode = message_data.get("reasoning_mode", "focused")  # Use faster mode for streaming
+                
+                if not query:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": "Empty query received"
+                    }))
+                    continue
+                
+                # Send processing status
+                await websocket.send_text(json.dumps({
+                    "type": "status",
+                    "message": "Processing your question...",
+                    "stage": "analysis"
+                }))
+                
+                # Process query (this would need to be modified for streaming)
+                # For now, sending the complete response
+                chat_result = await graph_intelligent_chat.chat_with_advanced_reasoning(
+                    query=query,
+                    reasoning_mode=reasoning_mode,
+                    max_context_tokens=2000,  # Smaller context for faster processing
+                    include_reasoning_chain=True
+                )
+                
+                # Send reasoning chain step by step
+                for i, step in enumerate(chat_result.get("reasoning_chain", [])):
+                    await websocket.send_text(json.dumps({
+                        "type": "reasoning_step",
+                        "step": i + 1,
+                        "message": step
+                    }))
+                    await asyncio.sleep(0.1)  # Small delay for effect
+                
+                # Send final answer
+                await websocket.send_text(json.dumps({
+                    "type": "answer",
+                    "message": chat_result["answer"],
+                    "grounded": chat_result.get("grounded", False),
+                    "context_summary": chat_result["context_summary"],
+                    "related_entities": chat_result.get("related_entities", [])[:3],
+                    "suggested_followup": chat_result.get("suggested_followup", [])[:2]
+                }))
+                
+            except json.JSONDecodeError:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Invalid JSON format"
+                }))
+            except Exception as e:
+                logger.error(f"WebSocket chat error: {e}")
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": f"Processing error: {str(e)}"
+                }))
+    
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket chat session ended for graph {graph_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        await websocket.close()
 
 @router.post("/graphs/{graph_id}/chat", response_model=ChatResponse)
 async def chat_with_graph(
@@ -561,4 +911,72 @@ async def _update_session_timestamp(db: AsyncSession, session_id: str):
         .where(ChatSession.id == UUID(session_id))
         .values(last_message_at=datetime.utcnow())
     )
+    await db.commit()
+
+async def _ensure_chat_session(
+    db: AsyncSession, 
+    session_id: str, 
+    graph_id: UUID, 
+    user_id: str
+):
+    """Ensure chat session exists in database"""
+    
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == UUID(session_id))
+    )
+    session = result.scalar_one_or_none()
+    
+    if not session:
+        session = ChatSession(
+            id=UUID(session_id),
+            graph_id=graph_id,
+            user_id=UUID(user_id),
+            session_name=f"Chat {datetime.now().strftime('%H:%M')}"
+        )
+        db.add(session)
+        await db.commit()
+
+async def _save_chat_messages(
+    db: AsyncSession,
+    session_id: str,
+    user_message: str,
+    chat_result: dict,
+    message_id: str
+):
+    """Save user message and assistant response with rich metadata"""
+    
+    # Save user message
+    user_msg = ChatMessage(
+        id=UUID(message_id),
+        session_id=UUID(session_id),
+        message_type="user",
+        content=user_message
+    )
+    db.add(user_msg)
+    
+    # Save assistant response with rich metadata
+    assistant_msg = ChatMessage(
+        id=uuid4(),
+        session_id=UUID(session_id),
+        message_type="assistant",
+        content=chat_result["answer"],
+        chat_metadata={
+            "reasoning_mode": chat_result.get("reasoning_mode"),
+            "grounded": chat_result.get("grounded"),
+            "context_summary": chat_result.get("context_summary", {}),
+            "confidence_scores": chat_result.get("confidence_scores", {}),
+            "entities_analyzed": len(chat_result.get("context_summary", {}).get("entities_analyzed", [])),
+            "performance": chat_result.get("performance", {}),
+            "reasoning_chain_length": len(chat_result.get("reasoning_chain", []))
+        }
+    )
+    db.add(assistant_msg)
+    
+    # Update session timestamp
+    await db.execute(
+        update(ChatSession)
+        .where(ChatSession.id == UUID(session_id))
+        .values(last_message_at=datetime.utcnow())
+    )
+    
     await db.commit()
