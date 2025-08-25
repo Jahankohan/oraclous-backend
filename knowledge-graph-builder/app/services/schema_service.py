@@ -1,9 +1,8 @@
-# app/services/schema_service.py - CORRECTED VERSION
-
 from typing import Dict, Any, List, Optional
 from langchain_community.graphs.neo4j_graph import Neo4jGraph
 from app.core.neo4j_client import neo4j_client
 from app.services.llm_service import llm_service
+from uuid import UUID
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -87,6 +86,17 @@ class SchemaService:
             logger.error(f"Failed to get schema for graph {graph_id}: {e}")
             return {"entities": [], "relationships": [], "node_count": 0, "relationship_count": 0}
     
+    async def get_graph_schema(self, graph_id: UUID) -> Dict[str, Any]:
+        """
+        Get schema for specific graph (method that chat_service expects)
+        This is a wrapper around get_graph_specific_schema for consistency
+        """
+        try:
+            return await self.get_graph_specific_schema(str(graph_id))
+        except Exception as e:
+            logger.error(f"Failed to get graph schema: {e}")
+            return {"entities": [], "relationships": []}
+
     async def consolidate_schema(
         self, 
         existing_entities: List[str],
