@@ -68,9 +68,10 @@ class ChatService:
         # Original attributes
         self.cypher_chain = None
         self.current_graph_id = None
+        self.current_user_id = None
         self.conversation_history = []
         self.graph_schema = None
-        
+
         # Enhanced attributes
         self.reasoning_modes = [mode.value for mode in ReasoningMode]
         self.centrality_cache = {}
@@ -88,7 +89,7 @@ class ChatService:
         model: str = "gpt-4o-mini"
     ) -> bool:
         """Initialize chat service for a specific graph (ORIGINAL METHOD)"""
-        
+
         try:
             # Initialize LLM with TEMPERATURE CONTROL for hallucination prevention
             if not llm_service.is_initialized():
@@ -113,6 +114,7 @@ class ChatService:
             
             # Create Cypher QA chain (RESTORED)
             self.cypher_chain = await self._create_cypher_chain(schema)
+            self.current_user_id = user_id
             self.current_graph_id = graph_id
             self.graph_schema = schema
             
@@ -396,7 +398,7 @@ class ChatService:
             graphrag_result = await graphrag_service.graph_augmented_retrieval(
                 query=query,
                 graph_id=self.current_graph_id,
-                user_id="current_user",
+                user_id=self.current_user_id,
                 retrieval_config={
                     "max_entities": 8,
                     "max_chunks": 5,
@@ -427,21 +429,84 @@ class ChatService:
                     "metadata": graphrag_result["metadata"]
                 }
             else:
-                # TODO: Implement a Fallback if GraphRAG service had issues
-                # return await self._graphrag_chat_fallback(query)
-                logger.error(f"GraphRAG chat failed to respond")
-                return {
-                    "answer": "I couldn't process your question using GraphRAG.",
-                    "success": False,
-                    "error": "GraphRAG chat failed to respond"
-                }
+                return await self._graphrag_chat_fallback(query)
                 
         except Exception as e:
             logger.error(f"GraphRAG chat failed: {e}")
+            return await self._graphrag_chat_fallback(query)
+    
+    async def _graphrag_chat_fallback(self, query: str) -> Dict[str, Any]:
+        """
+        Fallback GraphRAG implementation when advanced service fails
+        Uses basic entity extraction and vector search
+        """
+        
+        try:
+            logger.info("Using GraphRAG fallback implementation")
+            
+            # Basic entity extraction from query
+            query_entities = []
+            try:
+                query_entities = await self._extract_entities_from_query(query)
+            except Exception as e:
+                logger.warning(f"Entity extraction failed in fallback: {e}")
+            
+            # Simple vector search for entities
+            similar_entities = []
+            try:
+                similar_entities = await search_service.similarity_search_entities(
+                    query=query,
+                    graph_id=self.current_graph_id,
+                    k=5,
+                    threshold=0.6
+                )
+            except Exception as e:
+                logger.warning(f"Entity search failed in fallback: {e}")
+            
+            # Basic neighborhood gathering
+            neighborhoods = []
+            try:
+                for entity in similar_entities[:3]:
+                    neighborhood = await self._get_entity_neighborhood(
+                        entity["id"], max_depth=1
+                    )
+                    neighborhoods.append(neighborhood)
+            except Exception as e:
+                logger.warning(f"Neighborhood gathering failed in fallback: {e}")
+            
+            # Simple context building
+            context = self._build_graphrag_context(
+                query_entities, similar_entities, neighborhoods, []
+            )
+            
+            # Generate basic answer
+            answer = await self._generate_graphrag_answer(query, context)
+            
             return {
-                "answer": "I couldn't process your question using GraphRAG.",
+                "answer": answer,
+                "context": {
+                    "query_entities": query_entities,
+                    "similar_entities": similar_entities[:3],
+                    "neighborhoods": len(neighborhoods),
+                    "text_chunks": 0
+                },
+                "method": "graphrag_fallback",
+                "success": True,
+                "grounded": True,
+                "metadata": {
+                    "fallback_used": True,
+                    "entities_found": len(similar_entities),
+                    "neighborhoods_expanded": len(neighborhoods)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"GraphRAG fallback also failed: {e}")
+            return {
+                "answer": "I'm sorry, I encountered an error while processing your question using GraphRAG. Please try again or use a different chat mode.",
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "method": "graphrag_fallback_failed"
             }
     
     # ==================== COMPREHENSIVE REASONING MODE (ENHANCED) ====================
