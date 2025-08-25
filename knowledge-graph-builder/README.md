@@ -1,218 +1,165 @@
 # Knowledge Graph Builder Service
 
-A FastAPI-based microservice for building and querying knowledge graphs from unstructured data, integrated with the Oraclous ecosystem.
+A FastAPI-based microservice for building, querying, and analyzing knowledge graphs from unstructured data, fully integrated into the Oraclous ecosystem.
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
-- Python 3.12+
-- Docker & Docker Compose
-- Neo4j database
-- PostgreSQL database
+## 🎯 Project Purpose
 
-### Setup
+Transform unstructured data into rich, queryable knowledge graphs using LLMs, advanced entity extraction, and graph analytics. Expose APIs for graph management, ingestion, chat, search, and analytics, supporting natural language queries and orchestrator workflows.
 
-1. **Clone and navigate to the service directory**
-   ```bash
-   cd knowledge-graph-builder
-   ```
+---
 
-2. **Run the setup script**
-   ```bash
-   chmod +x scripts/setup.sh
-   ./scripts/setup.sh
-   ```
+## 🏗️ Architecture Overview
 
-3. **Update environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your actual configuration
-   ```
+- **API Layer:** FastAPI endpoints, organized by domain and version ([see API README](app/api/README.md), [v1 README](app/api/v1/README.md))
+- **Service Layer:** Business logic for graph ops, chat, embeddings, extraction, schema, analytics ([see Services README](app/services/README.md))
+- **Model Layer:** Data structures for graph nodes, edges, chat, jobs ([see Models README](app/models/README.md))
+- **Core Layer:** Configuration, logging, database clients ([see Core README](app/core/README.md))
+- **Schema Layer:** Pydantic schemas for validation ([see Schemas README](app/schemas/README.md))
+- **Design Docs:** Architecture, implementation plan, backlog, and development rules ([see design-docs/](design-docs/))
 
-4. **Start with Docker Compose** (recommended)
-   ```bash
-   docker-compose up -d
-   ```
+### Key Integration Points
 
-   Or **run locally**:
-   ```bash
-   chmod +x scripts/dev.sh
-   ./scripts/dev.sh
-   ```
+- **Auth Service:** User authentication & OAuth
+- **Credential Broker:** LLM/Neo4j credential management
+- **Oraclous Core Service:** Tool registration, workflow orchestration
+- **Neo4j:** Graph storage, vector indexes, analytics
+- **PostgreSQL:** Metadata, jobs, chat sessions
 
-### Development
+---
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+## 📋 Implementation Roadmap
 
-# Run database migrations
-alembic upgrade head
+See [knowledge-graph-builder-implementation-integration.md](design-docs/knowledge-graph-builder-implementation-integration.md) for full checkpoint breakdown.
 
-# Start development server
-uvicorn app.main:app --reload --port 8003
+- **Checkpoint 1:** Service foundation, Neo4j connectivity, health/auth endpoints
+- **Checkpoint 2:** Entity/relationship extraction, Diffbot integration, schema management
+- **Checkpoint 3:** Embeddings, vector search, hybrid search
+- **Checkpoint 4:** LLM chat, GraphRAG, text-to-Cypher, chat history
+- **Checkpoint 5:** Orchestrator integration, tool registration, credits
+- **Checkpoint 6:** Advanced analytics, optimization, monitoring
 
-# Run tests
-pytest tests/ -v
-
-# Run with coverage
-pytest tests/ --cov=app --cov-report=html
-```
-
-## 📊 Database Setup
-
-### PostgreSQL Migration
-
-```bash
-# Create initial migration
-python create_initial_migration.py
-
-# Apply migrations
-alembic upgrade head
-
-# Create new migration after model changes
-alembic revision --autogenerate -m "Description of changes"
-```
-
-### Neo4j Setup
-
-The service automatically connects to Neo4j and creates necessary constraints and indexes.
+---
 
 ## 🔗 API Endpoints
 
-### Health Check
-- `GET /api/v1/health` - Service health status
+See [API README](app/api/README.md) and [v1 README](app/api/v1/README.md) for details.
 
-### Graph Management
-- `POST /api/v1/graphs` - Create new graph
-- `GET /api/v1/graphs` - List user graphs
-- `GET /api/v1/graphs/{id}` - Get graph details
-- `PUT /api/v1/graphs/{id}` - Update graph
-- `DELETE /api/v1/graphs/{id}` - Delete graph
+- `/api/v1/graphs/` - Graph CRUD
+- `/api/v1/graphs/{id}/ingest` - Data ingestion
+- `/api/v1/graphs/{id}/entities` - Entity management
+- `/api/v1/graphs/{id}/relationships` - Relationship management
+- `/api/v1/graphs/{id}/search` - Search (keyword, semantic, hybrid)
+- `/api/v1/graphs/{id}/chat` - Chat with graph (LLM, GraphRAG)
+- `/api/v1/graphs/{id}/analytics/` - Metrics, community detection, centrality
+- `/api/v1/health` - Health check
+- `/api/v1/metrics` - Prometheus metrics
 
-### Data Ingestion
-- `POST /api/v1/graphs/{id}/ingest` - Ingest data into graph
-- `GET /api/v1/graphs/{id}/jobs` - List ingestion jobs
+---
 
-## 🏗️ Architecture
+## 📊 Database & Indexes
 
-```
-knowledge-graph-builder/
-├── app/
-│   ├── api/v1/endpoints/     # API route handlers
-│   ├── core/                 # Configuration, database, logging
-│   ├── models/               # SQLAlchemy models
-│   ├── schemas/              # Pydantic schemas
-│   ├── services/             # Business logic services
-│   └── main.py              # FastAPI application
-├── tests/                   # Test suite
-├── scripts/                 # Utility scripts
-├── alembic/                 # Database migrations
-└── requirements.txt         # Python dependencies
-```
+- **PostgreSQL:** Metadata tables for graphs, jobs, chat sessions/messages
+- **Neo4j:** Nodes (Entity, Chunk, Document), vector indexes for embeddings, full-text indexes, constraints
+
+See implementation plan for schema details.
+
+---
 
 ## 🔧 Configuration
 
-Key environment variables:
+Environment variables (see `.env.example`):
 
-```bash
-# Service
-SERVICE_NAME=knowledge-graph-builder
-SERVICE_URL=http://localhost:8003
+- `NEO4J_URI`, `POSTGRES_URL`, `REDIS_URL`
+- `AUTH_SERVICE_URL`, `CREDENTIAL_BROKER_URL`
+- `INTERNAL_SERVICE_KEY`, `JWT_SECRET_KEY`
+- `LOG_LEVEL`, `ENABLE_METRICS`
 
-# Databases
-NEO4J_URI=bolt://neo4j:7687
-POSTGRES_URL=postgresql+asyncpg://user:pass@host/db
-
-# External Services
-AUTH_SERVICE_URL=http://auth-service:8000
-CREDENTIAL_BROKER_URL=http://credential-broker:8002
-
-# Security
-INTERNAL_SERVICE_KEY=your-internal-key
-JWT_SECRET_KEY=your-jwt-secret
-```
+---
 
 ## 🧪 Testing
 
-```bash
-# Run all tests
-pytest tests/ -v
+- Unit and integration tests in `tests/`
+- Run with `pytest` or `test.sh`
+- Coverage reports: `pytest --cov=app --cov-report=html`
 
-# Run specific test file
-pytest tests/test_graphs.py -v
+---
 
-# Run with coverage
-pytest tests/ --cov=app --cov-report=html
-```
-
-## 📈 Monitoring
+## 📈 Monitoring & Health
 
 - Health endpoint: `/api/v1/health`
-- Logs are written to `logs/` directory
-- Metrics available when `ENABLE_METRICS=true`
+- Logs: `logs/` directory
+- Metrics: `/api/v1/metrics` (Prometheus format)
 
-## 🤝 Integration with Oraclous Ecosystem
+---
 
-This service integrates with:
-- **Auth Service**: User authentication and authorization
-- **Credential Broker**: OAuth token management
-- **Core Service**: Tool registration and orchestration
+## 🤝 Oraclous Ecosystem Integration
 
-## 📝 Development Notes
+- Auth via `auth-service`
+- Credentials via `credential-broker-service`
+- Tool registration and workflow via `oraclous-core-service`
+- All services communicate over `app-network` (Docker Compose)
 
-- This implements **Checkpoint 1** of the Knowledge Graph Builder integration
-- Next steps: Entity extraction (Checkpoint 2)
-- Uses async/await throughout for optimal performance
-- Follows FastAPI best practices and patterns
-- Comprehensive error handling and logging
+---
 
-## 🚀 Development Workflow
+## 🛠️ Development Rules & Refactoring
 
-### Using the Main Docker Compose
+**Golden Rule:** Enhance existing services in place—never duplicate functionality.  
+See [development-architecture-guide.md](design-docs/development-architecture-guide.md) for strict rules, enhancement patterns, and refactoring checklists.
 
-The knowledge-graph-builder integrates with the main project docker-compose.yml:
+- One service file per major functionality
+- All enhancements done in place
+- Endpoints connect to actual implementations
+- No orphaned or unused service files
+- Clear method organization within services
 
-```bash
-# From project root directory
+---
 
-# Start all services
-docker-compose up -d
+## 📋 Backlog & Next Steps
 
-# Or start specific services for development
-docker-compose up -d neo4j postgres redis auth-service credential-broker-service
+See [ultimate-graph-plans.md](design-docs/ultimate-graph-plans.md) for prioritized backlog, sprint plan, and risk mitigation.
 
-# Start knowledge graph services
-docker-compose up -d knowledge-graph-builder knowledge-graph-worker
+- Critical: Chat hallucination prevention, enhanced graph modeling
+- Medium: Multi-modal extraction, user context system
+- Nice-to-have: Real-time progress, streaming, analytics dashboard
+- Production: Monitoring, optimization, orchestrator integration
 
-# View logs
-docker-compose logs -f knowledge-graph-builder
-docker-compose logs -f knowledge-graph-worker
+---
 
-# Development with auto-reload
-cd knowledge-graph-builder
-chmod +x scripts/dev.sh
-./scripts/dev.sh
-```
+## 🚀 Deployment
 
-### Service Dependencies
+- Dockerfile and docker-compose integration
+- Healthcheck and auto-reload scripts
+- Production configuration and monitoring
 
-The knowledge-graph-builder depends on:
-1. **neo4j** - Graph database
-2. **postgres** - Metadata storage  
-3. **redis** - Celery message broker
-4. **auth-service** - User authentication
-5. **credential-broker-service** - API key management
+---
 
-### Environment Variables
+## 📚 References
 
-Add to your root `.env` file:
-```bash
-# Redis for background jobs
-REDIS_URL=redis://redis:6379/0
+- [app/core/README.md](app/core/README.md)
+- [app/models/README.md](app/models/README.md)
+- [app/schemas/README.md](app/schemas/README.md)
+- [app/services/README.md](app/services/README.md)
+- [app/api/README.md](app/api/README.md)
+- [app/api/v1/README.md](app/api/v1/README.md)
+- [design-docs/development-architecture-guide.md](design-docs/development-architecture-guide.md)
+- [design-docs/knowledge-graph-builder-implementation-integration.md](design-docs/knowledge-graph-builder-implementation-integration.md)
+- [design-docs/ultimate-graph-plans.md](design-docs/ultimate-graph-plans.md)
 
-# Knowledge Graph Builder specific
-LOG_LEVEL=DEBUG
-```
+---
 
-All services use the same network (`app-network`) for inter-service communication.
+## 🎯 Success Criteria
+
+- All checkpoints completed and integrated
+- No duplicate services or endpoints
+- All endpoints have working implementations
+- Performance, scalability, and monitoring in place
+- User documentation and API docs complete
+
+---
+
+## 👥 Contribution & Contact
+
+Open issues or pull requests for questions, improvements, or bug reports.  
+Follow the architecture and enhancement guidelines for all
