@@ -55,7 +55,7 @@ def process_ingestion_job(self, job_id: str, user_id: str):
 
 @celery_app.task(bind=True)
 def process_embedding_generation_job(self, graph_id: str, user_id: str):
-    """Celery task to process embedding generation"""
+    """Celery task to process embedding generation - FIXED for event loop conflicts"""
     import asyncio
     
     # Create a new event loop for this task
@@ -64,10 +64,14 @@ def process_embedding_generation_job(self, graph_id: str, user_id: str):
     
     try:
         return loop.run_until_complete(
-            _process_embedding_generation_async(self, graph_id, user_id)
+            _process_embedding_generation_sync(self, graph_id, user_id)
         )
+    except Exception as e:
+        logger.error(f"Embedding generation failed: {e}")
+        return {"status": "error", "message": str(e)}
     finally:
         loop.close()
+        asyncio.set_event_loop(None)
 
 @celery_app.task(bind=True)
 def optimize_all_graphs(self):
@@ -198,6 +202,172 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
             await _update_job_status(db, job_id, "failed", str(e))
             return {"status": "error", "message": str(e)}
 
+async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
+    """FIXED: Simplified sync embedding generation without loop conflicts"""
+    
+    try:
+        logger.info(f"Starting embedding generation for graph {graph_id}")
+        
+        # Initialize Neo4j connection in this loop
+        await neo4j_client.connect()
+        
+        # Initialize embedding service with proper credentials
+        from app.services.credential_service import credential_service
+        
+        # Get OpenAI credentials directly (avoiding service call conflicts)
+        try:
+            # Try to initialize embedding service
+            from app.services.embedding_service import embedding_service
+            success = await embedding_service.initialize_embeddings(
+                provider="openai",
+                model="text-embedding-3-small", 
+                user_id=user_id
+            )
+            
+            if not success:
+                # Fallback: try with environment variable
+                import os
+                openai_key = os.getenv('OPENAI_API_KEY')
+                if openai_key:
+                    success = await embedding_service.initialize_embeddings(
+                        provider="openai",
+                        model="text-embedding-3-small",
+                        user_id=user_id,
+                        api_key=openai_key  # Direct API key
+                    )
+        
+        except Exception as cred_error:
+            logger.error(f"Credential retrieval error: {cred_error}")
+            # Try with environment variable as fallback
+            import os
+            openai_key = os.getenv('OPENAI_API_KEY')
+            if not openai_key:
+                return {
+                    "status": "error", 
+                    "message": "OpenAI API key not available"
+                }
+            
+            from app.services.embedding_service import embedding_service
+            success = await embedding_service.initialize_embeddings(
+                provider="openai",
+                model="text-embedding-3-small",
+                user_id=user_id,
+                api_key=openai_key
+            )
+        
+        if not success:
+            return {
+                "status": "error", 
+                "message": "Failed to initialize embedding service"
+            }
+            
+        logger.info(f"Embeddings initialized: {embedding_service.provider} - {embedding_service.model_name} (dim: {embedding_service.dimension})")
+        
+        # Process nodes in batches
+        batch_size = 10
+        total_processed = 0
+        
+        while True:
+            # Get nodes without embeddings - FIXED query execution
+            try:
+                get_nodes_query = """
+                MATCH (n)
+                WHERE n.graph_id = $graph_id 
+                AND n.embedding IS NULL
+                AND n.name IS NOT NULL
+                RETURN n.id as id, n.name as name, 
+                       coalesce(n.description, '') as description
+                LIMIT $batch_size
+                """
+                
+                # Execute query with proper error handling
+                result = await neo4j_client.execute_query(get_nodes_query, {
+                    "graph_id": graph_id,
+                    "batch_size": batch_size
+                })
+                
+                if not result:
+                    logger.info("No more nodes to process")
+                    break
+                
+                logger.info(f"Processing batch of {len(result)} nodes")
+                
+                # Generate embeddings for this batch
+                texts = []
+                node_ids = []
+                
+                for node in result:
+                    # Combine name and description for embedding
+                    text = f"{node['name']}"
+                    if node['description']:
+                        text += f" {node['description']}"
+                    
+                    texts.append(text)
+                    node_ids.append(node['id'])
+                
+                # Generate embeddings
+                try:
+                    embeddings = await embedding_service.embed_documents(texts)
+                    
+                    # Update nodes with embeddings
+                    for node_id, embedding in zip(node_ids, embeddings):
+                        update_query = """
+                        MATCH (n {id: $node_id, graph_id: $graph_id})
+                        SET n.embedding = $embedding
+                        """
+                        
+                        await neo4j_client.execute_write_query(update_query, {
+                            "node_id": node_id,
+                            "graph_id": graph_id,
+                            "embedding": embedding
+                        })
+                    
+                    total_processed += len(embeddings)
+                    logger.info(f"Updated {len(embeddings)} nodes with embeddings. Total: {total_processed}")
+                    
+                    # Update task progress
+                    task.update_state(
+                        state="PROGRESS", 
+                        meta={
+                            "progress": min(90, total_processed * 2),  # Rough progress
+                            "nodes_processed": total_processed
+                        }
+                    )
+                
+                except Exception as embed_error:
+                    logger.error(f"Embedding generation failed for batch: {embed_error}")
+                    continue
+                    
+            except Exception as query_error:
+                logger.error(f"Query execution failed: {query_error}")
+                logger.error(f"Query: {get_nodes_query}")
+                logger.error(f"Parameters: {{'graph_id': '{graph_id}', 'batch_size': {batch_size}}}")
+                break
+        
+        # Create vector indexes if needed
+        try:
+            from app.services.vector_service import vector_service
+            await vector_service.create_vector_indexes(
+                dimension=embedding_service.dimension
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create vector indexes: {e}")
+        
+        logger.info(f"Embedding generation completed. Total nodes processed: {total_processed}")
+        
+        return {
+            "status": "completed",
+            "nodes_processed": total_processed,
+            "message": f"Successfully generated embeddings for {total_processed} nodes"
+        }
+        
+    except Exception as e:
+        error_msg = f"Background embedding generation failed for graph {graph_id}: {e}"
+        logger.error(error_msg)
+        return {
+            "status": "error",
+            "message": error_msg
+        }
 
 async def _create_similarity_relationships(
     graph_id: UUID,
