@@ -1,53 +1,33 @@
-# FastAPI and server
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
-gunicorn==23.0.0
-python-multipart==0.0.20
-
-# Neo4j
 neo4j==5.28.2
-
-# LangChain and LLM
-langchain==0.3.25
-langchain-aws==0.2.25
-langchain-anthropic==0.3.15
-langchain-fireworks==0.3.0
-langchain-community==0.3.25
-langchain-core==0.3.65
-langchain-experimental==0.3.4
-langchain-google-vertexai==2.0.25
-langchain-google-genai
-langchain-groq==0.3.2
-langchain-openai==0.3.23
-langchain-text-splitters==0.3.8
-langchain-huggingface==0.3.0
-
-# LLM Providers
-openai
-anthropic
-google-generativeai
-
-# Pydantic
+httpx==0.28.1
 pydantic==2.11.7
 pydantic-settings==2.10.1
-
-# Embeddings
-sentence-transformers
-
-# Document processing
-PyPDF2==3.0.1
-PyMuPDF==1.26.1
-unstructured[all-docs]
-unstructured==0.17.2
-unstructured-client==0.36.0
-unstructured-inference==1.0.5
-youtube-transcript-api==1.1.0
-wikipedia==1.4.0
-
-# Storage
-boto3==1.38.36
-botocore==1.38.36
-
-# Utilities
+langchain==0.3.27
+langchain-openai==0.3.30
+langchain-neo4j==0.5.0
+langchain-community==0.3.27
+python-multipart==0.0.20
 python-dotenv==1.0.0
-tenacity==8.2.3
+asyncpg==0.30.0
+sqlalchemy[asyncio]==2.0.42
+psycopg2-binary==2.9.9
+nest-asyncio==1.6.0
+alembic==1.13.3
+pytest==8.4.1
+pytest-asyncio==1.1.0
+
+# LLM required configurations
+langchain-anthropic==0.3.19
+langchain-google-genai==2.1.9
+sentence-transformers==5.1.0
+langchain-experimental==0.3.4
+tiktoken==0.11.0
+celery[redis]==5.5.3
+redis==5.2.1
+
+# Development
+black==25.1.0
+isort==6.0.1
+coverage==7.6.9
