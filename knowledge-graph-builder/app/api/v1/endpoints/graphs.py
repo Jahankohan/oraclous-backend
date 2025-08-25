@@ -195,19 +195,19 @@ async def ingest_data_corrected(
     
     # Create evolution config from request or use defaults
     evolution_config = SchemaEvolutionConfig(
-        mode=data.evolution_mode or "guided",  # Default to guided
+        mode=data.evolution_mode or "guided",
         max_entities=data.max_entities or 20,
         max_relationships=data.max_relationships or 15
     )
     
     # Handle schema learning if needed
-    saved_schema = data.schema or graph.schema_config
+    saved_schema = data.graph_schema or graph.schema_config
     
     if not saved_schema and data.content:
         try:
             # Learn schema from content using unified approach
             learned_schema = await entity_extractor.learn_schema_from_text(
-                data.content[:3000],  # Use sample for schema learning
+                data.content[:3000],
                 user_id
             )
             
@@ -215,10 +215,7 @@ async def ingest_data_corrected(
             await db.execute(
                 update(KnowledgeGraph)
                 .where(KnowledgeGraph.id == graph_id)
-                .values(
-                    schema_config=learned_schema,
-                    # evolution_mode=evolution_config.mode  # If field exists
-                )
+                .values(schema_config=learned_schema)
             )
             await db.commit()
             
@@ -228,6 +225,7 @@ async def ingest_data_corrected(
         except Exception as e:
             logger.warning(f"Failed to auto-learn schema: {e}")
             # Continue with extraction without predefined schema
+            saved_schema = None
     
     # Create ingestion job
     job = IngestionJob(
@@ -551,14 +549,13 @@ async def update_graph_schema(
         )
     
     try:
-        # Validate schema format
-        if not isinstance(request.schema.get("entities"), list):
+        if not isinstance(request.graph_schema.get("entities"), list):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Schema entities must be a list"
             )
         
-        if not isinstance(request.schema.get("relationships"), list):
+        if not isinstance(request.graph_schema.get("relationships"), list):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Schema relationships must be a list"
@@ -566,7 +563,7 @@ async def update_graph_schema(
         
         # Apply schema size limits
         evolution_config = SchemaEvolutionConfig()
-        validated_schema = entity_extractor._validate_evolved_schema(request.schema)
+        validated_schema = entity_extractor._validate_evolved_schema(request.graph_schema)
         
         # Update graph schema
         await db.execute(
@@ -574,7 +571,6 @@ async def update_graph_schema(
             .where(KnowledgeGraph.id == graph_id)
             .values(
                 schema_config=validated_schema,
-                # evolution_mode=request.evolution_mode or "guided"  # If field exists
             )
         )
         await db.commit()

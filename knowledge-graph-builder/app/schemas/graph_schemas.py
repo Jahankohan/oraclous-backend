@@ -40,14 +40,14 @@ class SchemaLearnRequest(BaseModel):
 
 class SchemaUpdateRequest(BaseModel):
     """Request for updating graph schema"""
-    schema: dict = Field(..., description="Schema with entities and relationships")
+    graph_schema: dict = Field(..., description="Schema with entities and relationships")
     evolution_mode: Optional[str] = Field("guided", description="Schema evolution mode")
 
 class IngestDataRequest(BaseModel):
     """Enhanced request for data ingestion with schema evolution"""
     content: str = Field(..., min_length=10)
     source_type: str = Field(default="text")
-    schema: Optional[dict] = None
+    graph_schema: Optional[dict] = None
     instructions: Optional[str] = None
     
     # Schema evolution parameters
@@ -108,7 +108,7 @@ class SchemaEvolutionSettings(BaseModel):
 
 class GraphConfiguration(BaseModel):
     """Complete graph configuration"""
-    schema: Dict[str, List[str]]
+    graph_schema: Dict[str, List[str]]
     evolution_settings: SchemaEvolutionSettings
     domain_context: Optional[str] = None
     custom_instructions: Optional[str] = None

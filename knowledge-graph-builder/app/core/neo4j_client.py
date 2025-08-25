@@ -37,10 +37,11 @@ class Neo4jClient:
     async def _create_initial_indexes(self):
         """Create indexes for graph isolation"""
         try:
-            # Create index on graph_id for efficient filtering
+            # ✅ FIXED: Create indexes for specific node types
             index_queries = [
-                "CREATE INDEX graph_id_nodes IF NOT EXISTS FOR (n) ON (n.graph_id)",
-                "CREATE INDEX graph_id_rels IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id)"
+                "CREATE INDEX graph_id_entities IF NOT EXISTS FOR (n:Entity) ON (n.graph_id)",
+                "CREATE INDEX graph_id_chunks IF NOT EXISTS FOR (n:Chunk) ON (n.graph_id)",
+                "CREATE INDEX graph_id_documents IF NOT EXISTS FOR (n:Document) ON (n.graph_id)"
             ]
             
             for query in index_queries:
@@ -52,7 +53,7 @@ class Neo4jClient:
                     
         except Exception as e:
             logger.warning(f"Failed to create indexes: {e}")
-    
+
     async def disconnect(self) -> None:
         """Close Neo4j connection"""
         if self.driver:

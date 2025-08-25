@@ -195,15 +195,14 @@ class SchemaService:
             
             # Create index on graph_id for efficient filtering
             graph_id_index = """
-            CREATE INDEX graph_id_index IF NOT EXISTS
-            FOR (n)
+            CREATE INDEX graph_id_entities_general IF NOT EXISTS
+            FOR (n:Entity)
             ON (n.graph_id)
             """
             
             try:
-                # REMOVED: database parameter
                 await neo4j_client.execute_write_query(graph_id_index)
-                logger.debug("Created graph_id index")
+                logger.debug("Created graph_id index for entities")
             except Exception as e:
                 logger.debug(f"Graph ID index might already exist: {e}")
                 
@@ -356,19 +355,44 @@ async def create_missing_graph_indexes():
     """Create any missing indexes for graph isolation"""
     
     try:
-        # Create graph_id index for nodes
-        await neo4j_client.execute_write_query("""
-            CREATE INDEX graph_id_nodes IF NOT EXISTS
-            FOR (n)
-            ON (n.graph_id)
-        """)
+        # ✅ FIXED: Create graph_id indexes for specific node types
+        node_index_queries = [
+            "CREATE INDEX graph_id_entities IF NOT EXISTS FOR (n:Entity) ON (n.graph_id)",
+            "CREATE INDEX graph_id_chunks IF NOT EXISTS FOR (n:Chunk) ON (n.graph_id)", 
+            "CREATE INDEX graph_id_documents IF NOT EXISTS FOR (n:Document) ON (n.graph_id)"
+        ]
         
-        # Create graph_id index for relationships
-        await neo4j_client.execute_write_query("""
-            CREATE INDEX graph_id_rels IF NOT EXISTS
-            FOR ()-[r]-()
-            ON (r.graph_id)
-        """)
+        for query in node_index_queries:
+            try:
+                await neo4j_client.execute_write_query(query)
+                logger.debug(f"Created node index: {query}")
+            except Exception as e:
+                logger.debug(f"Node index might already exist: {e}")
+        
+        # ✅ FIXED: Create graph_id indexes for common relationship types  
+        rel_index_queries = [
+            "CREATE INDEX graph_id_rels_general IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id)",
+        ]
+        
+        # Try general relationship index first (works in Neo4j 5.13+)
+        try:
+            await neo4j_client.execute_write_query(rel_index_queries[0])
+            logger.debug("Created general relationship index")
+        except Exception as e:
+            logger.debug(f"General relationship index not supported, creating specific types: {e}")
+            
+            # Fallback: Create indexes for common relationship types
+            specific_rel_queries = [
+                "CREATE INDEX graph_id_related IF NOT EXISTS FOR ()-[r:RELATED_TO]-() ON (r.graph_id)",
+                "CREATE INDEX graph_id_mentions IF NOT EXISTS FOR ()-[r:MENTIONS]-() ON (r.graph_id)",
+                "CREATE INDEX graph_id_contains IF NOT EXISTS FOR ()-[r:CONTAINS]-() ON (r.graph_id)"
+            ]
+            
+            for query in specific_rel_queries:
+                try:
+                    await neo4j_client.execute_write_query(query)
+                except Exception as e:
+                    logger.debug(f"Specific relationship index warning: {e}")
         
         logger.info("Graph isolation indexes created/verified")
         return True
