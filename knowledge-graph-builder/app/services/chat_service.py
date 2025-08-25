@@ -11,6 +11,7 @@ from app.services.llm_service import llm_service
 from app.services.search_service import search_service
 from app.services.embedding_service import embedding_service
 from app.services.schema_service import schema_service
+from app.services.graphrag_service import graphrag_service
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -392,57 +393,49 @@ class ChatService:
         """Advanced GraphRAG implementation (RESTORED)"""
         
         try:
-            # Step 1: Entity extraction from query
-            query_entities = await self._extract_entities_from_query(query)
-            
-            # Step 2: Vector search for relevant entities (RESTORED)
-            similar_entities = await search_service.similarity_search_entities(
+            graphrag_result = await graphrag_service.graph_augmented_retrieval(
                 query=query,
-                graph_id=self.current_graph_id,  # FIXED: Proper graph_id filtering
-                k=8,
-                threshold=0.6
+                graph_id=self.current_graph_id,
+                user_id="current_user",
+                retrieval_config={
+                    "max_entities": 8,
+                    "max_chunks": 5,
+                    "max_depth": 2
+                }
             )
             
-            # Step 3: Get neighborhoods of relevant entities
-            neighborhoods = []
-            for entity in similar_entities[:5]:
-                neighborhood = await self._get_entity_neighborhood(
-                    entity["id"], max_depth=2
-                )
-                neighborhoods.append(neighborhood)
-            
-            # Step 4: Get relevant text chunks (RESTORED)
-            text_chunks = []
-            try:
-                text_chunks = await search_service.similarity_search_chunks(
+            # Generate answer using the rich context
+            if "context" in graphrag_result and "metadata" in graphrag_result:
+                answer = await graphrag_service.generate_graphrag_answer(
                     query=query,
-                    graph_id=self.current_graph_id,  # FIXED: Proper graph_id filtering
-                    k=5,
-                    threshold=0.6
+                    context=graphrag_result["context"],
+                    metadata=graphrag_result["metadata"]
                 )
-            except Exception:
-                pass
-            
-            # Step 5: Build comprehensive context
-            rag_context = self._build_graphrag_context(
-                query_entities, similar_entities, neighborhoods, text_chunks
-            )
-            
-            # Step 6: Generate answer with rich context
-            answer = await self._generate_graphrag_answer(query, rag_context)
-            
-            return {
-                "answer": answer,
-                "context": {
-                    "query_entities": query_entities,
-                    "similar_entities": similar_entities[:3],
-                    "neighborhoods": len(neighborhoods),
-                    "text_chunks": len(text_chunks)
-                },
-                "method": "graphrag",
-                "success": True
-            }
-            
+                
+                return {
+                    "answer": answer,
+                    "context": {
+                        "query_entities": graphrag_result.get("query_entities", []),
+                        "similar_entities": graphrag_result.get("similar_entities", [])[:3],
+                        "neighborhoods": graphrag_result["metadata"].get("neighborhoods_expanded", 0),
+                        "text_chunks": graphrag_result["metadata"].get("chunks_found", 0),
+                        "paths": graphrag_result["metadata"].get("paths_discovered", 0)
+                    },
+                    "method": "graphrag_advanced",
+                    "success": True,
+                    "grounded": True,  # GraphRAG is always grounded
+                    "metadata": graphrag_result["metadata"]
+                }
+            else:
+                # TODO: Implement a Fallback if GraphRAG service had issues
+                # return await self._graphrag_chat_fallback(query)
+                logger.error(f"GraphRAG chat failed to respond")
+                return {
+                    "answer": "I couldn't process your question using GraphRAG.",
+                    "success": False,
+                    "error": "GraphRAG chat failed to respond"
+                }
+                
         except Exception as e:
             logger.error(f"GraphRAG chat failed: {e}")
             return {
