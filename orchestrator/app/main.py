@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.core.config import DATABASE_URL
+from app.core.config import settings
 from contextlib import asynccontextmanager
 from app.repositories.workflow_repository import WorkflowRepository
 from app.repositories.tool_repository import ToolRepository
@@ -10,31 +10,41 @@ from app.routes import workflow_routes
 from app.routes import tool_routes
 from app.routes import task_routes
 from app.routes import data_ingestion_routes
+from app.routes import credential_routes
+from app.repositories.credential_repository import CredentialRepository
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize existing repositories
-    repository = WorkflowRepository(db_url=DATABASE_URL)
+    repository = WorkflowRepository(db_url=settings.DATABASE_URL)
     await repository.create_tables()
     app.state.repository = repository
 
-    mcp_repository = MCPRepository(db_url=DATABASE_URL)
+    mcp_repository = MCPRepository(db_url=settings.DATABASE_URL)
     await mcp_repository.create_tables()
     app.state.mcp_repository = mcp_repository
 
-    tool_repository = ToolRepository(db_url=DATABASE_URL)
+    tool_repository = ToolRepository(db_url=settings.DATABASE_URL)
     await tool_repository.create_tables()
     app.state.tool_repository = tool_repository
 
-    task_repository = TaskRepository(db_url=DATABASE_URL)
+    task_repository = TaskRepository(db_url=settings.DATABASE_URL)
     await task_repository.create_tables()
     app.state.task_repository = task_repository
+
+    # Credential repository
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    engine = create_async_engine(settings.DATABASE_URL, echo=False)
+    session_factory = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    credential_repository = CredentialRepository(session_factory)
+    app.state.credential_repository = credential_repository
     
     # Initialize data ingestion system
     (data_source_repo, 
      ingestion_job_repo, 
      document_repo, 
-     ingestion_registry) = await setup_ingestion_system(DATABASE_URL)
+     ingestion_registry) = await setup_ingestion_system(settings.DATABASE_URL)
     
     app.state.data_source_repository = data_source_repo
     app.state.ingestion_job_repository = ingestion_job_repo
@@ -60,6 +70,5 @@ app = FastAPI(title="Oraclous Orchestrator", lifespan=lifespan)
 app.include_router(task_routes.router, prefix="/tasks", tags=["Tasks"])
 app.include_router(workflow_routes.router, prefix="/workflows", tags=["Workflows"])
 app.include_router(tool_routes.router, prefix="/tools", tags=["Tools"])
-
-# Include new data ingestion routes
 app.include_router(data_ingestion_routes.router, tags=["Data Ingestion"])
+app.include_router(credential_routes.router, prefix="/user", tags=["User Credentials"])

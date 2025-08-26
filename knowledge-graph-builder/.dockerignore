@@ -65,14 +65,6 @@ docs/
 !README.md
 implementation-guides/
 
-# Testing
-tests/
-test/
-*.test.py
-*_test.py
-htmlcov/
-.coverage
-
 # Git
 .git/
 .gitignore

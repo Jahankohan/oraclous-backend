@@ -1,8 +1,10 @@
+from __future__ import annotations
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
 from app.models.ingestion_job_model import IngestionStatus
+from app.schemas.data_source_schema import DataSourceRead
 
 class IngestionJobCreate(BaseModel):
     source_id: UUID
@@ -46,3 +48,5 @@ class IngestionJobCancel(BaseModel):
     """Schema for cancelling an ingestion job"""
     job_id: UUID
     reason: Optional[str] = None
+
+IngestionJobRead.model_rebuild()

@@ -6,21 +6,12 @@ aiofiles==24.1.0
 pydantic==2.11.7
 asyncpg==0.29.0
 sqlalchemy==1.4.27
+pydantic-settings==2.10.1
 
 # LangGraph and orchestration tools
 langgraph==0.6.3
-langchain-core
-langchain-openai
-openai
-fastmcp
+langchain-core==0.3.73
+openai==1.99.1
+fastmcp==2.11.2
 
-# LlamaIndex for data ingestion
-# llama-index-core==0.13.0
-# llama-index-readers-google==0.7.0
-# llama-index-readers-notion==0.4.0
-# llama-index-readers-database==0.5.0
-
-tiktoken==0.9.0
 python-dotenv==1.1.1
-
-pytest

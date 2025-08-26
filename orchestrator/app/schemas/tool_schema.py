@@ -10,12 +10,13 @@ class ToolCreate(BaseModel):
     description: Optional[str]
     input_schema: Optional[dict]
     output_example: Optional[dict]
-
+    functionalities: Optional[List[str]] = Field(default_factory=list, description="List of provided functionalities")
 
 class ToolUpdate(BaseModel):
     description: Optional[str]
     input_schema: Optional[dict]
     output_example: Optional[dict]
+    functionalities: Optional[List[str]] = Field(default_factory=list)
 
 class ToolRead(ToolCreate):
     id: UUID
