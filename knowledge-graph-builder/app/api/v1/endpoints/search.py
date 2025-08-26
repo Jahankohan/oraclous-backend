@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.api.dependencies import get_current_user_id, get_database
 from app.services.search_service import search_service
 from app.services.embedding_service import embedding_service
+from app.core.neo4j_client import neo4j_client
 from app.core.logging import get_logger
 
 router = APIRouter()

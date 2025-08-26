@@ -1,6 +1,6 @@
 from celery import Celery
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, or_
 from typing import Dict, Any, List
 from datetime import datetime
 from uuid import UUID
@@ -57,21 +57,29 @@ def process_ingestion_job(self, job_id: str, user_id: str):
 def process_embedding_generation_job(self, graph_id: str, user_id: str):
     """Celery task to process embedding generation - FIXED for event loop conflicts"""
     import asyncio
-    
-    # Create a new event loop for this task
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    import threading
     
     try:
-        return loop.run_until_complete(
-            _process_embedding_generation_sync(self, graph_id, user_id)
-        )
+        # Check if there's already a running event loop
+        try:
+            loop = asyncio.get_running_loop()
+            logger.warning("Event loop already running, using thread-based execution")
+            
+            # Use thread-based execution to avoid loop conflicts
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    lambda: asyncio.run(_process_embedding_generation_sync(self, graph_id, user_id))
+                )
+                return future.result()
+                
+        except RuntimeError:
+            # No running loop, safe to create new one
+            return asyncio.run(_process_embedding_generation_sync(self, graph_id, user_id))
+            
     except Exception as e:
         logger.error(f"Embedding generation failed: {e}")
         return {"status": "error", "message": str(e)}
-    finally:
-        loop.close()
-        asyncio.set_event_loop(None)
 
 @celery_app.task(bind=True)
 def optimize_all_graphs(self):
@@ -208,8 +216,10 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
     try:
         logger.info(f"Starting embedding generation for graph {graph_id}")
         
-        # Initialize Neo4j connection in this loop
-        await neo4j_client.connect()
+        # Initialize Neo4j connection fresh in this event loop
+        from app.core.neo4j_client import Neo4jClient
+        neo4j_client_local = Neo4jClient()
+        await neo4j_client_local.connect()
         
         # Initialize embedding service with proper credentials
         from app.services.credential_service import credential_service
@@ -217,8 +227,9 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
         # Get OpenAI credentials directly (avoiding service call conflicts)
         try:
             # Try to initialize embedding service
-            from app.services.embedding_service import embedding_service
-            success = await embedding_service.initialize_embeddings(
+            from app.services.embedding_service import EmbeddingService
+            embedding_service_local = EmbeddingService()
+            success = await embedding_service_local.initialize_embeddings(
                 provider="openai",
                 model="text-embedding-3-small", 
                 user_id=user_id
@@ -229,7 +240,7 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
                 import os
                 openai_key = os.getenv('OPENAI_API_KEY')
                 if openai_key:
-                    success = await embedding_service.initialize_embeddings(
+                    success = await embedding_service_local.initialize_embeddings(
                         provider="openai",
                         model="text-embedding-3-small",
                         user_id=user_id,
@@ -237,7 +248,7 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
                     )
         
         except Exception as cred_error:
-            logger.error(f"Credential retrieval error: {cred_error}")
+            logger.error(f"Error retrieving credentials: {cred_error}")
             # Try with environment variable as fallback
             import os
             openai_key = os.getenv('OPENAI_API_KEY')
@@ -247,8 +258,9 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
                     "message": "OpenAI API key not available"
                 }
             
-            from app.services.embedding_service import embedding_service
-            success = await embedding_service.initialize_embeddings(
+            from app.services.embedding_service import EmbeddingService
+            embedding_service_local = EmbeddingService()
+            success = await embedding_service_local.initialize_embeddings(
                 provider="openai",
                 model="text-embedding-3-small",
                 user_id=user_id,
@@ -281,7 +293,7 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
                 """
                 
                 # Execute query with proper error handling
-                result = await neo4j_client.execute_query(get_nodes_query, {
+                result = await neo4j_client_local.execute_query(get_nodes_query, {
                     "graph_id": graph_id,
                     "batch_size": batch_size
                 })
@@ -307,7 +319,7 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
                 
                 # Generate embeddings
                 try:
-                    embeddings = await embedding_service.embed_documents(texts)
+                    embeddings = await embedding_service_local.embed_documents(texts)
                     
                     # Update nodes with embeddings
                     for node_id, embedding in zip(node_ids, embeddings):
@@ -316,7 +328,7 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
                         SET n.embedding = $embedding
                         """
                         
-                        await neo4j_client.execute_write_query(update_query, {
+                        await neo4j_client_local.execute_write_query(update_query, {
                             "node_id": node_id,
                             "graph_id": graph_id,
                             "embedding": embedding
@@ -346,9 +358,10 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
         
         # Create vector indexes if needed
         try:
-            from app.services.vector_service import vector_service
-            await vector_service.create_vector_indexes(
-                dimension=embedding_service.dimension
+            from app.services.vector_service import VectorService
+            vector_service_local = VectorService()
+            await vector_service_local.create_vector_indexes(
+                dimension=embedding_service_local.dimension
             )
         except Exception as e:
             logger.warning(f"Failed to create vector indexes: {e}")
@@ -368,6 +381,12 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
             "status": "error",
             "message": error_msg
         }
+    finally:
+        # Clean up resources
+        try:
+            await neo4j_client_local.close()
+        except Exception:
+            pass
 
 async def _create_similarity_relationships(
     graph_id: UUID,

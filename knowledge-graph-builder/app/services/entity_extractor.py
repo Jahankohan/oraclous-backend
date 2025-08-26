@@ -731,8 +731,11 @@ class EntityExtractor:
         # 1. Exact name match
         name1 = node1.properties.get("name", node1.id).lower().strip()
         name2 = node2.properties.get("name", node2.id).lower().strip()
-        
-        if name1 == name2:
+
+        graph1 = node1.properties.get("graph_id") if hasattr(node1, 'properties') and node1.properties else None
+        graph2 = node2.properties.get("graph_id") if hasattr(node2, 'properties') and node2.properties else None
+
+        if name1 == name2 and graph1 == graph2:
             return True
         
         # 2. Substring containment
@@ -872,6 +875,7 @@ class EntityExtractor:
         
         return min(1.0, confidence)
     
+    # Shouldn't the key creation get refactored???
     def _create_entity_key(self, node: Node) -> str:
         """Create unique key for entity deduplication"""
         name = node.properties.get("name", node.id) if hasattr(node, 'properties') else node.id

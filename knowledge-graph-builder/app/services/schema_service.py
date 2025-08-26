@@ -40,6 +40,48 @@ class SchemaService:
             logger.error(f"Failed to get existing schema: {e}")
             return {"entities": [], "relationships": [], "node_count": 0, "relationship_count": 0}
     
+    async def create_multi_tenant_constraints(self, entity_types: List[str]):
+        """Create composite constraints that respect graph_id boundaries"""
+        
+        for entity_type in entity_types:
+            constraint_name = f"{entity_type.lower()}_multi_tenant_unique"
+            
+            # Composite uniqueness: (graph_id, id) must be unique together
+            constraint_query = f"""
+            CREATE CONSTRAINT {constraint_name} IF NOT EXISTS
+            FOR (n:{entity_type}) 
+            REQUIRE (n.graph_id, n.id) IS UNIQUE
+            """
+            
+            try:
+                await neo4j_client.execute_write_query(constraint_query)
+                logger.info(f"Created multi-tenant constraint for {entity_type}")
+            except Exception as e:
+                if "already exists" not in str(e).lower():
+                    logger.error(f"Failed to create constraint for {entity_type}: {e}")
+                    raise
+                else:
+                    logger.debug(f"Constraint for {entity_type} already exists")
+                    
+        logger.info(f"Multi-tenant constraints created for {len(entity_types)} entity types")
+
+    async def ensure_graph_id_indexes(self):
+        """Create indexes for efficient graph_id filtering"""
+        
+        index_queries = [
+            "CREATE INDEX entity_graph_id_index IF NOT EXISTS FOR (n:Entity) ON (n.graph_id)",
+            "CREATE INDEX person_graph_id_index IF NOT EXISTS FOR (n:Person) ON (n.graph_id)", 
+            "CREATE INDEX chunk_graph_id_index IF NOT EXISTS FOR (n:Chunk) ON (n.graph_id)",
+            "CREATE INDEX document_graph_id_index IF NOT EXISTS FOR (n:Document) ON (n.graph_id)"
+        ]
+        
+        for query in index_queries:
+            try:
+                await neo4j_client.execute_write_query(query)
+                logger.debug("Created graph_id index")
+            except Exception as e:
+                logger.debug(f"Index creation note: {e}")
+
     async def get_graph_specific_schema(self, graph_id: str) -> Dict[str, Any]:
         """
         NEW: Get schema for a specific graph using graph_id filtering
@@ -168,44 +210,18 @@ class SchemaService:
         except Exception:
             return []
     
-    async def create_graph_constraints(
-        self, 
-        schema_config: Dict[str, Any]
-    ):
-        """
-        CORRECTED: Create constraints without neo4j_database parameter
-        """
+    async def create_graph_constraints(self, schema_config: Dict[str, Any]):
+        """FIXED: Create multi-tenant compatible constraints"""
+        
         try:
             entities = schema_config.get("entities", [])
             
-            for entity_type in entities:
-                # Create uniqueness constraint on id property
-                constraint_query = f"""
-                CREATE CONSTRAINT {entity_type.lower()}_id_unique IF NOT EXISTS
-                FOR (n:{entity_type}) 
-                REQUIRE n.id IS UNIQUE
-                """
-                
-                try:
-                    # REMOVED: database parameter
-                    await neo4j_client.execute_write_query(constraint_query)
-                    logger.debug(f"Created constraint for {entity_type}")
-                except Exception as e:
-                    logger.debug(f"Constraint for {entity_type} might already exist: {e}")
+            # Create composite constraints instead of global ones
+            await self.create_multi_tenant_constraints(entities)
             
-            # Create index on graph_id for efficient filtering
-            graph_id_index = """
-            CREATE INDEX graph_id_entities_general IF NOT EXISTS
-            FOR (n:Entity)
-            ON (n.graph_id)
-            """
+            # Ensure performance indexes exist
+            await self.ensure_graph_id_indexes()
             
-            try:
-                await neo4j_client.execute_write_query(graph_id_index)
-                logger.debug("Created graph_id index for entities")
-            except Exception as e:
-                logger.debug(f"Graph ID index might already exist: {e}")
-                
             logger.info(f"Schema constraints created for {len(entities)} entity types")
             
         except Exception as e:
