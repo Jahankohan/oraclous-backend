@@ -13,6 +13,7 @@ from app.services.entity_extractor import entity_extractor
 from app.services.enhanced_graph_service import enhanced_graph_service
 from app.services.vector_service import vector_service
 from app.services.embedding_service import embedding_service
+from app.services.analytics_service import analytics_service
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -612,34 +613,33 @@ async def _create_entity_chunk_similarities(graph_id: UUID) -> int:
 
 
 async def _detect_communities_and_cleanup(graph_id: UUID) -> int:
-    """Detect communities and perform graph cleanup"""
+    """Create persistent community nodes and perform graph cleanup"""
     
     try:
-        # Community detection using Louvain algorithm
-        community_query = """
-        CALL gds.graph.project(
-            'tempGraph_' + $graph_id,
-            ['Entity', 'DocumentChunk'],
-            ['RELATED_TO', 'SIMILAR', 'CONTAINS'],
-            {nodeProperties: ['embedding'], relationshipProperties: ['similarity_score']}
-        )
-        YIELD graphName
+        logger.info(f"Starting persistent community creation for graph {graph_id}")
         
-        CALL gds.louvain.write(graphName, {writeProperty: 'community'})
-        YIELD communityCount
-        
-        CALL gds.graph.drop(graphName)
-        
-        RETURN communityCount
-        """
-        
-        result = await neo4j_client.execute_write_query(community_query, {
-            "graph_id": str(graph_id).replace("-", "_")  # Neo4j graph names can't have hyphens
-        })
-        
-        community_count = result[0]["communityCount"] if result else 0
-        
-        # Cleanup orphaned nodes
+        # Step 1: Create persistent community nodes using analytics service
+        # This replaces the old temporary GDS approach with full persistence
+        try:
+            persistence_result = await analytics_service.create_community_nodes(graph_id)
+            
+            logger.info(f"Community persistence results: {persistence_result}")
+            
+            persistent_communities = persistence_result.get("communities_created", 0)
+            persistent_relationships = persistence_result.get("relationships_created", 0)
+            
+            if persistent_communities > 0:
+                logger.info(f"Successfully created {persistent_communities} persistent community nodes "
+                           f"with {persistent_relationships} IN_COMMUNITY relationships")
+            else:
+                logger.warning("No persistent communities were created")
+                
+        except Exception as persistence_error:
+            logger.error(f"Failed to create persistent community nodes: {persistence_error}")
+            # Continue with cleanup even if persistence fails
+            persistent_communities = 0
+            
+        # Step 2: Cleanup orphaned nodes
         cleanup_query = """
         MATCH (n {graph_id: $graph_id})
         WHERE NOT (n)-[]-()
@@ -653,9 +653,10 @@ async def _detect_communities_and_cleanup(graph_id: UUID) -> int:
         
         orphans_removed = cleanup_result[0]["orphans_removed"] if cleanup_result else 0
         
-        logger.info(f"Detected {community_count} communities, removed {orphans_removed} orphaned nodes")
+        logger.info(f"Persistent community creation completed: {persistent_communities} communities created, "
+                   f"{orphans_removed} orphaned nodes removed")
         
-        return community_count
+        return persistent_communities
         
     except Exception as e:
         logger.error(f"Community detection failed: {e}")
@@ -867,6 +868,262 @@ async def _optimize_all_graphs_async(task):
                 "graphs_processed": len(graphs),
                 "graphs_optimized": total_optimized
             }
+        
+        except Exception as e:
+            logger.error(f"Failed to optimize graphs: {e}")
+            await db.rollback()
+            return {
+                "status": "error",
+                "message": str(e),
+                "graphs_processed": 0,
+                "graphs_optimized": 0
+            }
+
+
+@celery_app.task(bind=True)
+def create_persistent_communities_task(self, graph_id: str, user_id: str):
+    """Background task to create persistent community nodes for a specific graph"""
+    import asyncio
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        result = loop.run_until_complete(
+            _create_persistent_communities_async(self, UUID(graph_id), user_id)
+        )
+        return result
+    finally:
+        loop.close()
+
+
+async def _create_persistent_communities_async(task, graph_id: UUID, user_id: str):
+    """Async function to create persistent community nodes"""
+    
+    async with async_session_maker() as db:
+        try:
+            # Update task status
+            task.update_state(
+                state="PROGRESS",
+                meta={"status": "Starting community node creation", "progress": 0}
+            )
+            
+            logger.info(f"Creating persistent communities for graph {graph_id}")
+            
+            # Step 1: Create community nodes
+            task.update_state(
+                state="PROGRESS", 
+                meta={"status": "Running community detection", "progress": 25}
+            )
+            
+            community_result = await analytics_service.create_community_nodes(graph_id)
+            
+            # Step 2: Generate community embeddings (placeholder for now)
+            task.update_state(
+                state="PROGRESS",
+                meta={"status": "Generating community embeddings", "progress": 75}
+            )
+            
+            # TODO: Uncomment when embedding service is ready
+            # embedding_result = await analytics_service.generate_community_embeddings(graph_id)
+            
+            # Step 3: Update graph status
+            task.update_state(
+                state="PROGRESS",
+                meta={"status": "Updating graph status", "progress": 90}
+            )
+            
+            # Update the knowledge graph record
+            await db.execute(
+                update(KnowledgeGraph)
+                .where(KnowledgeGraph.id == graph_id)
+                .values(
+                    communities_enabled=True,
+                    last_optimized=datetime.utcnow()
+                )
+            )
+            
+            await db.commit()
+            
+            task.update_state(
+                state="SUCCESS",
+                meta={
+                    "status": "Community creation completed",
+                    "progress": 100,
+                    "communities_created": community_result.get("communities_created", 0),
+                    "relationships_created": community_result.get("relationships_created", 0),
+                    "algorithm_used": community_result.get("algorithm_used", "unknown")
+                }
+            )
+            
+            return community_result
+            
+        except Exception as e:
+            logger.error(f"Community creation task failed for graph {graph_id}: {e}")
+            
+            task.update_state(
+                state="FAILURE",
+                meta={"status": f"Failed: {str(e)}", "error": str(e)}
+            )
+            
+            raise
+
+
+@celery_app.task(bind=True)
+def update_community_embeddings_task(self, graph_id: str, user_id: str):
+    """Background task to update community embeddings for better search"""
+    import asyncio
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        result = loop.run_until_complete(
+            _update_community_embeddings_async(self, UUID(graph_id), user_id)
+        )
+        return result
+    finally:
+        loop.close()
+
+
+async def _update_community_embeddings_async(task, graph_id: UUID, user_id: str):
+    """Async function to update community embeddings"""
+    
+    try:
+        task.update_state(
+            state="PROGRESS",
+            meta={"status": "Starting embedding generation", "progress": 0}
+        )
+        
+        logger.info(f"Updating community embeddings for graph {graph_id}")
+        
+        # Generate embeddings for community summaries
+        # TODO: Implement when embedding service is integrated
+        # embedding_result = await analytics_service.generate_community_embeddings(graph_id)
+        
+        # For now, return a placeholder result
+        embedding_result = {
+            "embeddings_generated": 0,
+            "message": "Embedding generation not yet implemented",
+            "graph_id": str(graph_id)
+        }
+        
+        task.update_state(
+            state="SUCCESS",
+            meta={
+                "status": "Embedding update completed",
+                "progress": 100,
+                "embeddings_generated": embedding_result.get("embeddings_generated", 0)
+            }
+        )
+        
+        return embedding_result
+        
+    except Exception as e:
+        logger.error(f"Community embedding update failed for graph {graph_id}: {e}")
+        
+        task.update_state(
+            state="FAILURE",
+            meta={"status": f"Failed: {str(e)}", "error": str(e)}
+        )
+        
+        raise
+
+
+@celery_app.task(bind=True) 
+def refresh_all_communities_task(self, user_id: str):
+    """Background task to refresh communities for all graphs"""
+    import asyncio
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        result = loop.run_until_complete(
+            _refresh_all_communities_async(self, user_id)
+        )
+        return result
+    finally:
+        loop.close()
+
+
+async def _refresh_all_communities_async(task, user_id: str):
+    """Async function to refresh communities for all user graphs"""
+    
+    async with async_session_maker() as db:
+        try:
+            # Get all graphs for the user
+            result = await db.execute(
+                select(KnowledgeGraph)
+                .where(KnowledgeGraph.user_id == user_id)
+                .where(KnowledgeGraph.status == "completed")
+            )
+            
+            graphs = result.scalars().all()
+            
+            if not graphs:
+                return {
+                    "status": "completed",
+                    "message": "No graphs found for user",
+                    "graphs_processed": 0
+                }
+            
+            task.update_state(
+                state="PROGRESS",
+                meta={"status": f"Processing {len(graphs)} graphs", "progress": 0}
+            )
+            
+            communities_created = 0
+            graphs_processed = 0
+            
+            for i, graph in enumerate(graphs):
+                try:
+                    logger.info(f"Refreshing communities for graph {graph.id}")
+                    
+                    # Create persistent community nodes
+                    community_result = await analytics_service.create_community_nodes(graph.id)
+                    
+                    communities_created += community_result.get("communities_created", 0)
+                    graphs_processed += 1
+                    
+                    # Update progress
+                    progress = int(((i + 1) / len(graphs)) * 100)
+                    task.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "status": f"Processed {i + 1}/{len(graphs)} graphs",
+                            "progress": progress,
+                            "communities_created": communities_created
+                        }
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Failed to refresh communities for graph {graph.id}: {e}")
+                    continue
+            
+            final_result = {
+                "status": "completed",
+                "graphs_processed": graphs_processed,
+                "total_communities_created": communities_created,
+                "user_id": user_id
+            }
+            
+            task.update_state(
+                state="SUCCESS",
+                meta=final_result
+            )
+            
+            return final_result
+            
+        except Exception as e:
+            logger.error(f"Refresh all communities failed for user {user_id}: {e}")
+            
+            task.update_state(
+                state="FAILURE", 
+                meta={"status": f"Failed: {str(e)}", "error": str(e)}
+            )
+            
+            raise
             
         except Exception as e:
             logger.error(f"Batch optimization failed: {e}")

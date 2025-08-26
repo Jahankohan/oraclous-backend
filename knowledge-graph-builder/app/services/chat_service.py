@@ -12,6 +12,7 @@ from app.services.search_service import search_service
 from app.services.embedding_service import embedding_service
 from app.services.schema_service import schema_service
 from app.services.graphrag_service import graphrag_service
+from app.services.analytics_service import analytics_service
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -119,7 +120,7 @@ class ChatService:
             self.graph_schema = schema
             
             # ENHANCED: Pre-compute graph statistics
-            await self._precompute_graph_statistics()
+            await analytics_service.precompute_and_cache_statistics(self.current_graph_id)
             
             logger.info(f"Chat initialized for graph {graph_id} with all services")
             return True
@@ -683,25 +684,25 @@ class ChatService:
         if reasoning_mode == ReasoningMode.COMPREHENSIVE:
             context_strategies = await asyncio.gather(
                 self._get_direct_context_with_graph_id(primary_entities, graph_id),
-                self._get_neighborhood_context_with_graph_id(primary_entities, graph_id),
-                self._get_pathway_context_with_graph_id(primary_entities, graph_id, 3),
-                self._get_community_context_with_graph_id(primary_entities, graph_id),
-                self._get_influential_context_with_graph_id(query, graph_id),
-                self._get_temporal_context_with_graph_id(primary_entities, graph_id)
+                analytics_service.get_neighborhood_context(primary_entities, graph_id),
+                analytics_service.get_pathway_context(primary_entities, graph_id, 3),
+                analytics_service.get_community_context(primary_entities, graph_id),
+                analytics_service.get_influential_context(query, graph_id),
+                analytics_service.get_temporal_context(primary_entities, graph_id)
             )
         elif reasoning_mode == ReasoningMode.FOCUSED:
             context_strategies = await asyncio.gather(
                 self._get_direct_context_with_graph_id(primary_entities, graph_id),
-                self._get_neighborhood_context_with_graph_id(primary_entities, graph_id),
-                self._get_influential_context_with_graph_id(query, graph_id)
+                analytics_service.get_neighborhood_context(primary_entities, graph_id),
+                analytics_service.get_influential_context(query, graph_id)
             )
             context_strategies.extend([{}, {}, {}])
         elif reasoning_mode == ReasoningMode.EXPLORATORY:
             context_strategies = await asyncio.gather(
                 self._get_direct_context_with_graph_id(primary_entities, graph_id),
-                self._get_pathway_context_with_graph_id(primary_entities, graph_id, 4),
-                self._get_community_context_with_graph_id(primary_entities, graph_id),
-                self._get_temporal_context_with_graph_id(primary_entities, graph_id)
+                analytics_service.get_pathway_context(primary_entities, graph_id, 4),
+                analytics_service.get_community_context(primary_entities, graph_id),
+                analytics_service.get_temporal_context(primary_entities, graph_id)
             )
             context_strategies.extend([{}, {}])
         
@@ -998,7 +999,7 @@ class ChatService:
             community_insights = await self._get_community_insights_for_query(query)
             
             # Get graph statistics
-            graph_stats = await self._get_relevant_graph_statistics()
+            graph_stats = await analytics_service.get_graph_statistics(self.current_graph_id)
             
             response.update({
                 "related_entities": related_entities,
@@ -1787,7 +1788,7 @@ class ChatService:
                 return {"insight": "No matching entities found in graph"}
             
             # Get community context for matched entities
-            community_context = await self._get_community_context_with_graph_id(
+            community_context = await analytics_service.get_community_context(
                 entity_matches, self.current_graph_id
             )
             

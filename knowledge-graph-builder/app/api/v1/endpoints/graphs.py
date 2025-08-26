@@ -13,7 +13,15 @@ from app.schemas.graph_schemas import (
     IngestDataRequest, IngestionJobResponse, SchemaLearnRequest, SchemaUpdateRequest
 )
 from app.core.neo4j_client import neo4j_client
-from app.services.background_jobs import process_ingestion_job, _create_similarity_relationships, _detect_communities_and_cleanup
+from app.services.background_jobs import (
+    process_ingestion_job, 
+    _create_similarity_relationships, 
+    _detect_communities_and_cleanup,
+    create_persistent_communities_task,
+    update_community_embeddings_task,
+    refresh_all_communities_task,
+    optimize_all_graphs
+)
 from app.services.entity_extractor import entity_extractor, SchemaEvolutionConfig
 from app.services.schema_service import schema_service
 from app.services.enhanced_graph_service import enhanced_graph_service
@@ -644,10 +652,11 @@ async def create_similarity_relationships(
 @router.post("/graphs/{graph_id}/optimize/communities")
 async def detect_communities(
     graph_id: UUID,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database)
 ):
-    """Detect communities and cleanup graph"""
+    """Detect communities and cleanup graph (with background task option)"""
     
     # Verify graph ownership
     result = await db.execute(
@@ -662,7 +671,12 @@ async def detect_communities(
         raise HTTPException(status_code=404, detail="Graph not found")
     
     try:
+        # Option 1: Synchronous execution (for small graphs)
         communities_found = await _detect_communities_and_cleanup(graph_id)
+        
+        # Option 2: For large graphs, you can use background task
+        # task = create_persistent_communities_task.delay(str(graph_id), user_id)
+        # return {"task_id": task.id, "status": "processing"}
         
         return {
             "status": "success",
@@ -672,5 +686,188 @@ async def detect_communities(
         
     except Exception as e:
         logger.error(f"Community detection failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/graphs/{graph_id}/communities/create-async")
+async def create_communities_async(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Create persistent communities in background task (for large graphs)"""
+    
+    # Verify graph ownership
+    result = await db.execute(
+        select(KnowledgeGraph).where(
+            KnowledgeGraph.id == graph_id,
+            KnowledgeGraph.user_id == UUID(user_id)
+        )
+    )
+    graph = result.scalar_one_or_none()
+    
+    if not graph:
+        raise HTTPException(status_code=404, detail="Graph not found")
+    
+    try:
+        # Start background task
+        task = create_persistent_communities_task.delay(str(graph_id), user_id)
+        
+        return {
+            "task_id": task.id,
+            "status": "processing",
+            "message": "Community creation started in background",
+            "check_status_url": f"/graphs/{graph_id}/tasks/{task.id}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Background community creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/graphs/{graph_id}/communities/embeddings")
+async def update_community_embeddings(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Generate/update embeddings for community summaries"""
+    
+    # Verify graph ownership
+    result = await db.execute(
+        select(KnowledgeGraph).where(
+            KnowledgeGraph.id == graph_id,
+            KnowledgeGraph.user_id == UUID(user_id)
+        )
+    )
+    graph = result.scalar_one_or_none()
+    
+    if not graph:
+        raise HTTPException(status_code=404, detail="Graph not found")
+    
+    try:
+        # Start background task for embedding generation
+        task = update_community_embeddings_task.delay(str(graph_id), user_id)
+        
+        return {
+            "task_id": task.id,
+            "status": "processing",
+            "message": "Community embedding generation started",
+            "check_status_url": f"/graphs/{graph_id}/tasks/{task.id}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Community embedding update failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/graphs/optimize/refresh-all")
+async def refresh_all_communities(
+    user_id: str = Depends(get_current_user_id),
+):
+    """Refresh communities for all user graphs"""
+    
+    try:
+        # Start background task to refresh all communities
+        task = refresh_all_communities_task.delay(user_id)
+        
+        return {
+            "task_id": task.id,
+            "status": "processing", 
+            "message": "Community refresh started for all graphs",
+            "check_status_url": f"/tasks/{task.id}/status"
+        }
+        
+    except Exception as e:
+        logger.error(f"Refresh all communities failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/optimize/all-graphs")
+async def optimize_all_graphs_endpoint(
+    user_id: str = Depends(get_current_user_id),
+    # TODO: Add admin role check here
+    # admin_user: AdminUser = Depends(get_admin_user)
+):
+    """Admin endpoint: Optimize all graphs in the system"""
+    
+    # TODO: Add admin role verification
+    # if not admin_user.is_admin:
+    #     raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        # Start background task for system-wide optimization
+        task = optimize_all_graphs.delay()
+        
+        return {
+            "task_id": task.id,
+            "status": "processing",
+            "message": "System-wide graph optimization started",
+            "check_status_url": f"/admin/tasks/{task.id}/status"
+        }
+        
+    except Exception as e:
+        logger.error(f"Admin optimization failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/graphs/{graph_id}/tasks/{task_id}")
+async def get_task_status(
+    graph_id: UUID,
+    task_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database)
+):
+    """Get status of a background task for a specific graph"""
+    
+    # Verify graph ownership
+    result = await db.execute(
+        select(KnowledgeGraph).where(
+            KnowledgeGraph.id == graph_id,
+            KnowledgeGraph.user_id == UUID(user_id)
+        )
+    )
+    graph = result.scalar_one_or_none()
+    
+    if not graph:
+        raise HTTPException(status_code=404, detail="Graph not found")
+    
+    try:
+        from app.services.background_jobs import celery_app
+        
+        # Get task result
+        task_result = celery_app.AsyncResult(task_id)
+        
+        if task_result.state == 'PENDING':
+            response = {
+                "task_id": task_id,
+                "status": "pending",
+                "message": "Task is waiting to be processed"
+            }
+        elif task_result.state == 'PROGRESS':
+            response = {
+                "task_id": task_id,
+                "status": "processing",
+                "progress": task_result.info.get('progress', 0),
+                "current": task_result.info.get('status', 'Processing...'),
+                "result": task_result.info
+            }
+        elif task_result.state == 'SUCCESS':
+            response = {
+                "task_id": task_id,
+                "status": "completed",
+                "result": task_result.result
+            }
+        else:  # FAILURE
+            response = {
+                "task_id": task_id,
+                "status": "failed",
+                "error": str(task_result.info)
+            }
+            
+        return response
+        
+    except Exception as e:
+        logger.error(f"Task status check failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -37,19 +37,27 @@ class Neo4jClient:
     async def _create_initial_indexes(self):
         """Create indexes for graph isolation"""
         try:
-            # ✅ FIXED: Create indexes for specific node types
-            index_queries = [
-                "CREATE INDEX graph_id_entities IF NOT EXISTS FOR (n:Entity) ON (n.graph_id)",
-                "CREATE INDEX graph_id_chunks IF NOT EXISTS FOR (n:Chunk) ON (n.graph_id)",
-                "CREATE INDEX graph_id_documents IF NOT EXISTS FOR (n:Document) ON (n.graph_id)"
+            # Check if indexes exist first to avoid notifications
+            index_configs = [
+                ("graph_id_entities", "Entity", "graph_id"),
+                ("graph_id_chunks", "Chunk", "graph_id"),
+                ("graph_id_documents", "Document", "graph_id")
             ]
             
-            for query in index_queries:
-                try:
-                    await self.execute_write_query(query)
-                    logger.debug(f"Created index: {query}")
-                except Exception as e:
-                    logger.debug(f"Index might already exist: {e}")
+            # Get existing indexes
+            existing_indexes = await self.execute_query("SHOW INDEXES")
+            existing_index_names = {record.get("name", "") for record in existing_indexes} if existing_indexes else set()
+            
+            for index_name, node_label, property_name in index_configs:
+                if index_name not in existing_index_names:
+                    query = f"CREATE INDEX {index_name} IF NOT EXISTS FOR (n:{node_label}) ON (n.{property_name})"
+                    try:
+                        await self.execute_write_query(query)
+                        logger.debug(f"Created index: {index_name}")
+                    except Exception as e:
+                        logger.debug(f"Failed to create index {index_name}: {e}")
+                else:
+                    logger.debug(f"Index {index_name} already exists, skipping")
                     
         except Exception as e:
             logger.warning(f"Failed to create indexes: {e}")
