@@ -221,12 +221,36 @@ class EntityExtractor:
         chunks: List[Dict[str, Any]],
         graph_id: UUID
     ) -> Tuple[List[Node], List[Relationship]]:
-        """Create chunk nodes and Document → Chunk relationships with proper ordering"""
+        """
+        Create chunk nodes with enhanced relationships for better document navigation:
+        
+        Relationship Types:
+        - FIRST_CHUNK: Document → First chunk only
+        - PART_OF: Document → All other chunks  
+        - NEXT_CHUNK: Chunk → Next chunk (sequential order)
+        - SIMILAR: Chunk ↔ Chunk (semantic similarity, bidirectional)
+        
+        Example Queries:
+        # Get first chunk of a document
+        MATCH (d:Document)-[:FIRST_CHUNK]->(first:DocumentChunk) WHERE d.id = "doc_id"
+        
+        # Get all chunks in order
+        MATCH (d:Document)-[:FIRST_CHUNK]->(first:DocumentChunk)
+        OPTIONAL MATCH (first)-[:NEXT_CHUNK*]->(rest:DocumentChunk)
+        RETURN first, rest ORDER BY rest.chunk_order
+        
+        # Find similar chunks
+        MATCH (c1:DocumentChunk)-[s:SIMILAR]->(c2:DocumentChunk) 
+        WHERE s.similarity_score > 0.9
+        """
         
         chunk_nodes = []
-        doc_chunk_relationships = []
+        all_relationships = []
         
-        for chunk in chunks:
+        # Sort chunks by order to ensure proper sequencing
+        sorted_chunks = sorted(chunks, key=lambda x: x["chunk_order"])
+        
+        for i, chunk in enumerate(sorted_chunks):
             # Create chunk node with embedding
             chunk_node = Node(
                 id=chunk["id"],
@@ -242,25 +266,137 @@ class EntityExtractor:
                     "char_start": chunk["char_start"],
                     "char_end": chunk["char_end"],
                     "embedding": chunk["embedding"],
-                    "has_embedding": chunk["has_embedding"]
+                    "has_embedding": chunk["has_embedding"],
+                    "is_first_chunk": i == 0,  # Mark first chunk
+                    "is_last_chunk": i == len(sorted_chunks) - 1  # Mark last chunk
                 }
             )
             chunk_nodes.append(chunk_node)
             
-            # Create Document → Chunk relationship with ordering info
-            doc_chunk_rel = Relationship(
-                source=doc_node,
-                target=chunk_node,
-                type="CONTAINS_CHUNK",
-                properties={
-                    "graph_id": str(graph_id),
-                    "chunk_order": chunk["chunk_order"],
-                    "sequence_number": chunk["chunk_index"]
-                }
-            )
-            doc_chunk_relationships.append(doc_chunk_rel)
+            # Create Document → Chunk relationships with specific types
+            if i == 0:
+                # First chunk gets FIRST_CHUNK relationship
+                doc_chunk_rel = Relationship(
+                    source=doc_node,
+                    target=chunk_node,
+                    type="FIRST_CHUNK",
+                    properties={
+                        "graph_id": str(graph_id),
+                        "chunk_order": chunk["chunk_order"],
+                        "sequence_number": chunk["chunk_index"],
+                        "relationship_type": "first_chunk"
+                    }
+                )
+            else:
+                # Other chunks get PART_OF relationship
+                doc_chunk_rel = Relationship(
+                    source=doc_node,
+                    target=chunk_node,
+                    type="PART_OF",
+                    properties={
+                        "graph_id": str(graph_id),
+                        "chunk_order": chunk["chunk_order"],
+                        "sequence_number": chunk["chunk_index"],
+                        "relationship_type": "part_of"
+                    }
+                )
+            all_relationships.append(doc_chunk_rel)
+            
+            # Create NEXT_CHUNK relationships between consecutive chunks
+            if i > 0:
+                previous_chunk_node = chunk_nodes[i - 1]
+                next_chunk_rel = Relationship(
+                    source=previous_chunk_node,
+                    target=chunk_node,
+                    type="NEXT_CHUNK",
+                    properties={
+                        "graph_id": str(graph_id),
+                        "from_order": sorted_chunks[i-1]["chunk_order"],
+                        "to_order": chunk["chunk_order"],
+                        "sequence_gap": chunk["chunk_order"] - sorted_chunks[i-1]["chunk_order"]
+                    }
+                )
+                all_relationships.append(next_chunk_rel)
         
-        return chunk_nodes, doc_chunk_relationships
+        # Create SIMILAR relationships between semantically similar chunks
+        similar_relationships = self._create_chunk_similarity_relationships(
+            chunk_nodes, graph_id
+        )
+        all_relationships.extend(similar_relationships)
+        
+        logger.info(f"Created {len(chunk_nodes)} chunk nodes with {len(all_relationships)} relationships "
+                   f"(including {len(similar_relationships)} similarity relationships)")
+        
+        return chunk_nodes, all_relationships
+
+    def _create_chunk_similarity_relationships(
+        self,
+        chunk_nodes: List[Node],
+        graph_id: UUID,
+        similarity_threshold: float = 0.85
+    ) -> List[Relationship]:
+        """Create SIMILAR relationships between semantically similar chunks"""
+        
+        similar_relationships = []
+        
+        # Only create similarity relationships if we have embeddings
+        chunks_with_embeddings = [
+            node for node in chunk_nodes 
+            if node.properties.get("embedding") is not None
+        ]
+        
+        if len(chunks_with_embeddings) < 2:
+            logger.info("Not enough chunks with embeddings for similarity analysis")
+            return similar_relationships
+        
+        # Compare each chunk with every other chunk
+        for i, chunk1 in enumerate(chunks_with_embeddings):
+            for j, chunk2 in enumerate(chunks_with_embeddings[i+1:], i+1):
+                try:
+                    embedding1 = chunk1.properties["embedding"]
+                    embedding2 = chunk2.properties["embedding"]
+                    
+                    # Calculate cosine similarity
+                    similarity = self._cosine_similarity(embedding1, embedding2)
+                    
+                    if similarity >= similarity_threshold:
+                        # Create bidirectional SIMILAR relationships
+                        similar_rel1 = Relationship(
+                            source=chunk1,
+                            target=chunk2,
+                            type="SIMILAR",
+                            properties={
+                                "graph_id": str(graph_id),
+                                "similarity_score": similarity,
+                                "similarity_type": "semantic",
+                                "threshold": similarity_threshold
+                            }
+                        )
+                        
+                        similar_rel2 = Relationship(
+                            source=chunk2,
+                            target=chunk1,
+                            type="SIMILAR",
+                            properties={
+                                "graph_id": str(graph_id),
+                                "similarity_score": similarity,
+                                "similarity_type": "semantic",
+                                "threshold": similarity_threshold
+                            }
+                        )
+                        
+                        similar_relationships.extend([similar_rel1, similar_rel2])
+                        
+                        logger.debug(f"Created SIMILAR relationship between chunks "
+                                   f"{chunk1.properties.get('chunk_order', 'unknown')} and "
+                                   f"{chunk2.properties.get('chunk_order', 'unknown')} "
+                                   f"(similarity: {similarity:.3f})")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to calculate similarity between chunks: {e}")
+                    continue
+        
+        return similar_relationships
 
     async def _get_or_evolve_schema(
         self,
