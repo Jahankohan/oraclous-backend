@@ -205,57 +205,67 @@ class GraphAnalyticsService:
         try:
             logger.info(f"Creating persistent community nodes for graph {graph_id}")
             
-            # Step 1: Run community detection on all entities in the graph
-            community_detection_query = """
-            CALL {
-                // Create temporary graph projection for this specific graph_id
-                CALL gds.graph.project(
-                    'temp-persist-' + $graph_id,
-                    {
-                        Entity: {
-                            label: '__Entity__',
-                            properties: ['name', 'id'],
-                            nodeFilter: 'n.graph_id = "' + $graph_id + '"'
-                        }
-                    },
-                    {
-                        RELATIONSHIP: {
-                            type: '*',
-                            orientation: 'UNDIRECTED'
-                        }
+            # Generate unique graph projection name
+            graph_name = f"temp_persist_{str(graph_id).replace('-', '_')}"
+            
+            # Step 1: Create graph projection with correct syntax
+            projection_query = """
+            CALL gds.graph.project(
+                $graph_name,
+                {
+                    Entity: {
+                        label: '__Entity__',
+                        properties: ['name', 'id']
                     }
-                )
-                YIELD graphName
-                
-                // Run Louvain community detection
-                CALL gds.louvain.stream('temp-persist-' + $graph_id)
-                YIELD nodeId, communityId
-                
-                // Get original nodes with their community assignments
-                MATCH (node:__Entity__)
-                WHERE id(node) = nodeId AND node.graph_id = $graph_id
-                
-                RETURN node.id as entity_id,
-                       node.name as entity_name,
-                       communityId,
-                       labels(node) as entity_labels
-            }
+                },
+                {
+                    RELATIONSHIP: {
+                        type: '*',
+                        orientation: 'UNDIRECTED'
+                    }
+                },
+                {
+                    nodeQuery: 'MATCH (n:__Entity__) WHERE n.graph_id = $graph_id RETURN id(n) AS id',
+                    relationshipQuery: 'MATCH (a:__Entity__)-[r]->(b:__Entity__) WHERE a.graph_id = $graph_id AND b.graph_id = $graph_id AND r.graph_id = $graph_id RETURN id(a) AS source, id(b) AS target'
+                }
+            )
+            YIELD graphName
+            RETURN graphName
+            """
             
-            // Clean up the temporary graph
-            CALL gds.graph.drop('temp-persist-' + $graph_id, false)
-            YIELD graphName as droppedGraph
+            await neo4j_client.execute_query(projection_query, {
+                "graph_name": graph_name,
+                "graph_id": str(graph_id)
+            })
             
-            RETURN entity_id, entity_name, communityId, entity_labels
+            # Step 2: Run Louvain community detection
+            community_detection_query = """
+            CALL gds.louvain.stream($graph_name)
+            YIELD nodeId, communityId
+            
+            // Get original nodes with their community assignments
+            MATCH (node:__Entity__)
+            WHERE id(node) = nodeId AND node.graph_id = $graph_id
+            
+            RETURN node.id as entity_id,
+                node.name as entity_name,
+                communityId,
+                labels(node) as entity_labels
             """
             
             detection_results = await neo4j_client.execute_query(community_detection_query, {
+                "graph_name": graph_name,
                 "graph_id": str(graph_id)
             })
+            
+            # Step 3: Clean up the temporary graph
+            cleanup_query = "CALL gds.graph.drop($graph_name, false) YIELD graphName"
+            await neo4j_client.execute_query(cleanup_query, {"graph_name": graph_name})
             
             if not detection_results:
                 return {"communities_created": 0, "relationships_created": 0, "message": "No entities found for community detection"}
             
-            # Step 2: Group entities by community
+            # Step 4: Group entities by community
             communities_map = {}
             for result in detection_results:
                 community_id = result["communityId"]
@@ -268,7 +278,7 @@ class GraphAnalyticsService:
                     "entity_labels": result["entity_labels"]
                 })
             
-            # Step 3: Create community nodes and relationships
+            # Step 5: Create community nodes and relationships
             communities_created = 0
             relationships_created = 0
             
@@ -338,6 +348,115 @@ class GraphAnalyticsService:
             logger.error(f"Failed to create community nodes: {e}")
             # Fallback: create communities using simple method
             return await self._create_simple_communities(graph_id)
+
+    async def _create_simple_communities(self, graph_id: UUID) -> Dict[str, Any]:
+        """
+        Fallback method to create communities using simple clustering based on shared neighbors.
+        
+        Args:
+            graph_id: UUID of the specific graph to analyze
+            
+        Returns:
+            Dictionary containing creation results
+        """
+        try:
+            logger.info(f"Creating simple communities for graph {graph_id}")
+            
+            # Find entities with shared neighbors
+            shared_neighbors_query = """
+            MATCH (a:__Entity__)-[r1]-(common)-[r2]-(b:__Entity__)
+            WHERE a.graph_id = $graph_id 
+            AND b.graph_id = $graph_id 
+            AND common.graph_id = $graph_id
+            AND r1.graph_id = $graph_id 
+            AND r2.graph_id = $graph_id
+            AND a.id < b.id  // Avoid duplicates
+            
+            WITH a, b, count(DISTINCT common) as shared_count
+            WHERE shared_count >= 2  // At least 2 shared neighbors
+            
+            RETURN a.id as entity_a_id, 
+                a.name as entity_a_name,
+                b.id as entity_b_id, 
+                b.name as entity_b_name,
+                shared_count
+            ORDER BY shared_count DESC
+            LIMIT 50
+            """
+            
+            results = await neo4j_client.execute_query(shared_neighbors_query, {
+                "graph_id": str(graph_id)
+            })
+            
+            if not results:
+                return {"communities_created": 0, "relationships_created": 0, "message": "No shared neighbor communities found"}
+            
+            # Group entities into simple communities
+            communities_created = 0
+            relationships_created = 0
+            
+            for i, result in enumerate(results[:10]):  # Limit to 10 communities
+                community_uuid = f"simple_community_{graph_id}_{i}"
+                
+                # Create community node
+                create_community_query = """
+                MERGE (community:__Community__ {
+                    id: $community_id,
+                    graph_id: $graph_id
+                })
+                SET community.summary = $summary,
+                    community.entity_count = 2,
+                    community.detection_algorithm = 'shared_neighbors',
+                    community.weight = $weight,
+                    community.creation_date = datetime(),
+                    community.last_updated = datetime()
+                """
+                
+                summary = f"Community of {result['entity_a_name']} and {result['entity_b_name']} (shared {result['shared_count']} connections)"
+                
+                await neo4j_client.execute_query(create_community_query, {
+                    "community_id": community_uuid,
+                    "graph_id": str(graph_id),
+                    "summary": summary,
+                    "weight": result["shared_count"] / 10.0  # Normalize weight
+                })
+                
+                communities_created += 1
+                
+                # Create relationships for both entities
+                for entity_id in [result["entity_a_id"], result["entity_b_id"]]:
+                    relationship_query = """
+                    MATCH (entity:__Entity__ {id: $entity_id, graph_id: $graph_id})
+                    MATCH (community:__Community__ {id: $community_id, graph_id: $graph_id})
+                    MERGE (entity)-[:IN_COMMUNITY]->(community)
+                    """
+                    
+                    await neo4j_client.execute_query(relationship_query, {
+                        "entity_id": entity_id,
+                        "community_id": community_uuid,
+                        "graph_id": str(graph_id)
+                    })
+                    
+                    relationships_created += 1
+            
+            logger.info(f"Created {communities_created} simple communities and {relationships_created} relationships for graph {graph_id}")
+            
+            return {
+                "communities_created": communities_created,
+                "relationships_created": relationships_created,
+                "total_entities_processed": len(results) * 2,
+                "graph_id": str(graph_id),
+                "algorithm_used": "shared_neighbors"
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to create simple communities: {e}")
+            return {
+                "communities_created": 0,
+                "relationships_created": 0,
+                "error": str(e),
+                "graph_id": str(graph_id)
+            }
 
     def _generate_community_id(self, graph_id: UUID, community_id: int, members: List[Dict]) -> str:
         """
