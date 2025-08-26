@@ -33,13 +33,14 @@ class SchemaEvolutionConfig:
         self.evolution_threshold = evolution_threshold
 
 class EntityExtractor:
-    """Production-grade entity extractor following Neo4j Labs patterns"""
+    """Production-grade entity extractor using __Entity__ base type and proper document hierarchy"""
     
     def __init__(self):
-        # Advanced chunking strategy for dual graph approach
+        # Advanced chunking strategy for document hierarchy
+        self.chunk_overlap = 400  # Store overlap value for later use
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=2000,
-            chunk_overlap=400,  # Larger overlap for context preservation
+            chunk_overlap=self.chunk_overlap,  # Larger overlap for context preservation
             separators=["\n\n", "\n", ". ", "? ", "! ", "; ", ", ", " "],
             keep_separator=True
         )
@@ -48,63 +49,370 @@ class EntityExtractor:
         self.evolved_schemas = {}
         self.entity_similarity_threshold = 0.97
         self.text_distance_threshold = 5
+        
+        # Modern configuration using __Entity__ base type
+        self.use_entity_base_type = True
+        self.entity_base_label = "__Entity__"
     
-    async def extract_with_dual_graph(
+    async def extract_from_documents(
         self,
-        text: str,
+        documents: List[Dict[str, Any]],
         user_id: str,
         graph_id: UUID,
         domain_context: Optional[str] = None,
         saved_schema: Optional[Dict[str, Any]] = None,
-        allow_schema_evolution: bool = True  # NEW parameter
-    ) -> Tuple[List[GraphDocument], List[Dict[str, Any]]]:
+        allow_schema_evolution: bool = True
+    ) -> Tuple[List[GraphDocument], Dict[str, Any]]:
         """
-        Extract with schema evolution - can discover new entity/relationship types
+        Extract complete document hierarchy: Document → Chunks → Entities (using __Entity__)
+        All node types get embeddings for comprehensive search
         """
         
-        # Step 1: Create lexical graph (document chunks)
-        chunks = await self._create_enhanced_chunks(text, graph_id)
+        all_graph_docs = []
+        all_chunks = []
         
-        # Step 2: Determine extraction schema
+        # Process each document
+        for doc_data in documents:
+            # Step 1: Create Document node
+            doc_node = await self._create_document_node(doc_data, graph_id)
+            
+            # Step 2: Create enhanced chunks with proper ordering
+            chunks = await self._create_enhanced_chunks_from_document(doc_data, graph_id)
+            all_chunks.extend(chunks)
+            
+            # Step 3: Create chunk nodes and Document → Chunk relationships
+            chunk_nodes, doc_chunk_rels = self._create_chunk_nodes_and_relationships(
+                doc_node, chunks, graph_id
+            )
+            
+            # Step 4: Determine extraction schema
+            evolved_schema = await self._get_or_evolve_schema(
+                doc_data.get("content", ""), user_id, saved_schema, 
+                domain_context, allow_schema_evolution
+            )
+            
+            # Step 5: Extract entities from chunks using __Entity__ base type
+            entity_docs = await self._extract_entities_with_base_type(
+                chunks, user_id, graph_id, evolved_schema
+            )
+            
+            # Step 6: Create Chunk → Entity relationships (entities connect to chunks, not document)
+            chunk_entity_rels = self._create_chunk_entity_relationships(
+                chunk_nodes, entity_docs, graph_id
+            )
+            
+            # Step 7: Combine all nodes and relationships for this document
+            all_nodes = [doc_node] + chunk_nodes
+            all_relationships = doc_chunk_rels + chunk_entity_rels
+            
+            # Add extracted entities
+            for entity_doc in entity_docs:
+                all_nodes.extend(entity_doc.nodes)
+                all_relationships.extend(entity_doc.relationships)
+            
+            # Create comprehensive graph document
+            graph_doc = GraphDocument(
+                nodes=all_nodes,
+                relationships=all_relationships,
+                source=Document(
+                    page_content=f"Document: {doc_data.get('title', 'Untitled')}",
+                    metadata={
+                        "document_id": doc_data.get("id"),
+                        "graph_id": str(graph_id),
+                        "type": "document_hierarchy"
+                    }
+                )
+            )
+            
+            all_graph_docs.append(graph_doc)
+        
+        return all_graph_docs, {
+            "total_documents": len(documents),
+            "total_chunks": len(all_chunks),
+            "schema": evolved_schema if 'evolved_schema' in locals() else None
+        }
+
+    async def _create_document_node(self, doc_data: Dict[str, Any], graph_id: UUID) -> Node:
+        """Create Document node with proper metadata"""
+        
+        # Generate embedding for document (title + summary)
+        doc_text = f"{doc_data.get('title', '')} {doc_data.get('summary', '')}"
+        doc_embedding = None
+        
+        if embedding_service.is_initialized() and doc_text.strip():
+            try:
+                doc_embedding = await embedding_service.embed_text(doc_text)
+            except Exception as e:
+                logger.warning(f"Failed to generate document embedding: {e}")
+        
+        return Node(
+            id=f"doc_{doc_data.get('id', uuid4())}",
+            type="Document",
+            properties={
+                "document_id": doc_data.get("id"),
+                "title": doc_data.get("title", ""),
+                "filename": doc_data.get("filename", ""),
+                "content_type": doc_data.get("content_type", ""),
+                "summary": doc_data.get("summary", ""),
+                "graph_id": str(graph_id),
+                "created_at": doc_data.get("created_at"),
+                "word_count": len(doc_data.get("content", "").split()),
+                "char_count": len(doc_data.get("content", "")),
+                "embedding": doc_embedding,
+                "has_embedding": doc_embedding is not None
+            }
+        )
+
+    async def _create_enhanced_chunks_from_document(
+        self, 
+        doc_data: Dict[str, Any], 
+        graph_id: UUID
+    ) -> List[Dict[str, Any]]:
+        """Create enhanced text chunks with preserved ordering and embeddings"""
+        
+        content = doc_data.get("content", "")
+        doc_id = doc_data.get("id", str(uuid4()))
+        
+        # Split text into semantic chunks
+        documents = self.text_splitter.create_documents([content])
+        
+        enhanced_chunks = []
+        char_position = 0
+        
+        for i, doc in enumerate(documents):
+            chunk_id = f"chunk_{doc_id}_{i:04d}"  # Zero-padded for proper ordering
+            
+            # Generate embedding for chunk
+            chunk_embedding = None
+            if embedding_service.is_initialized():
+                try:
+                    chunk_embedding = await embedding_service.embed_text(doc.page_content)
+                except Exception as e:
+                    logger.warning(f"Failed to generate embedding for chunk {i}: {e}")
+            
+            # Calculate actual character positions
+            chunk_start = char_position
+            chunk_end = char_position + len(doc.page_content)
+            char_position = chunk_end - self.chunk_overlap  # Account for overlap
+            
+            chunk_data = {
+                "id": chunk_id,
+                "text": doc.page_content,
+                "graph_id": str(graph_id),
+                "document_id": doc_id,
+                "chunk_index": i,
+                "chunk_order": i,  # Explicit ordering
+                "char_start": chunk_start,
+                "char_end": chunk_end,
+                "embedding": chunk_embedding,
+                "word_count": len(doc.page_content.split()),
+                "sentence_count": len([s for s in doc.page_content.split('.') if s.strip()]),
+                "type": "DocumentChunk",
+                "has_embedding": chunk_embedding is not None
+            }
+            enhanced_chunks.append(chunk_data)
+        
+        logger.info(f"Created {len(enhanced_chunks)} chunks for document {doc_id}")
+        return enhanced_chunks
+
+    def _create_chunk_nodes_and_relationships(
+        self,
+        doc_node: Node,
+        chunks: List[Dict[str, Any]],
+        graph_id: UUID
+    ) -> Tuple[List[Node], List[Relationship]]:
+        """Create chunk nodes and Document → Chunk relationships with proper ordering"""
+        
+        chunk_nodes = []
+        doc_chunk_relationships = []
+        
+        for chunk in chunks:
+            # Create chunk node with embedding
+            chunk_node = Node(
+                id=chunk["id"],
+                type="DocumentChunk",
+                properties={
+                    "text": chunk["text"],
+                    "graph_id": str(graph_id),
+                    "document_id": chunk["document_id"],
+                    "chunk_index": chunk["chunk_index"],
+                    "chunk_order": chunk["chunk_order"],  # Preserved ordering
+                    "word_count": chunk["word_count"],
+                    "sentence_count": chunk["sentence_count"],
+                    "char_start": chunk["char_start"],
+                    "char_end": chunk["char_end"],
+                    "embedding": chunk["embedding"],
+                    "has_embedding": chunk["has_embedding"]
+                }
+            )
+            chunk_nodes.append(chunk_node)
+            
+            # Create Document → Chunk relationship with ordering info
+            doc_chunk_rel = Relationship(
+                source=doc_node,
+                target=chunk_node,
+                type="CONTAINS_CHUNK",
+                properties={
+                    "graph_id": str(graph_id),
+                    "chunk_order": chunk["chunk_order"],
+                    "sequence_number": chunk["chunk_index"]
+                }
+            )
+            doc_chunk_relationships.append(doc_chunk_rel)
+        
+        return chunk_nodes, doc_chunk_relationships
+
+    async def _get_or_evolve_schema(
+        self,
+        text: str,
+        user_id: str,
+        saved_schema: Optional[Dict[str, Any]],
+        domain_context: Optional[str],
+        allow_evolution: bool
+    ) -> Dict[str, Any]:
+        """Get or evolve schema for entity extraction"""
+        
         if saved_schema and saved_schema.get("entities"):
-            if allow_schema_evolution:
-                # HYBRID APPROACH: Use saved schema + discover new types
-                evolved_schema = await self._evolve_schema_with_new_content(
+            if allow_evolution:
+                return await self._evolve_schema_with_new_content(
                     text=text,
                     user_id=user_id,
                     base_schema=saved_schema,
                     domain_context=domain_context
                 )
-                logger.info(f"Schema evolved: {len(evolved_schema.get('entities', []))} entities (+{len(evolved_schema.get('entities', [])) - len(saved_schema.get('entities', []))} new)")
             else:
-                # STRICT MODE: Only use saved schema
-                evolved_schema = saved_schema
-                logger.info(f"Using strict saved schema: {len(saved_schema.get('entities', []))} entities")
+                return saved_schema
         else:
-            # No saved schema, learn from scratch
-            evolved_schema = await self._evolve_schema_from_text(text, user_id, domain_context)
-            logger.info(f"New schema created: {len(evolved_schema.get('entities', []))} entities")
+            return await self._evolve_schema_from_text(text, user_id, domain_context)
+
+    async def _extract_entities_with_base_type(
+        self,
+        chunks: List[Dict[str, Any]],
+        user_id: str,
+        graph_id: UUID,
+        schema: Dict[str, Any]
+    ) -> List[GraphDocument]:
+        """Extract entities using __Entity__ base type with dynamic specific types"""
         
-        # Step 3: Extract entities using evolved schema
-        entity_graph_docs = await self._extract_entities_with_structured_output(
-            chunks, user_id, graph_id, evolved_schema
-        )
+        if not llm_service.is_initialized():
+            raise ValueError("LLM service not initialized")
         
-        # Step 4: Advanced entity deduplication
-        deduplicated_docs = await self._advanced_entity_deduplication(entity_graph_docs)
+        # Configure graph transformer with evolved schema
+        llm_service.set_dynamic_schema(schema)
         
-        # Step 5: Create cross-graph relationships
-        enhanced_docs = await self._create_chunk_entity_relationships(
-            chunks, deduplicated_docs, graph_id
-        )
+        all_graph_docs = []
         
-        # Step 6: Update saved schema if new types were found
-        if allow_schema_evolution and saved_schema:
-            await self._update_saved_schema_if_evolved(
-                graph_id, saved_schema, evolved_schema
-            )
+        # Process chunks in batches for efficiency
+        batch_size = 3
+        for i in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[i:i + batch_size]
+            
+            # Create documents for batch
+            documents = [
+                Document(
+                    page_content=chunk["text"],
+                    metadata={
+                        "chunk_id": chunk["id"],
+                        "graph_id": str(graph_id),
+                        "chunk_index": chunk["chunk_index"],
+                        "document_id": chunk["document_id"]
+                    }
+                )
+                for chunk in batch_chunks
+            ]
+            
+            try:
+                # Use structured output for consistent extraction
+                batch_docs = await llm_service.graph_transformer.aconvert_to_graph_documents(
+                    documents
+                )
+                
+                # Transform entities to use __Entity__ base type with specific labels
+                for doc in batch_docs:
+                    transformed_nodes = []
+                    
+                    for node in doc.nodes:
+                        # Transform to use __Entity__ base type + specific type
+                        entity_type = node.type if hasattr(node, 'type') and node.type else "Entity"
+                        
+                        # Create node with single type first to pass LangChain validation
+                        transformed_node = Node(
+                            id=node.id,
+                            type=entity_type,  # Start with specific type only
+                            properties={
+                                **(node.properties or {}),
+                                "graph_id": str(graph_id),
+                                "extraction_source": "llm_structured",
+                                "confidence": self._calculate_entity_confidence(node, schema),
+                                "entity_type": entity_type,  # Store specific type
+                                "specific_labels": [entity_type],  # For multiple labels
+                                "has_embedding": False  # Will be set during embedding generation
+                            }
+                        )
+                        
+                        # After node creation, manually set the type to include both labels
+                        # This bypasses LangChain's validation while giving enhanced_graph_service what it needs
+                        transformed_node.type = [self.entity_base_label, entity_type]
+                        transformed_nodes.append(transformed_node)
+                    
+                    # Update relationships to use transformed nodes
+                    for rel in doc.relationships:
+                        if not hasattr(rel, 'properties') or not rel.properties:
+                            rel.properties = {}
+                        rel.properties.update({
+                            "graph_id": str(graph_id),
+                            "extraction_source": "llm_structured"
+                        })
+                    
+                    # Replace nodes in document
+                    doc.nodes = transformed_nodes
+                
+                all_graph_docs.extend(batch_docs)
+                
+            except Exception as e:
+                logger.error(f"Batch extraction failed: {e}")
+                continue
         
-        return enhanced_docs, chunks
+        return all_graph_docs
+
+    def _create_chunk_entity_relationships(
+        self,
+        chunk_nodes: List[Node],
+        entity_docs: List[GraphDocument],
+        graph_id: UUID
+    ) -> List[Relationship]:
+        """Create Chunk → Entity relationships (entities connect to chunks, not documents)"""
+        
+        chunk_entity_relationships = []
+        
+        # Create mapping of chunk IDs to chunk nodes
+        chunk_id_to_node = {node.id: node for node in chunk_nodes}
+        
+        for entity_doc in entity_docs:
+            # Get source chunk ID from document metadata
+            source_chunk_id = None
+            if hasattr(entity_doc, 'source') and entity_doc.source and hasattr(entity_doc.source, 'metadata'):
+                source_chunk_id = entity_doc.source.metadata.get("chunk_id")
+            
+            if source_chunk_id and source_chunk_id in chunk_id_to_node:
+                chunk_node = chunk_id_to_node[source_chunk_id]
+                
+                for entity_node in entity_doc.nodes:
+                    # Create Chunk → Entity relationship
+                    chunk_entity_rel = Relationship(
+                        source=chunk_node,
+                        target=entity_node,
+                        type="MENTIONS",
+                        properties={
+                            "graph_id": str(graph_id),
+                            "extraction_source": "chunk_analysis",
+                            "confidence": entity_node.properties.get("confidence", 1.0)
+                        }
+                    )
+                    chunk_entity_relationships.append(chunk_entity_rel)
+        
+        logger.info(f"Created {len(chunk_entity_relationships)} chunk-entity relationships")
+        return chunk_entity_relationships
 
     async def _evolve_schema_with_new_content(
         self,
@@ -280,37 +588,17 @@ class EntityExtractor:
         text: str, 
         graph_id: UUID
     ) -> List[Dict[str, Any]]:
-        """Create enhanced text chunks with metadata and embeddings"""
+        """Legacy method - use _create_enhanced_chunks_from_document for new document hierarchy"""
         
-        # Split text into semantic chunks
-        documents = self.text_splitter.create_documents([text])
+        # Create a fake document structure for backward compatibility
+        doc_data = {
+            "id": str(uuid4()),
+            "content": text,
+            "title": "Legacy Document",
+            "content_type": "text/plain"
+        }
         
-        enhanced_chunks = []
-        for i, doc in enumerate(documents):
-            chunk_id = f"chunk_{graph_id}_{i}"
-            
-            # Generate embedding for chunk
-            embedding = None
-            if embedding_service.is_initialized():
-                try:
-                    embedding = await embedding_service.embed_text(doc.page_content)
-                except Exception as e:
-                    logger.warning(f"Failed to generate embedding for chunk {i}: {e}")
-            
-            chunk_data = {
-                "id": chunk_id,
-                "text": doc.page_content,
-                "graph_id": str(graph_id),
-                "chunk_index": i,
-                "char_start": i * (2000 - 400),  # Approximate position
-                "char_end": min((i + 1) * (2000 - 400), len(text)),
-                "embedding": embedding,
-                "word_count": len(doc.page_content.split()),
-                "type": "DocumentChunk"
-            }
-            enhanced_chunks.append(chunk_data)
-        
-        return enhanced_chunks
+        return await self._create_enhanced_chunks_from_document(doc_data, graph_id)
 
     async def learn_schema_from_text(
         self, 
@@ -664,6 +952,10 @@ class EntityExtractor:
             properties=merged_properties
         )
         
+        # If we don't have proper type, set it to use both labels
+        if not hasattr(primary, 'type') or not isinstance(primary.type, list):
+            merged_node.type = [self.entity_base_label, "Entity"]
+        
         return merged_node
     
     def _rebuild_graph_documents_with_deduplicated_entities(
@@ -761,72 +1053,6 @@ class EntityExtractor:
                 logger.warning(f"Embedding similarity check failed: {e}")
         
         return False
-    
-    async def _create_chunk_entity_relationships(
-        self,
-        chunks: List[Dict[str, Any]],
-        entity_docs: List[GraphDocument],
-        graph_id: UUID
-    ) -> List[GraphDocument]:
-        """Create relationships between chunks and entities they contain"""
-        
-        enhanced_docs = entity_docs.copy()
-        
-        # Create chunk nodes
-        chunk_nodes = []
-        for chunk in chunks:
-            chunk_node = Node(
-                id=chunk["id"],
-                type="DocumentChunk",
-                properties={
-                    "text": chunk["text"],
-                    "graph_id": str(graph_id),
-                    "chunk_index": chunk["chunk_index"],
-                    "word_count": chunk["word_count"],
-                    "char_start": chunk["char_start"],
-                    "char_end": chunk["char_end"]
-                }
-            )
-            chunk_nodes.append(chunk_node)
-        
-        # Create CONTAINS relationships between chunks and entities
-        chunk_entity_relationships = []
-        
-        for doc in entity_docs:
-            source_chunk_id = None
-            if hasattr(doc, 'source') and doc.source and hasattr(doc.source, 'metadata'):
-                source_chunk_id = doc.source.metadata.get("chunk_id")
-            
-            if source_chunk_id:
-                # Find the chunk node
-                chunk_node = next((cn for cn in chunk_nodes if cn.id == source_chunk_id), None)
-                
-                if chunk_node:
-                    for entity_node in doc.nodes:
-                        contains_rel = Relationship(
-                            source=chunk_node,
-                            target=entity_node,
-                            type="CONTAINS",
-                            properties={
-                                "graph_id": str(graph_id),
-                                "extraction_source": "chunk_analysis"
-                            }
-                        )
-                        chunk_entity_relationships.append(contains_rel)
-        
-        # Create a combined graph document
-        if chunk_nodes or chunk_entity_relationships:
-            combined_doc = GraphDocument(
-                nodes=chunk_nodes,
-                relationships=chunk_entity_relationships,
-                source=Document(
-                    page_content="Combined chunk-entity graph",
-                    metadata={"graph_id": str(graph_id), "type": "lexical_graph"}
-                )
-            )
-            enhanced_docs.append(combined_doc)
-        
-        return enhanced_docs
     
     # Helper methods
     def _validate_and_clean_schema(self, schema: Dict[str, Any]) -> Dict[str, Any]:

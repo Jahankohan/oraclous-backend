@@ -131,8 +131,19 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
             logger.info(f"Starting dual graph extraction for job {job_id}")
             task.update_state(state="PROGRESS", meta={"progress": 30, "status": "Analyzing document structure"})
             
-            entity_graph_docs, lexical_chunks = await entity_extractor.extract_with_dual_graph(
-                text=job.source_content,
+            # Convert text to documents format for extract_from_documents
+            documents = [{
+                "id": str(job.id),
+                "content": job.source_content,
+                "title": f"Ingestion Job {job.id}",
+                "filename": f"job_{job.id}.txt",
+                "content_type": "text/plain",
+                "summary": "",
+                "created_at": job.created_at.isoformat() if job.created_at else None
+            }]
+            
+            entity_graph_docs, lexical_chunks = await entity_extractor.extract_from_documents(
+                documents=documents,
                 user_id=user_id,
                 graph_id=job.graph_id,
                 domain_context=graph.schema_config.get("domain") if graph.schema_config else None
@@ -211,24 +222,22 @@ async def _process_ingestion_job_async(task, job_id: str, user_id: str):
             return {"status": "error", "message": str(e)}
 
 async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
-    """FIXED: Simplified sync embedding generation without loop conflicts"""
+    """Generate embeddings for ALL node types: Documents, Chunks, and Entities (__Entity__)"""
     
     try:
-        logger.info(f"Starting embedding generation for graph {graph_id}")
+        logger.info(f"Starting comprehensive embedding generation for graph {graph_id}")
         
         # Initialize Neo4j connection fresh in this event loop
         from app.core.neo4j_client import Neo4jClient
         neo4j_client_local = Neo4jClient()
         await neo4j_client_local.connect()
         
-        # Initialize embedding service with proper credentials
-        from app.services.credential_service import credential_service
+        # Initialize embedding service
+        from app.services.embedding_service import EmbeddingService
+        embedding_service_local = EmbeddingService()
         
-        # Get OpenAI credentials directly (avoiding service call conflicts)
+        # Get OpenAI credentials with fallback
         try:
-            # Try to initialize embedding service
-            from app.services.embedding_service import EmbeddingService
-            embedding_service_local = EmbeddingService()
             success = await embedding_service_local.initialize_embeddings(
                 provider="openai",
                 model="text-embedding-3-small", 
@@ -236,7 +245,6 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
             )
             
             if not success:
-                # Fallback: try with environment variable
                 import os
                 openai_key = os.getenv('OPENAI_API_KEY')
                 if openai_key:
@@ -244,19 +252,15 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
                         provider="openai",
                         model="text-embedding-3-small",
                         user_id=user_id,
-                        api_key=openai_key  # Direct API key
+                        api_key=openai_key
                     )
         
         except Exception as cred_error:
             logger.error(f"Error retrieving credentials: {cred_error}")
-            # Try with environment variable as fallback
             import os
             openai_key = os.getenv('OPENAI_API_KEY')
             if not openai_key:
-                return {
-                    "status": "error", 
-                    "message": "OpenAI API key not available"
-                }
+                return {"status": "error", "message": "OpenAI API key not available"}
             
             from app.services.embedding_service import EmbeddingService
             embedding_service_local = EmbeddingService()
@@ -268,95 +272,26 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
             )
         
         if not success:
-            return {
-                "status": "error", 
-                "message": "Failed to initialize embedding service"
-            }
-            
-        logger.info(f"Embeddings initialized: {embedding_service.provider} - {embedding_service.model_name} (dim: {embedding_service.dimension})")
+            return {"status": "error", "message": "Failed to initialize embedding service"}
         
-        # Process nodes in batches
-        batch_size = 10
+        logger.info(f"Embeddings initialized: openai - text-embedding-3-small (dim: {embedding_service_local.dimension})")
+        
+        # Process embeddings for all node types
         total_processed = 0
         
-        while True:
-            # Get nodes without embeddings - FIXED query execution
-            try:
-                get_nodes_query = """
-                MATCH (n)
-                WHERE n.graph_id = $graph_id 
-                AND n.embedding IS NULL
-                AND n.name IS NOT NULL
-                RETURN n.id as id, n.name as name, 
-                       coalesce(n.description, '') as description
-                LIMIT $batch_size
-                """
-                
-                # Execute query with proper error handling
-                result = await neo4j_client_local.execute_query(get_nodes_query, {
-                    "graph_id": graph_id,
-                    "batch_size": batch_size
-                })
-                
-                if not result:
-                    logger.info("No more nodes to process")
-                    break
-                
-                logger.info(f"Processing batch of {len(result)} nodes")
-                
-                # Generate embeddings for this batch
-                texts = []
-                node_ids = []
-                
-                for node in result:
-                    # Combine name and description for embedding
-                    text = f"{node['name']}"
-                    if node['description']:
-                        text += f" {node['description']}"
-                    
-                    texts.append(text)
-                    node_ids.append(node['id'])
-                
-                # Generate embeddings
-                try:
-                    embeddings = await embedding_service_local.embed_documents(texts)
-                    
-                    # Update nodes with embeddings
-                    for node_id, embedding in zip(node_ids, embeddings):
-                        update_query = """
-                        MATCH (n {id: $node_id, graph_id: $graph_id})
-                        SET n.embedding = $embedding
-                        """
-                        
-                        await neo4j_client_local.execute_write_query(update_query, {
-                            "node_id": node_id,
-                            "graph_id": graph_id,
-                            "embedding": embedding
-                        })
-                    
-                    total_processed += len(embeddings)
-                    logger.info(f"Updated {len(embeddings)} nodes with embeddings. Total: {total_processed}")
-                    
-                    # Update task progress
-                    task.update_state(
-                        state="PROGRESS", 
-                        meta={
-                            "progress": min(90, total_processed * 2),  # Rough progress
-                            "nodes_processed": total_processed
-                        }
-                    )
-                
-                except Exception as embed_error:
-                    logger.error(f"Embedding generation failed for batch: {embed_error}")
-                    continue
-                    
-            except Exception as query_error:
-                logger.error(f"Query execution failed: {query_error}")
-                logger.error(f"Query: {get_nodes_query}")
-                logger.error(f"Parameters: {{'graph_id': '{graph_id}', 'batch_size': {batch_size}}}")
-                break
+        # 1. Process Document nodes
+        doc_count = await _process_document_embeddings(neo4j_client_local, embedding_service_local, graph_id)
+        total_processed += doc_count
         
-        # Create vector indexes if needed
+        # 2. Process DocumentChunk nodes  
+        chunk_count = await _process_chunk_embeddings(neo4j_client_local, embedding_service_local, graph_id)
+        total_processed += chunk_count
+        
+        # 3. Process Entity nodes (using __Entity__ base type)
+        entity_count = await _process_entity_embeddings(neo4j_client_local, embedding_service_local, graph_id)
+        total_processed += entity_count
+        
+        # 4. Create vector indexes if needed
         try:
             from app.services.vector_service import VectorService
             vector_service_local = VectorService()
@@ -366,27 +301,215 @@ async def _process_embedding_generation_sync(task, graph_id: str, user_id: str):
         except Exception as e:
             logger.warning(f"Failed to create vector indexes: {e}")
         
-        logger.info(f"Embedding generation completed. Total nodes processed: {total_processed}")
+        logger.info(f"Comprehensive embedding generation completed. Documents: {doc_count}, Chunks: {chunk_count}, Entities: {entity_count}, Total: {total_processed}")
         
         return {
             "status": "completed",
-            "nodes_processed": total_processed,
-            "message": f"Successfully generated embeddings for {total_processed} nodes"
+            "documents_processed": doc_count,
+            "chunks_processed": chunk_count,
+            "entities_processed": entity_count,
+            "total_processed": total_processed,
+            "message": f"Successfully generated embeddings for {doc_count} documents, {chunk_count} chunks, and {entity_count} entities"
         }
         
     except Exception as e:
         error_msg = f"Background embedding generation failed for graph {graph_id}: {e}"
         logger.error(error_msg)
-        return {
-            "status": "error",
-            "message": error_msg
-        }
+        return {"status": "error", "message": error_msg}
+    
     finally:
-        # Clean up resources
+        # Cleanup connections
         try:
-            await neo4j_client_local.close()
-        except Exception:
-            pass
+            if 'neo4j_client_local' in locals():
+                await neo4j_client_local.close()
+        except Exception as e:
+            logger.warning(f"Failed to close Neo4j connection: {e}")
+
+async def _process_document_embeddings(neo4j_client, embedding_service, graph_id: str) -> int:
+    """Process Document node embeddings"""
+    batch_size = 10
+    processed = 0
+    
+    while True:
+        # Get documents without embeddings
+        get_documents_query = """
+        MATCH (d:Document)
+        WHERE d.graph_id = $graph_id 
+        AND (d.embedding IS NULL OR d.has_embedding = false)
+        AND (d.title IS NOT NULL OR d.summary IS NOT NULL)
+        RETURN d.id as id, 
+               coalesce(d.title, '') as title,
+               coalesce(d.summary, '') as summary,
+               coalesce(d.filename, '') as filename
+        LIMIT $batch_size
+        """
+        
+        result = await neo4j_client.execute_query(get_documents_query, {
+            "graph_id": graph_id,
+            "batch_size": batch_size
+        })
+        
+        if not result:
+            break
+            
+        # Generate embeddings for documents
+        texts = []
+        doc_ids = []
+        
+        for doc in result:
+            # Combine title, summary, filename for document embedding
+            text_parts = [doc['title'], doc['summary'], doc['filename']]
+            text = " ".join([part for part in text_parts if part.strip()])
+            
+            if text.strip():
+                texts.append(text)
+                doc_ids.append(doc['id'])
+        
+        if texts:
+            embeddings = await embedding_service.embed_documents(texts)
+            
+            # Update documents with embeddings
+            for doc_id, embedding in zip(doc_ids, embeddings):
+                update_query = """
+                MATCH (d:Document {id: $doc_id, graph_id: $graph_id})
+                SET d.embedding = $embedding, d.has_embedding = true
+                """
+                
+                await neo4j_client.execute_write_query(update_query, {
+                    "doc_id": doc_id,
+                    "graph_id": graph_id,
+                    "embedding": embedding
+                })
+            
+            processed += len(embeddings)
+            logger.info(f"Updated {len(embeddings)} documents with embeddings. Total documents: {processed}")
+        
+        if len(result) < batch_size:
+            break
+    
+    return processed
+
+async def _process_chunk_embeddings(neo4j_client, embedding_service, graph_id: str) -> int:
+    """Process DocumentChunk node embeddings"""
+    batch_size = 5  # Smaller batch for chunks (they're larger)
+    processed = 0
+    
+    while True:
+        # Get chunks without embeddings
+        get_chunks_query = """
+        MATCH (c:DocumentChunk)
+        WHERE c.graph_id = $graph_id 
+        AND (c.embedding IS NULL OR c.has_embedding = false)
+        AND c.text IS NOT NULL
+        RETURN c.id as id, 
+               c.text as text
+        LIMIT $batch_size
+        """
+        
+        result = await neo4j_client.execute_query(get_chunks_query, {
+            "graph_id": graph_id,
+            "batch_size": batch_size
+        })
+        
+        if not result:
+            break
+            
+        # Generate embeddings for chunks
+        texts = []
+        chunk_ids = []
+        
+        for chunk in result:
+            # Use chunk text directly (truncate if too long)
+            text = chunk['text'][:4000]  # Truncate for token limits
+            texts.append(text)
+            chunk_ids.append(chunk['id'])
+        
+        embeddings = await embedding_service.embed_documents(texts)
+        
+        # Update chunks with embeddings
+        for chunk_id, embedding in zip(chunk_ids, embeddings):
+            update_query = """
+            MATCH (c:DocumentChunk {id: $chunk_id, graph_id: $graph_id})
+            SET c.embedding = $embedding, c.has_embedding = true
+            """
+            
+            await neo4j_client.execute_write_query(update_query, {
+                "chunk_id": chunk_id,
+                "graph_id": graph_id,
+                "embedding": embedding
+            })
+        
+        processed += len(embeddings)
+        logger.info(f"Updated {len(embeddings)} chunks with embeddings. Total chunks: {processed}")
+        
+        if len(result) < batch_size:
+            break
+    
+    return processed
+
+async def _process_entity_embeddings(neo4j_client, embedding_service, graph_id: str) -> int:
+    """Process Entity node embeddings using __Entity__ base type"""
+    batch_size = 10
+    processed = 0
+    
+    while True:
+        # Get __Entity__ nodes without embeddings
+        get_entities_query = """
+        MATCH (e:`__Entity__`)
+        WHERE e.graph_id = $graph_id 
+        AND (e.embedding IS NULL OR e.has_embedding = false)
+        AND e.name IS NOT NULL
+        RETURN e.id as id, e.name as name, 
+               coalesce(e.description, '') as description,
+               coalesce(e.entity_type, 'Entity') as entity_type
+        LIMIT $batch_size
+        """
+        
+        result = await neo4j_client.execute_query(get_entities_query, {
+            "graph_id": graph_id,
+            "batch_size": batch_size
+        })
+        
+        if not result:
+            break
+            
+        # Generate embeddings for entities
+        texts = []
+        entity_ids = []
+        
+        for entity in result:
+            # Combine name, description, and type for entity embedding
+            text_parts = [entity['name']]
+            if entity['description']:
+                text_parts.append(entity['description'])
+            text_parts.append(f"Type: {entity['entity_type']}")
+            
+            text = " ".join(text_parts)
+            texts.append(text)
+            entity_ids.append(entity['id'])
+        
+        embeddings = await embedding_service.embed_documents(texts)
+        
+        # Update entities with embeddings
+        for entity_id, embedding in zip(entity_ids, embeddings):
+            update_query = """
+            MATCH (e:`__Entity__` {id: $entity_id, graph_id: $graph_id})
+            SET e.embedding = $embedding, e.has_embedding = true
+            """
+            
+            await neo4j_client.execute_write_query(update_query, {
+                "entity_id": entity_id,
+                "graph_id": graph_id,
+                "embedding": embedding
+            })
+        
+        processed += len(embeddings)
+        logger.info(f"Updated {len(embeddings)} entities with embeddings. Total entities: {processed}")
+        
+        if len(result) < batch_size:
+            break
+    
+    return processed
 
 async def _create_similarity_relationships(
     graph_id: UUID,

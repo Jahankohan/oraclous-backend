@@ -127,9 +127,20 @@ async def _run_extraction_async(content: str, user_id: str, graph_id: UUID, sche
         if task:
             task.update_state(state="PROGRESS", meta={"progress": 40, "status": "Extracting entities"})
         
+        # Convert content to documents format for extract_from_documents
+        documents = [{
+            "id": str(graph_id),
+            "content": content,
+            "title": "Document Content",
+            "filename": "content.txt",
+            "content_type": "text/plain",
+            "summary": "",
+            "created_at": None
+        }]
+        
         # Use new dual graph extraction method
-        entity_graph_docs, lexical_chunks = await entity_extractor.extract_with_dual_graph(
-            text=content,
+        entity_graph_docs, lexical_chunks = await entity_extractor.extract_from_documents(
+            documents=documents,
             user_id=user_id,
             graph_id=graph_id,
             domain_context=schema.get("domain") if schema else None
@@ -219,8 +230,21 @@ async def _run_extraction_async(content: str, user_id: str, graph_id: UUID, sche
 
 async def _store_node_async(driver, node, graph_id: UUID):
     """Store individual node in Neo4j"""
+    
+    # Handle multiple labels properly
+    if isinstance(node.type, list):
+        # Join multiple labels with colon for Cypher syntax
+        labels_str = ":".join([label.replace(" ", "_").replace("-", "_") for label in node.type if label])
+    else:
+        # Single label
+        labels_str = str(node.type).replace(" ", "_").replace("-", "_")
+    
+    # Fallback to Entity if no valid labels
+    if not labels_str:
+        labels_str = "Entity"
+    
     query = f"""
-    MERGE (n:{node.type} {{id: $node_id}})
+    MERGE (n:{labels_str} {{id: $node_id}})
     ON CREATE SET 
         n.name = $name,
         n.graph_id = $graph_id,

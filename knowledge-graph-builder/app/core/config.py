@@ -32,7 +32,34 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: Optional[str] = None
     DIFFBOT_API_KEY: Optional[str] = None
 
-    # Add config flags to control these features
+    # Modern Knowledge Graph Configuration
+    USE_ENTITY_BASE_TYPE: bool = True  # Use __Entity__ instead of Entity
+    ENTITY_BASE_LABEL: str = "__Entity__"  # Base label for all entities
+    ENABLE_DOCUMENT_HIERARCHY: bool = True  # Document → Chunk → Entity structure
+    
+    # Embedding Configuration
+    EMBED_ALL_NODE_TYPES: bool = True  # Embed Documents, Chunks, and Entities
+    ENABLE_DOCUMENT_EMBEDDINGS: bool = True
+    ENABLE_CHUNK_EMBEDDINGS: bool = True
+    ENABLE_ENTITY_EMBEDDINGS: bool = True
+    
+    # Vector Index Configuration
+    ENABLE_UNIFIED_ENTITY_INDEXES: bool = True  # Single __Entity__ index
+    VECTOR_INDEX_DIMENSIONS: int = 512
+    VECTOR_SIMILARITY_FUNCTION: str = "cosine"
+    
+    # Document Processing
+    PRESERVE_CHUNK_ORDER: bool = True  # Maintain chunk sequence
+    CHUNK_SIZE: int = 2000
+    CHUNK_OVERLAP: int = 400
+    MAX_CHUNKS_PER_DOCUMENT: int = 1000
+    
+    # Entity Extraction
+    CONNECT_ENTITIES_TO_CHUNKS: bool = True  # Entities → Chunks (not Documents)
+    MAX_ENTITY_TYPES_PER_GRAPH: int = 20
+    ENABLE_SCHEMA_EVOLUTION: bool = True
+
+    # Legacy flags (disabled for modern approach)
     ENABLE_SIMILARITY_PROCESSING: bool = True
     ENABLE_COMMUNITY_DETECTION: bool = True
 
@@ -40,6 +67,11 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_EXTRACTIONS: int = 5
     BATCH_SIZE: int = 100
     CACHE_TTL: int = 300
+    
+    # Embedding Processing
+    DOCUMENT_EMBEDDING_BATCH_SIZE: int = 10
+    CHUNK_EMBEDDING_BATCH_SIZE: int = 5
+    ENTITY_EMBEDDING_BATCH_SIZE: int = 10
     
     # Monitoring
     ENABLE_METRICS: bool = True
