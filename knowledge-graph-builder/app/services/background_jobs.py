@@ -519,9 +519,17 @@ async def _create_similarity_relationships(
 ) -> int:
     """Create SIMILAR relationships between semantically related chunks and entities"""
     
+    # Try to initialize embedding service if not already initialized
     if not embedding_service.is_initialized():
-        logger.warning("Embedding service not initialized, skipping similarity relationships")
-        return 0
+        logger.info("Initializing embedding service for similarity relationships")
+        success = await embedding_service.initialize_embeddings(
+            provider="openai",
+            model="text-embedding-3-small"
+        )
+        
+        if not success:
+            logger.warning("Failed to initialize embedding service, skipping similarity relationships")
+            return 0
     
     try:
         # Create chunk-to-chunk similarities

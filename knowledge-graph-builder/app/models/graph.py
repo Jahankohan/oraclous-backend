@@ -22,6 +22,8 @@ class KnowledgeGraph(Base):
     last_optimized = Column(DateTime(timezone=True), nullable=True)
     optimization_count = Column(Integer, default=0)
     last_optimization_type = Column(String(50), nullable=True)
+    similarity_relationships = Column(Integer, default=0)
+    communities_count = Column(Integer, default=0)
 
 class IngestionJob(Base):
     """Data ingestion job tracking"""

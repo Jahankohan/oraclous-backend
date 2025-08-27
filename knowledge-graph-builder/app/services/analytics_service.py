@@ -58,22 +58,10 @@ class GraphAnalyticsService:
             community_query = """
             CALL {
                 // Create temporary graph projection for this specific graph_id
-                CALL gds.graph.project(
+                CALL gds.graph.project.cypher(
                     'temp-community-' + $graph_id,
-                    {
-                        Entity: {
-                            label: '*',
-                            properties: ['name'],
-                            nodeFilter: 'n.graph_id = "' + $graph_id + '"'
-                        }
-                    },
-                    {
-                        RELATIONSHIP: {
-                            type: '*',
-                            orientation: 'UNDIRECTED',
-                            relationshipFilter: 'r.graph_id = "' + $graph_id + '"'
-                        }
-                    }
+                    'MATCH (n) WHERE n.graph_id = "' + $graph_id + '" RETURN id(n) AS id, n.name AS name',
+                    'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" RETURN id(a) AS source, id(b) AS target'
                 )
                 YIELD graphName
                 
@@ -210,23 +198,12 @@ class GraphAnalyticsService:
             
             # Step 1: Create graph projection with correct syntax
             projection_query = """
-            CALL gds.graph.project(
+            CALL gds.graph.project.cypher(
                 $graph_name,
+                'MATCH (n:__Entity__) WHERE n.graph_id = $graph_id RETURN id(n) AS id, n.name AS name',
+                'MATCH (a:__Entity__)-[r]->(b:__Entity__) WHERE a.graph_id = $graph_id AND b.graph_id = $graph_id AND r.graph_id = $graph_id RETURN id(a) AS source, id(b) AS target',
                 {
-                    Entity: {
-                        label: '__Entity__',
-                        properties: ['name', 'id']
-                    }
-                },
-                {
-                    RELATIONSHIP: {
-                        type: '*',
-                        orientation: 'UNDIRECTED'
-                    }
-                },
-                {
-                    nodeQuery: 'MATCH (n:__Entity__) WHERE n.graph_id = $graph_id RETURN id(n) AS id',
-                    relationshipQuery: 'MATCH (a:__Entity__)-[r]->(b:__Entity__) WHERE a.graph_id = $graph_id AND b.graph_id = $graph_id AND r.graph_id = $graph_id RETURN id(a) AS source, id(b) AS target'
+                    parameters: {graph_id: $graph_id}
                 }
             )
             YIELD graphName
@@ -608,22 +585,10 @@ class GraphAnalyticsService:
             pagerank_query = """
             CALL {
                 // Create temporary graph projection
-                CALL gds.graph.project(
+                CALL gds.graph.project.cypher(
                     'temp-pagerank-' + $graph_id,
-                    {
-                        Entity: {
-                            label: '*',
-                            properties: ['name'],
-                            nodeFilter: 'n.graph_id = "' + $graph_id + '"'
-                        }
-                    },
-                    {
-                        RELATIONSHIP: {
-                            type: '*',
-                            orientation: 'UNDIRECTED',
-                            relationshipFilter: 'r.graph_id = "' + $graph_id + '"'
-                        }
-                    }
+                    'MATCH (n) WHERE n.graph_id = "' + $graph_id + '" RETURN id(n) AS id, n.name AS name',
+                    'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" RETURN id(a) AS source, id(b) AS target'
                 )
                 YIELD graphName
                 
