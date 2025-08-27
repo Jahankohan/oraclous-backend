@@ -193,27 +193,69 @@ class GraphAnalyticsService:
         try:
             logger.info(f"Creating persistent community nodes for graph {graph_id}")
             
+            # First, check what entities exist and what labels they have
+            check_entities_query = """
+            MATCH (n)
+            WHERE n.graph_id = $graph_id
+            RETURN DISTINCT labels(n) as node_labels, count(n) as count
+            ORDER BY count DESC
+            """
+            
+            entity_check = await neo4j_client.execute_query(check_entities_query, {
+                "graph_id": str(graph_id)
+            })
+            
+            if not entity_check:
+                return {"communities_created": 0, "relationships_created": 0, "message": "No entities found for this graph"}
+            
+            # Find the correct entity label (could be __Entity__, Entity, or something else)
+            entity_label = None
+            for result in entity_check:
+                labels = result["node_labels"]
+                if "__Entity__" in labels:
+                    entity_label = "__Entity__"
+                    break
+                elif "Entity" in labels:
+                    entity_label = "Entity"
+                    break
+                elif any(label not in ["__Community__", "Chunk"] for label in labels):
+                    # Use the first non-community, non-chunk label
+                    entity_label = next(label for label in labels if label not in ["__Community__", "Chunk"])
+                    break
+            
+            if not entity_label:
+                logger.warning(f"No suitable entity label found for graph {graph_id}")
+                return await self._create_simple_communities(graph_id)
+            
+            logger.info(f"Using entity label: {entity_label}")
+            
             # Generate unique graph projection name
             graph_name = f"temp_persist_{str(graph_id).replace('-', '_')}"
             
-            # Step 1: Create graph projection with correct syntax
+            # Step 1: Create graph projection with correct syntax and parameter handling
             projection_query = """
             CALL gds.graph.project.cypher(
                 $graph_name,
-                'MATCH (n:__Entity__) WHERE n.graph_id = $graph_id RETURN id(n) AS id, n.name AS name',
-                'MATCH (a:__Entity__)-[r]->(b:__Entity__) WHERE a.graph_id = $graph_id AND b.graph_id = $graph_id AND r.graph_id = $graph_id RETURN id(a) AS source, id(b) AS target',
-                {
-                    parameters: {graph_id: $graph_id}
-                }
+                $node_query,
+                $relationship_query
             )
             YIELD graphName
             RETURN graphName
             """
             
-            await neo4j_client.execute_query(projection_query, {
-                "graph_name": graph_name,
-                "graph_id": str(graph_id)
-            })
+            # Construct queries with proper parameter substitution
+            node_query = f"MATCH (n:{entity_label}) WHERE n.graph_id = '{str(graph_id)}' RETURN id(n) AS id"
+            relationship_query = f"MATCH (a:{entity_label})-[r]->(b:{entity_label}) WHERE a.graph_id = '{str(graph_id)}' AND b.graph_id = '{str(graph_id)}' RETURN id(a) AS source, id(b) AS target"
+            
+            try:
+                await neo4j_client.execute_query(projection_query, {
+                    "graph_name": graph_name,
+                    "node_query": node_query,
+                    "relationship_query": relationship_query
+                })
+            except Exception as projection_error:
+                logger.warning(f"GDS projection failed: {projection_error}")
+                return await self._create_simple_communities(graph_id)
             
             # Step 2: Run Louvain community detection
             community_detection_query = """
@@ -221,7 +263,7 @@ class GraphAnalyticsService:
             YIELD nodeId, communityId
             
             // Get original nodes with their community assignments
-            MATCH (node:__Entity__)
+            MATCH (node)
             WHERE id(node) = nodeId AND node.graph_id = $graph_id
             
             RETURN node.id as entity_id,
@@ -230,14 +272,27 @@ class GraphAnalyticsService:
                 labels(node) as entity_labels
             """
             
-            detection_results = await neo4j_client.execute_query(community_detection_query, {
-                "graph_name": graph_name,
-                "graph_id": str(graph_id)
-            })
+            try:
+                detection_results = await neo4j_client.execute_query(community_detection_query, {
+                    "graph_name": graph_name,
+                    "graph_id": str(graph_id)
+                })
+            except Exception as detection_error:
+                logger.warning(f"Community detection failed: {detection_error}")
+                # Clean up and fallback
+                try:
+                    cleanup_query = "CALL gds.graph.drop($graph_name, false) YIELD graphName"
+                    await neo4j_client.execute_query(cleanup_query, {"graph_name": graph_name})
+                except:
+                    pass
+                return await self._create_simple_communities(graph_id)
             
             # Step 3: Clean up the temporary graph
-            cleanup_query = "CALL gds.graph.drop($graph_name, false) YIELD graphName"
-            await neo4j_client.execute_query(cleanup_query, {"graph_name": graph_name})
+            try:
+                cleanup_query = "CALL gds.graph.drop($graph_name, false) YIELD graphName"
+                await neo4j_client.execute_query(cleanup_query, {"graph_name": graph_name})
+            except Exception as cleanup_error:
+                logger.warning(f"Graph cleanup failed: {cleanup_error}")
             
             if not detection_results:
                 return {"communities_created": 0, "relationships_created": 0, "message": "No entities found for community detection"}
@@ -297,8 +352,10 @@ class GraphAnalyticsService:
                 
                 # Create IN_COMMUNITY relationships
                 for member in members:
+                    # Use flexible entity matching since we might not know the exact label
                     relationship_query = """
-                    MATCH (entity:__Entity__ {id: $entity_id, graph_id: $graph_id})
+                    MATCH (entity)
+                    WHERE entity.id = $entity_id AND entity.graph_id = $graph_id
                     MATCH (community:__Community__ {id: $community_id, graph_id: $graph_id})
                     MERGE (entity)-[:IN_COMMUNITY]->(community)
                     """
@@ -318,7 +375,8 @@ class GraphAnalyticsService:
                 "relationships_created": relationships_created,
                 "total_entities_processed": len(detection_results),
                 "graph_id": str(graph_id),
-                "algorithm_used": "louvain"
+                "algorithm_used": "louvain",
+                "entity_label_used": entity_label
             }
             
         except Exception as e:
@@ -339,23 +397,23 @@ class GraphAnalyticsService:
         try:
             logger.info(f"Creating simple communities for graph {graph_id}")
             
-            # Find entities with shared neighbors
+            # Find entities with shared neighbors using more flexible matching
             shared_neighbors_query = """
-            MATCH (a:__Entity__)-[r1]-(common)-[r2]-(b:__Entity__)
+            MATCH (a)-[r1]-(common)-[r2]-(b)
             WHERE a.graph_id = $graph_id 
             AND b.graph_id = $graph_id 
             AND common.graph_id = $graph_id
-            AND r1.graph_id = $graph_id 
-            AND r2.graph_id = $graph_id
             AND a.id < b.id  // Avoid duplicates
+            AND a.id IS NOT NULL
+            AND b.id IS NOT NULL
             
             WITH a, b, count(DISTINCT common) as shared_count
             WHERE shared_count >= 2  // At least 2 shared neighbors
             
             RETURN a.id as entity_a_id, 
-                a.name as entity_a_name,
+                coalesce(a.name, a.id) as entity_a_name,
                 b.id as entity_b_id, 
-                b.name as entity_b_name,
+                coalesce(b.name, b.id) as entity_b_name,
                 shared_count
             ORDER BY shared_count DESC
             LIMIT 50
@@ -400,10 +458,11 @@ class GraphAnalyticsService:
                 
                 communities_created += 1
                 
-                # Create relationships for both entities
+                # Create relationships for both entities using flexible matching
                 for entity_id in [result["entity_a_id"], result["entity_b_id"]]:
                     relationship_query = """
-                    MATCH (entity:__Entity__ {id: $entity_id, graph_id: $graph_id})
+                    MATCH (entity)
+                    WHERE entity.id = $entity_id AND entity.graph_id = $graph_id
                     MATCH (community:__Community__ {id: $community_id, graph_id: $graph_id})
                     MERGE (entity)-[:IN_COMMUNITY]->(community)
                     """
@@ -434,7 +493,6 @@ class GraphAnalyticsService:
                 "error": str(e),
                 "graph_id": str(graph_id)
             }
-
     def _generate_community_id(self, graph_id: UUID, community_id: int, members: List[Dict]) -> str:
         """
         Generate a unique, deterministic community ID based on members.
