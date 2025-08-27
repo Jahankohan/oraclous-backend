@@ -12,16 +12,7 @@ from app.schemas.graph_schemas import (
     GraphCreate, GraphUpdate, GraphResponse, 
     IngestDataRequest, IngestionJobResponse, SchemaLearnRequest, SchemaUpdateRequest
 )
-from app.core.neo4j_client import neo4j_client
-from app.services.background_jobs import (
-    process_ingestion_job, 
-    _create_similarity_relationships, 
-    _detect_communities_and_cleanup,
-    create_persistent_communities_task,
-    update_community_embeddings_task,
-    refresh_all_communities_task,
-    optimize_all_graphs
-)
+from app.services.background_job_service import background_job_service
 from app.services.entity_extractor import entity_extractor, SchemaEvolutionConfig
 from app.services.schema_service import schema_service
 from app.services.enhanced_graph_service import enhanced_graph_service
@@ -248,23 +239,17 @@ async def ingest_data_corrected(
     await db.commit()
     await db.refresh(job)
     
-    # OPTION 1: Use existing background job system (RECOMMENDED)
-    try:
-        task = process_ingestion_job.delay(str(job.id), user_id)
-        logger.info(f"Started background job {task.id} for ingestion {job.id}")
-    except Exception as e:
-        logger.error(f"Failed to start background job: {e}")
-        # Fallback to background tasks
-        background_tasks.add_task(
-            _process_ingestion_fallback,
-            job.id,
-            user_id,
-            graph_id,
-            data.content,
-            saved_schema,
-            evolution_config
-        )
+    # Start background ingestion job using the clean service
+    job_result = background_job_service.start_ingestion_job(str(job.id), user_id)
     
+    if job_result["status"] == "failed":
+        logger.error(f"Failed to start background job: {job_result['message']}")
+        # Raise internal error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to start background job"
+        )
+
     logger.info(f"Started ingestion job {job.id} with evolution mode: {evolution_config.mode}")
     
     return IngestionJobResponse(
@@ -278,44 +263,6 @@ async def ingest_data_corrected(
         extracted_relationships=0 
         # evolution_mode=evolution_config.mode  # If field exists
     )
-
-async def _process_ingestion_fallback(
-    job_id: UUID,
-    user_id: str,
-    graph_id: UUID,
-    content: str,
-    saved_schema: Optional[dict],
-    evolution_config: SchemaEvolutionConfig
-):
-    """Fallback background task for ingestion processing"""
-    
-    try:
-        # Import here to avoid circular imports
-        from app.services.sync_ingestion_processor import run_extraction_with_schema_evolution
-        
-        # Run extraction with schema evolution
-        result = await run_extraction_with_schema_evolution(
-            content=content,
-            user_id=user_id,
-            graph_id=graph_id,
-            schema=saved_schema,
-            evolution_config=evolution_config
-        )
-        
-        # Update job status (you'll need to implement this)
-        # await update_job_status(str(job_id), "completed" if result["success"] else "failed")
-        
-    except Exception as e:
-        logger.error(f"Background ingestion failed: {e}")
-        # await update_job_status(str(job_id), "failed", error_message=str(e))
-
-async def _process_sync_ingestion(job_id: str, user_id: str, db: AsyncSession):
-    """Fallback sync processing for development with new architecture"""
-    try:
-        from app.services.background_jobs import _process_ingestion_job_async  # UPDATED
-        await _process_ingestion_job_async(None, job_id, user_id)
-    except Exception as e:
-        logger.error(f"Sync ingestion processing failed: {e}")
 
 @router.get("/graphs/{graph_id}/jobs", response_model=List[IngestionJobResponse])
 async def list_ingestion_jobs(
@@ -619,29 +566,14 @@ async def create_similarity_relationships(
         raise HTTPException(status_code=404, detail="Graph not found")
     
     try:
-        # Get chunks for this graph
-        chunks_query = """
-        MATCH (c:DocumentChunk {graph_id: $graph_id})
-        RETURN c.id as id, c.embedding as embedding
-        """
-        
-        result = await neo4j_client.execute_query(chunks_query, {
-            "graph_id": str(graph_id)
-        })
-        
-        chunks = [{"id": r["id"], "embedding": r["embedding"]} for r in result if r["embedding"]]
-        
-        # Create similarities
-        similarity_count = await _create_similarity_relationships(
-            graph_id=graph_id,
-            chunks=chunks,
-            entities_count=graph.node_count
-        )
+        # Start similarity relationships creation using clean background job service
+        job_result = background_job_service.start_similarity_relationships(graph_id)
         
         return {
-            "status": "success",
-            "similarity_relationships_created": similarity_count,
-            "message": f"Created {similarity_count} similarity relationships"
+            "task_id": job_result["task_id"],
+            "status": job_result["status"],
+            "message": job_result["message"],
+            "graph_id": str(graph_id)
         }
         
     except Exception as e:
@@ -671,17 +603,14 @@ async def detect_communities(
         raise HTTPException(status_code=404, detail="Graph not found")
     
     try:
-        # Option 1: Synchronous execution (for small graphs)
-        communities_found = await _detect_communities_and_cleanup(graph_id)
-        
-        # Option 2: For large graphs, you can use background task
-        # task = create_persistent_communities_task.delay(str(graph_id), user_id)
-        # return {"task_id": task.id, "status": "processing"}
+        # Start community detection using clean background job service
+        job_result = background_job_service.start_community_detection(graph_id)
         
         return {
-            "status": "success",
-            "communities_detected": communities_found,
-            "message": f"Detected {communities_found} communities and cleaned up graph"
+            "task_id": job_result["task_id"],
+            "status": job_result["status"],
+            "message": job_result["message"],
+            "graph_id": str(graph_id)
         }
         
     except Exception as e:
@@ -710,14 +639,14 @@ async def create_communities_async(
         raise HTTPException(status_code=404, detail="Graph not found")
     
     try:
-        # Start background task
-        task = create_persistent_communities_task.delay(str(graph_id), user_id)
+        # Start community detection using clean background job service
+        job_result = background_job_service.start_community_detection(graph_id)
         
         return {
-            "task_id": task.id,
-            "status": "processing",
-            "message": "Community creation started in background",
-            "check_status_url": f"/graphs/{graph_id}/tasks/{task.id}"
+            "task_id": job_result["task_id"],
+            "status": job_result["status"],
+            "message": job_result["message"],
+            "graph_id": str(graph_id)
         }
         
     except Exception as e:
@@ -746,14 +675,14 @@ async def update_community_embeddings(
         raise HTTPException(status_code=404, detail="Graph not found")
     
     try:
-        # Start background task for embedding generation
-        task = update_community_embeddings_task.delay(str(graph_id), user_id)
+        # Start community embeddings update using clean background job service
+        job_result = background_job_service.start_community_embeddings(graph_id, user_id)
         
         return {
-            "task_id": task.id,
-            "status": "processing",
-            "message": "Community embedding generation started",
-            "check_status_url": f"/graphs/{graph_id}/tasks/{task.id}"
+            "task_id": job_result["task_id"],
+            "status": job_result["status"],
+            "message": job_result["message"],
+            "graph_id": str(graph_id)
         }
         
     except Exception as e:
@@ -768,14 +697,14 @@ async def refresh_all_communities(
     """Refresh communities for all user graphs"""
     
     try:
-        # Start background task to refresh all communities
-        task = refresh_all_communities_task.delay(user_id)
+        # Start community refresh for all user graphs using clean background job service
+        job_result = background_job_service.refresh_all_communities(user_id)
         
         return {
-            "task_id": task.id,
-            "status": "processing", 
-            "message": "Community refresh started for all graphs",
-            "check_status_url": f"/tasks/{task.id}/status"
+            "task_id": job_result["task_id"],
+            "status": job_result["status"],
+            "message": job_result["message"],
+            "user_id": user_id
         }
         
     except Exception as e:
@@ -796,14 +725,14 @@ async def optimize_all_graphs_endpoint(
     #     raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
-        # Start background task for system-wide optimization
-        task = optimize_all_graphs.delay()
+        # Start background task for system-wide optimization using clean service
+        job_result = background_job_service.start_graph_optimization()
         
         return {
-            "task_id": task.id,
-            "status": "processing",
-            "message": "System-wide graph optimization started",
-            "check_status_url": f"/admin/tasks/{task.id}/status"
+            "task_id": job_result.get("task_id"),
+            "status": job_result["status"],
+            "message": job_result["message"],
+            "check_status_url": f"/admin/tasks/{job_result.get('task_id')}/status" if job_result.get("task_id") else None
         }
         
     except Exception as e:

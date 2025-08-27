@@ -5,7 +5,7 @@ from typing import Optional
 from uuid import UUID
 from pydantic import BaseModel
 
-from app.services.background_jobs import process_embedding_generation_job
+from app.services.background_job_service import background_job_service
 from app.api.dependencies import get_current_user_id, get_database
 from app.models.graph import KnowledgeGraph
 from app.services.enhanced_graph_service import enhanced_graph_service
@@ -83,42 +83,20 @@ async def generate_embeddings(
         if request.generate_for_existing:
             logger.info("Step 4: Starting embedding generation for existing nodes")
             
-            try:
-                # Import the task here to make sure it's available
-                from app.services.background_jobs import process_embedding_generation_job
-                logger.info("Step 5: Successfully imported Celery task")
-                
-                # Start Celery task
-                logger.info(f"Step 6: About to call process_embedding_generation_job.delay({str(graph_id)}, {user_id})")
-                task = process_embedding_generation_job.delay(str(graph_id), user_id)
-                logger.info(f"Step 7: Celery task started successfully with ID: {task.id}")
-                
-                return EmbeddingResponse(
-                    status="processing",
-                    message=f"Embedding generation started in background. Job ID: {task.id}",
-                    nodes_processed=None
+            # Use the clean background job service
+            job_result = background_job_service.start_embedding_generation(graph_id, user_id)
+            
+            if job_result["status"] == "failed":
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=job_result["message"]
                 )
-                
-            except Exception as e:
-                logger.error(f"Step X: Failed to start background embedding job: {e}")
-                logger.error(f"Exception type: {type(e)}")
-                logger.error(f"Exception details: {str(e)}")
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                
-                # Fallback to FastAPI background task for development
-                logger.info("Step 8: Falling back to FastAPI background task")
-                background_tasks.add_task(
-                    _process_embedding_generation,
-                    graph_id,
-                    user_id
-                )
-                
-                return EmbeddingResponse(
-                    status="processing",
-                    message="Embedding generation started in background (fallback mode)",
-                    nodes_processed=None
-                )
+            
+            return EmbeddingResponse(
+                status="processing",
+                message=f"Embedding generation started in background. Job ID: {job_result.get('task_id')}",
+                nodes_processed=None
+            )
         else:
             # Just initialize the service and create indexes
             logger.info("Step 4: Only initializing service, not generating for existing nodes")
