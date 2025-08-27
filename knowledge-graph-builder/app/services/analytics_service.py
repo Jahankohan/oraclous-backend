@@ -58,10 +58,12 @@ class GraphAnalyticsService:
             community_query = """
             CALL {
                 // Create temporary graph projection for this specific graph_id
-                CALL gds.graph.project.cypher(
+                CALL gds.graph.project(
                     'temp-community-' + $graph_id,
-                    'MATCH (n) WHERE n.graph_id = "' + $graph_id + '" RETURN id(n) AS id, n.name AS name',
-                    'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" RETURN id(a) AS source, id(b) AS target'
+                    {
+                        nodeQuery: 'MATCH (n) WHERE n.graph_id = "' + $graph_id + '" RETURN id(n) AS id, n.name AS name',
+                        relationshipQuery: 'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" RETURN id(a) AS source, id(b) AS target'
+                    }
                 )
                 YIELD graphName
                 
@@ -234,10 +236,12 @@ class GraphAnalyticsService:
             
             # Step 1: Create graph projection with correct syntax and parameter handling
             projection_query = """
-            CALL gds.graph.project.cypher(
+            CALL gds.graph.project(
                 $graph_name,
-                $node_query,
-                $relationship_query
+                {
+                    nodeQuery: $node_query,
+                    relationshipQuery: $relationship_query
+                }
             )
             YIELD graphName
             RETURN graphName
@@ -643,10 +647,12 @@ class GraphAnalyticsService:
             pagerank_query = """
             CALL {
                 // Create temporary graph projection
-                CALL gds.graph.project.cypher(
+                CALL gds.graph.project(
                     'temp-pagerank-' + $graph_id,
-                    'MATCH (n) WHERE n.graph_id = "' + $graph_id + '" RETURN id(n) AS id, n.name AS name',
-                    'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" RETURN id(a) AS source, id(b) AS target'
+                    {
+                        nodeQuery: 'MATCH (n) WHERE n.graph_id = "' + $graph_id + '" RETURN id(n) AS id, n.name AS name',
+                        relationshipQuery: 'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" RETURN id(a) AS source, id(b) AS target'
+                    }
                 )
                 YIELD graphName
                 
