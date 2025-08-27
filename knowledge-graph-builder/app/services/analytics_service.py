@@ -493,6 +493,7 @@ class GraphAnalyticsService:
                 "error": str(e),
                 "graph_id": str(graph_id)
             }
+    
     def _generate_community_id(self, graph_id: UUID, community_id: int, members: List[Dict]) -> str:
         """
         Generate a unique, deterministic community ID based on members.

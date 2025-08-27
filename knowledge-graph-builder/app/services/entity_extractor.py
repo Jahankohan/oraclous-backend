@@ -62,7 +62,7 @@ class EntityExtractor:
         domain_context: Optional[str] = None,
         saved_schema: Optional[Dict[str, Any]] = None,
         allow_schema_evolution: bool = True
-    ) -> Tuple[List[GraphDocument], Dict[str, Any]]:
+    ) -> Tuple[List[GraphDocument], List[Dict[str, Any]]]:
         """
         Extract complete document hierarchy: Document → Chunks → Entities (using __Entity__)
         All node types get embeddings for comprehensive search
@@ -125,12 +125,8 @@ class EntityExtractor:
             )
             
             all_graph_docs.append(graph_doc)
-        
-        return all_graph_docs, {
-            "total_documents": len(documents),
-            "total_chunks": len(all_chunks),
-            "schema": evolved_schema if 'evolved_schema' in locals() else None
-        }
+
+        return all_graph_docs, all_chunks
 
     async def _create_document_node(self, doc_data: Dict[str, Any], graph_id: UUID) -> Node:
         """Create Document node with proper metadata"""

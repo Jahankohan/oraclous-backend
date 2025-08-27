@@ -96,7 +96,7 @@ def generate_graph_summary(self, graph_id: str):
 @celery_app.task(bind=True)
 def create_similarity_relationships_job(self, graph_id: str):
     """Create similarity relationships - allows concurrency"""
-    return AsyncTaskExecutor.run_async_task(_create_similarity_relationships, self, graph_id)
+    return AsyncTaskExecutor.run_async_task(_create_similarity_relationships_async, self, graph_id)
 
 @celery_app.task(bind=True)
 def detect_communities_job(self, graph_id: str):
@@ -1214,22 +1214,101 @@ async def _detect_communities_and_cleanup(graph_id: UUID) -> int:
         logger.error(f"Community detection failed: {e}")
         return 0
 
-async def _create_similarity_relationships(
-    graph_id: UUID,
-    chunks: List[Dict[str, Any]]) -> int:
-    """Create SIMILAR relationships between semantically related chunks and entities"""
+async def _create_similarity_relationships_async(task, graph_id: str):
+    """Async wrapper for similarity relationships creation"""
     
-    # Try to initialize embedding service if not already initialized
-    if not embedding_service.is_initialized():
-        logger.info("Initializing embedding service for similarity relationships")
-        success = await embedding_service.initialize_embeddings(
-            provider="openai",
-            model="text-embedding-3-small"
+    try:
+        logger.info(f"Starting similarity relationships creation for graph {graph_id}")
+        
+        if task:
+            task.update_state(state="PROGRESS", meta={"progress": 10, "status": "Connecting to Neo4j"})
+        
+        await neo4j_client.connect()
+        
+        # Step 1: Get chunks for similarity processing
+        if task:
+            task.update_state(state="PROGRESS", meta={"progress": 30, "status": "Fetching document chunks"})
+        
+        chunks_query = """
+        MATCH (c:DocumentChunk {graph_id: $graph_id})
+        WHERE c.embedding IS NOT NULL
+        RETURN c.id as id, c.embedding as embedding
+        """
+        
+        chunks_result = await neo4j_client.execute_query(chunks_query, {
+            "graph_id": graph_id
+        })
+        
+        chunks = [{"id": r["id"], "embedding": r["embedding"]} for r in chunks_result if r["embedding"]]
+        
+        logger.info(f"Found {len(chunks)} chunks with embeddings for similarity processing")
+        
+        if not chunks:
+            logger.warning(f"No chunks with embeddings found for graph {graph_id}")
+            return {
+                "status": "completed",
+                "similarities_created": 0,
+                "message": "No chunks with embeddings found"
+            }
+        
+        # Step 2: Initialize embedding service if needed
+        if task:
+            task.update_state(state="PROGRESS", meta={"progress": 50, "status": "Initializing embedding service"})
+        
+        if not embedding_service.is_initialized():
+            logger.info("Initializing embedding service for similarity relationships")
+            success = await embedding_service.initialize_embeddings(
+                provider="openai",
+                model="text-embedding-3-small"
+            )
+            
+            if not success:
+                logger.warning("Embedding service not initialized, skipping similarity relationships")
+                return {
+                    "status": "completed",
+                    "similarities_created": 0,
+                    "message": "Embedding service not available"
+                }
+        
+        logger.info(f"Embeddings initialized: openai - text-embedding-3-small (dim: {embedding_service.dimension})")
+        
+        # Step 3: Create similarity relationships
+        if task:
+            task.update_state(state="PROGRESS", meta={"progress": 70, "status": "Creating similarity relationships"})
+        
+        similarity_count = await _create_similarity_relationships_core(
+            graph_id=UUID(graph_id),
+            chunks=chunks
         )
         
-        if not success:
-            logger.warning("Failed to initialize embedding service, skipping similarity relationships")
-            return 0
+        if task:
+            task.update_state(state="PROGRESS", meta={"progress": 100, "status": "Completed"})
+        
+        logger.info(f"Created {similarity_count} similarity relationships for graph {graph_id}")
+        
+        return {
+            "status": "completed",
+            "similarities_created": similarity_count,
+            "message": f"Successfully created {similarity_count} similarity relationships"
+        }
+        
+    except Exception as e:
+        logger.error(f"Similarity relationships creation failed for graph {graph_id}: {e}")
+        return {
+            "status": "error",
+            "similarities_created": 0,
+            "message": str(e)
+        }
+    finally:
+        try:
+            await neo4j_client.disconnect()
+        except Exception as e:
+            logger.warning(f"Neo4j cleanup warning: {e}")
+
+async def _create_similarity_relationships_core(
+    graph_id: UUID,
+    chunks: List[Dict[str, Any]]) -> int:
+    """Core function to create SIMILAR relationships between semantically related chunks and entities"""
     
     try:
         # Create chunk-to-chunk similarities
@@ -1239,13 +1318,20 @@ async def _create_similarity_relationships(
         entity_similarities = await _create_entity_chunk_similarities(graph_id)
         
         total_similarities = chunk_similarities + entity_similarities
-        logger.info(f"Created {total_similarities} similarity relationships")
+        logger.info(f"Created {total_similarities} similarity relationships ({chunk_similarities} chunk-to-chunk, {entity_similarities} entity-to-chunk)")
         
         return total_similarities
         
     except Exception as e:
         logger.error(f"Failed to create similarity relationships: {e}")
         return 0
+
+# Update the old function to use the new core function
+async def _create_similarity_relationships(
+    graph_id: UUID,
+    chunks: List[Dict[str, Any]]) -> int:
+    """Legacy function - redirects to core function for backward compatibility"""
+    return await _create_similarity_relationships_core(graph_id, chunks)
 
 async def _create_chunk_similarities(graph_id: UUID, chunks: List[Dict[str, Any]]) -> int:
     """Create SIMILAR relationships between semantically related chunks"""
@@ -1365,7 +1451,7 @@ async def _optimize_single_graph(graph_id: UUID, session: AsyncSession):
         chunks = [{"id": r["id"], "embedding": r["embedding"]} for r in chunks_result if r["embedding"]]
                     
         # Create similarities
-        similarity_count = await _create_similarity_relationships(
+        similarity_count = await _create_similarity_relationships_core(
             graph_id=graph_id,
             chunks=chunks
         )
