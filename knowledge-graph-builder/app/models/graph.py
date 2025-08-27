@@ -1,5 +1,6 @@
 from sqlalchemy import Column, String, Text, DateTime, Integer, Boolean, JSON
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, DateTime
 from sqlalchemy.sql import func
 import uuid
 from app.core.database import Base
@@ -18,6 +19,9 @@ class KnowledgeGraph(Base):
     node_count = Column(Integer, default=0)
     relationship_count = Column(Integer, default=0)
     status = Column(String(50), default="active")
+    last_optimized = Column(DateTime(timezone=True), nullable=True)
+    optimization_count = Column(Integer, default=0)
+    last_optimization_type = Column(String(50), nullable=True)
 
 class IngestionJob(Base):
     """Data ingestion job tracking"""

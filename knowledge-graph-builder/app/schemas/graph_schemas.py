@@ -17,7 +17,6 @@ class GraphUpdate(BaseModel):
 
 class GraphResponse(BaseModel):
     """Schema for knowledge graph response"""
-    model_config = ConfigDict(from_attributes=True)
     
     id: UUID
     name: str
@@ -29,6 +28,12 @@ class GraphResponse(BaseModel):
     node_count: int
     relationship_count: int
     status: str
+    last_optimized: Optional[datetime] = Field(default=None, description="When this graph was last optimized")
+    optimization_count: int = Field(default=0, description="Number of optimizations performed")
+    last_optimization_type: Optional[str] = Field(default=None, description="Type of last optimization")
+    
+    class Config:
+        from_attributes = True  
 
 class SchemaLearnRequest(BaseModel):
     """Request for learning schema from text"""
