@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from uuid import UUID
 from app.core.neo4j_client import neo4j_client
 from app.services.embedding_service import embedding_service
+from app.services.vector_service import vector_service
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -28,30 +29,17 @@ class SearchService:
             # Generate query embedding
             query_embedding = await embedding_service.embed_text(query)
             
-            # Vector similarity search
-            cypher_query = """
-            CALL db.index.vector.queryNodes('entity_embeddings', $k, $query_embedding)
-            YIELD node, score
-            WHERE node.graph_id = $graph_id AND score >= $threshold
-            RETURN node.id as id,
-                   node.name as name,
-                   node.type as type,
-                   node.description as description,
-                   labels(node) as labels,
-                   score,
-                   node{.*} as properties
-            ORDER BY score DESC
-            """
+            # Use vector_service for similarity search
+            results = await vector_service.similarity_search(
+                query_embedding=query_embedding,
+                graph_id=str(graph_id),
+                k=k,
+                node_types=["Entity"],
+                threshold=threshold
+            )
             
-            result = await neo4j_client.execute_query(cypher_query, {
-                "k": k,
-                "query_embedding": query_embedding,
-                "graph_id": str(graph_id),
-                "threshold": threshold
-            })
-            
-            logger.info(f"Similarity search found {len(result)} entities")
-            return result
+            logger.info(f"Similarity search found {len(results)} entities")
+            return results
             
         except Exception as e:
             logger.error(f"Entity similarity search failed: {e}")
@@ -73,29 +61,17 @@ class SearchService:
             # Generate query embedding
             query_embedding = await embedding_service.embed_text(query)
             
-            # Vector similarity search
-            cypher_query = """
-            CALL db.index.vector.queryNodes('chunk_embeddings', $k, $query_embedding)
-            YIELD node, score  
-            WHERE node.graph_id = $graph_id AND score >= $threshold
-            RETURN node.id as id,
-                   node.text as text,
-                   node.source as source,
-                   node.chunk_index as chunk_index,
-                   score,
-                   node{.*} as properties
-            ORDER BY score DESC
-            """
+            # Use vector_service for similarity search
+            results = await vector_service.similarity_search(
+                query_embedding=query_embedding,
+                graph_id=str(graph_id),
+                k=k,
+                node_types=["Chunk"],
+                threshold=threshold
+            )
             
-            result = await neo4j_client.execute_query(cypher_query, {
-                "k": k,
-                "query_embedding": query_embedding,
-                "graph_id": str(graph_id),
-                "threshold": threshold
-            })
-            
-            logger.info(f"Chunk similarity search found {len(result)} results")
-            return result
+            logger.info(f"Chunk similarity search found {len(results)} results")
+            return results
             
         except Exception as e:
             logger.error(f"Chunk similarity search failed: {e}")

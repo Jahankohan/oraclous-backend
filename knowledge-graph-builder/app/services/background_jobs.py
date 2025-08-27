@@ -120,196 +120,8 @@ def cleanup_orphaned_data(self, user_id: str):
 
 # ====== ASYNC TASK IMPLEMENTATIONS ======
 
-async def _run_extraction_async(content: str, user_id: str, graph_id: UUID, schema: dict, task=None):
-    """
-    Pure async extraction function with proper cleanup
-    """
-    try:
-        from app.services.entity_extractor import entity_extractor
-        from app.services.vector_service import vector_service
-        from app.core.neo4j_client import neo4j_client
-        from neo4j import AsyncGraphDatabase
-        from app.core.config import settings
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 20, "status": "Initializing connections"})
-        
-        # Initialize connections in this loop context
-        await neo4j_client.connect()
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 40, "status": "Extracting entities"})
-        
-        # Convert content to documents format for extract_from_documents
-        documents = [{
-            "id": str(graph_id),
-            "content": content,
-            "title": "Document Content",
-            "filename": "content.txt",
-            "content_type": "text/plain",
-            "summary": "",
-            "created_at": None
-        }]
-        
-        # Use new dual graph extraction method
-        entity_graph_docs, lexical_chunks = await entity_extractor.extract_from_documents(
-            documents=documents,
-            user_id=user_id,
-            graph_id=graph_id,
-            domain_context=schema.get("domain") if schema else None
-        )
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 60, "status": "Storing document chunks"})
-        
-        # Store lexical graph (document chunks)
-        chunks_stored = 0
-        try:
-            if lexical_chunks:
-                chunks_stored = await vector_service.create_text_chunks(
-                    graph_id=graph_id,
-                    text_chunks=lexical_chunks
-                )
-        except Exception as e:
-            logger.warning(f"Failed to store chunks: {e}")
-            # Continue without chunks
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 80, "status": "Storing entities and relationships"})
-        
-        # Create dedicated driver for this task to avoid connection conflicts
-        driver = AsyncGraphDatabase.driver(
-            settings.NEO4J_URI,
-            auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD)
-        )
-        
-        try:
-            await driver.verify_connectivity()
-        
-            entities_count = 0
-            relationships_count = 0
-        
-            for graph_doc in entity_graph_docs:
-                # Filter out orphaned nodes (nodes without relationships)
-                connected_nodes = set()
-                valid_relationships = []
-            
-                # Find all nodes that have relationships
-                for rel in graph_doc.relationships:
-                    if rel.source and rel.target:
-                        connected_nodes.add(rel.source.id)
-                        connected_nodes.add(rel.target.id)
-                        valid_relationships.append(rel)
-            
-                # Keep only connected nodes
-                filtered_nodes = [node for node in graph_doc.nodes if node.id in connected_nodes]
-            
-                # Store nodes
-                for node in filtered_nodes:
-                    await _store_node_async(driver, node, graph_id)
-                    entities_count += 1
-            
-                for relationship in valid_relationships:
-                    await _store_relationship_async(driver, relationship, graph_id)
-                    relationships_count += 1
-                
-            logger.info(f"Stored {entities_count} entities and {relationships_count} relationships")
-        
-        finally:
-            await driver.close()
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={
-                "progress": 100, 
-                "status": f"Completed: {entities_count} entities, {relationships_count} relationships, {chunks_stored} chunks"
-            })
-        
-        return {
-            "success": True,
-            "entities": entities_count,
-            "relationships": relationships_count,
-            "chunks": chunks_stored
-        }
-        
-    except Exception as e:
-        logger.error(f"Extraction failed: {e}")
-        logger.error(traceback.format_exc())
-        if task:
-            task.update_state(state="FAILURE", meta={"error": str(e)})
-        raise
-
-    except Exception as e:
-        logger.error(f"Async extraction failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "success": False,
-            "error": str(e),
-            "entities": 0,
-            "relationships": 0,
-            "chunks": 0
-        }
-
-async def _store_node_async(driver, node, graph_id: UUID):
-    """Store individual node in Neo4j"""
-    
-    # Handle multiple labels properly
-    if isinstance(node.type, list):
-        # Join multiple labels with colon for Cypher syntax
-        labels_str = ":".join([label.replace(" ", "_").replace("-", "_") for label in node.type if label])
-    else:
-        # Single label
-        labels_str = str(node.type).replace(" ", "_").replace("-", "_")
-    
-    # Fallback to Entity if no valid labels
-    if not labels_str:
-        labels_str = "Entity"
-    
-    query = f"""
-    MERGE (n:{labels_str} {{id: $node_id}})
-    ON CREATE SET 
-        n.name = $name,
-        n.graph_id = $graph_id,
-        n.created_at = datetime(),
-        n += $properties
-    ON MATCH SET 
-        n.updated_at = datetime(),
-        n += $properties
-    """
-    
-    async with driver.session() as session:
-        await session.run(query, {
-            "node_id": node.id,
-            "name": getattr(node, 'id', str(node.id)),
-            "graph_id": str(graph_id),
-            "properties": node.properties or {}
-        })
-
-async def _store_relationship_async(driver, relationship, graph_id: UUID):
-    """Store individual relationship in Neo4j"""
-    query = f"""
-    MATCH (source {{id: $source_id}})
-    MATCH (target {{id: $target_id}})
-    MERGE (source)-[r:{relationship.type}]->(target)
-    ON CREATE SET 
-        r.graph_id = $graph_id,
-        r.created_at = datetime(),
-        r += $properties
-    ON MATCH SET 
-        r.updated_at = datetime(),
-        r += $properties
-    """
-    
-    async with driver.session() as session:
-        await session.run(query, {
-            "source_id": relationship.source.id,
-            "target_id": relationship.target.id,
-            "graph_id": str(graph_id),
-            "properties": relationship.properties or {}
-        })
-
 async def _run_ingestion_async(task, job_id: str, user_id: str):
-    """Process ingestion job with proper async setup"""
+    """Process ingestion job using REFACTORED SERVICE ARCHITECTURE"""
     job = None
     
     try:
@@ -332,26 +144,71 @@ async def _run_ingestion_async(task, job_id: str, user_id: str):
             # Update job status
             await _update_job_status_async(session, job_id, "processing")
             
-        task.update_state(state="PROGRESS", meta={"progress": 10, "status": "Starting ingestion"})
+        task.update_state(state="PROGRESS", meta={"progress": 10, "status": "Starting 4-phase ingestion"})
         
-        # Use the built-in extraction function below
-        await _run_extraction_async(
-            content=job.source_content,
+        # PHASE 1: EXTRACT - Convert content to documents format
+        task.update_state(state="PROGRESS", meta={"progress": 20, "status": "Phase 1: Extracting entities"})
+        documents = [{
+            "id": str(job.graph_id),
+            "content": job.source_content,
+            "title": "Document Content",
+            "filename": "content.txt",
+            "content_type": "text/plain",
+            "summary": "",
+            "created_at": None
+        }]
+        
+        entity_graph_docs, lexical_chunks = await entity_extractor.extract_from_documents(
+            documents=documents,
             user_id=user_id,
             graph_id=job.graph_id,
-            schema=graph.schema_config,
-            task=task
+            domain_context=graph.schema_config.get("domain") if graph.schema_config else None
         )
         
-        # Update job status to completed
-        async with worker_session_maker() as session:
-            await _update_job_status_async(session, job_id, "completed")
+        # PHASE 2: ENRICH - Add embeddings to entities (handled by enhanced_graph_service)
+        task.update_state(state="PROGRESS", meta={"progress": 40, "status": "Phase 2: Enriching with embeddings"})
         
-        logger.info(f"Completed ingestion job {job_id}")
-        return {"status": "completed", "job_id": job_id}
+        # PHASE 3: STORE - Use enhanced_graph_service to store complete graph with embeddings
+        task.update_state(state="PROGRESS", meta={"progress": 60, "status": "Phase 3: Storing enriched graph"})
+        
+        result = await enhanced_graph_service.store_complete_graph(
+            graph_id=job.graph_id,
+            graph_documents=entity_graph_docs,
+            chunks=lexical_chunks,
+            user_id=user_id
+        )
+        
+        entities_count = result.get("entities_stored", 0)
+        relationships_count = result.get("relationships_stored", 0)
+        chunks_stored = result.get("chunks_stored", 0)
+        
+        # PHASE 4: INDEX - Create vector indexes for search
+        task.update_state(state="PROGRESS", meta={"progress": 80, "status": "Phase 4: Creating search indexes"})
+        
+        await vector_service.ensure_indexes_exist(job.graph_id)
+        
+        # Update job status to completed with metrics
+        task.update_state(state="PROGRESS", meta={"progress": 100, "status": "Completed 4-phase ingestion"})
+        
+        async with worker_session_maker() as session:
+            await _update_job_status_async(
+                session, job_id, "completed", 
+                entities=entities_count, 
+                relationships=relationships_count,
+                chunks=chunks_stored
+            )
+        
+        logger.info(f"Completed 4-phase ingestion job {job_id}: {entities_count} entities, {relationships_count} relationships, {chunks_stored} chunks")
+        return {
+            "status": "completed", 
+            "job_id": job_id,
+            "entities": entities_count,
+            "relationships": relationships_count,
+            "chunks": chunks_stored
+        }
         
     except Exception as e:
-        logger.error(f"Ingestion job {job_id} failed: {e}")
+        logger.error(f"4-phase ingestion job {job_id} failed: {e}")
         
         # Update job status to failed
         try:
