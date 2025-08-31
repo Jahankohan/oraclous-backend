@@ -1,0 +1,55 @@
+2025-08-31 21:25:04,556 - graphrag_chatbot - INFO - 🤖 Initializing GraphRAG Chatbot...
+2025-08-31 21:25:04,581 - graphrag_chatbot - INFO - ✅ Neo4j connection established
+2025-08-31 21:25:04,760 - graphrag_chatbot - INFO - ✅ LLM and embedder initialized
+2025-08-31 21:25:04,782 - graphrag_chatbot - INFO - ✅ Text2Cypher retriever initialized with real schema
+2025-08-31 21:25:04,782 - graphrag_chatbot - INFO - ✅ All retrievers initialized successfully
+2025-08-31 21:25:04,782 - graphrag_chatbot - INFO - 🎉 GraphRAG Chatbot ready for conversations!
+2025-08-31 21:25:04,782 - graphrag_chatbot - INFO - 🗣️  User [test_session]: What entities are in the knowledge graph?
+2025-08-31 21:25:04,782 - graphrag_chatbot - INFO - 🎯 Query classified as factual -> using hybrid
+2025-08-31 21:25:09,431 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+2025-08-31 21:25:09,670 - graphrag_chatbot - INFO - 📊 Retrieved 5 results in 4.89s using hybrid
+2025-08-31 21:25:15,339 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-08-31 21:25:15,349 - graphrag_chatbot - INFO - 🤖 Assistant [test_session]: Based on the knowledge base, several key entities can be identified within the context of TechNova C... (took 10.57s)
+2025-08-31 21:25:15,349 - graphrag_chatbot - INFO - 🗣️  User [test_session]: Who works for TechNova?
+2025-08-31 21:25:15,349 - graphrag_chatbot - INFO - 🎯 Query classified as relationship -> using text2cypher
+2025-08-31 21:25:15,350 - graphrag_chatbot - ERROR - ❌ Error in Text2CypherRetriever for 'Context: User: What entities are in the knowledge graph?
+Assistant: Based on the knowledge base, several key entities can be identified within the context of TechNova C...
+User: Who works for TechNova?
+
+Query: Who works for TechNova?': Text2CypherRetriever.get_search_results() got an unexpected keyword argument 'top_k'
+2025-08-31 21:25:15,350 - graphrag_chatbot - ERROR - Text2Cypher search failed: Text2CypherRetriever.get_search_results() got an unexpected keyword argument 'top_k'
+2025-08-31 21:25:15,350 - graphrag_chatbot - INFO - 📊 Retrieved 0 results in 0.00s using text2cypher
+2025-08-31 21:25:16,192 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-08-31 21:25:16,209 - graphrag_chatbot - INFO - 🤖 Assistant [test_session]: I'm sorry, but I don't have specific information on who works for TechNova at this time. If there's ... (took 0.86s)
+2025-08-31 21:25:16,209 - graphrag_chatbot - INFO - 🗣️  User [test_session]: Tell me about Michael Rodriguez
+2025-08-31 21:25:16,209 - graphrag_chatbot - INFO - 🎯 Query classified as semantic -> using vector
+2025-08-31 21:25:16,729 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+2025-08-31 21:25:17,069 - graphrag_chatbot - INFO - 📊 Retrieved 5 results in 0.86s using vector
+2025-08-31 21:25:19,983 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-08-31 21:25:19,984 - graphrag_chatbot - INFO - 🤖 Assistant [test_session]: Michael Rodriguez is one of the co-founders of TechNova Corporation, which was established in 2018 i... (took 3.78s)
+2025-08-31 21:25:19,985 - graphrag_chatbot - INFO - 🗣️  User [test_session]: What companies are mentioned?
+2025-08-31 21:25:19,985 - graphrag_chatbot - INFO - 🎯 Query classified as factual -> using hybrid
+2025-08-31 21:25:20,274 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+2025-08-31 21:25:20,303 - graphrag_chatbot - INFO - 📊 Retrieved 5 results in 0.32s using hybrid
+2025-08-31 21:25:23,427 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-08-31 21:25:23,429 - graphrag_chatbot - INFO - 🤖 Assistant [test_session]: In the provided information, the following companies and entities are mentioned:
+
+1. **TechNova Corp... (took 3.44s)
+2025-08-31 21:25:23,430 - graphrag_chatbot - INFO - 🗣️  User [test_session]: Show me relationships in the graph
+2025-08-31 21:25:23,430 - graphrag_chatbot - INFO - 🎯 Query classified as relationship -> using text2cypher
+2025-08-31 21:25:23,431 - graphrag_chatbot - ERROR - ❌ Error in Text2CypherRetriever for 'Context: Assistant: I'm sorry, but I don't have specific information on who works for TechNova at this time. If there's ...
+User: Tell me about Michael Rodriguez
+Assistant: Michael Rodriguez is one of the co-founders of TechNova Corporation, which was established in 2018 i...
+User: What companies are mentioned?
+Assistant: In the provided information, the following companies and entities are mentioned:
+
+1. **TechNova Corp...
+User: Show me relationships in the graph
+
+Query: Show me relationships in the graph': Text2CypherRetriever.get_search_results() got an unexpected keyword argument 'top_k'
+2025-08-31 21:25:23,431 - graphrag_chatbot - ERROR - Text2Cypher search failed: Text2CypherRetriever.get_search_results() got an unexpected keyword argument 'top_k'
+2025-08-31 21:25:23,431 - graphrag_chatbot - INFO - 📊 Retrieved 0 results in 0.00s using text2cypher
+2025-08-31 21:25:25,785 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-08-31 21:25:25,788 - graphrag_chatbot - INFO - 🤖 Assistant [test_session]: I currently don't have access to visual representations of the relationships in the graph. However, ... (took 2.36s)
+2025-08-31 21:25:25,788 - graphrag_chatbot - INFO - 🧹 Cleaning up chatbot resources...
+2025-08-31 21:25:25,788 - graphrag_chatbot - INFO - ✅ Chatbot cleanup completed
