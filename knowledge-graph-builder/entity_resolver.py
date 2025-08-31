@@ -220,7 +220,7 @@ class EntityResolver:
 
 async def main():
     """Test the entity resolver"""
-    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'password'))
+    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', ''))
     
     resolver = EntityResolver(driver)
     stats = resolver.resolve_entities()

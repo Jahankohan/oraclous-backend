@@ -23,7 +23,7 @@ async def test_benchmark_configuration():
     """Test the corrected benchmark configuration with mock LLM and real database"""
     try:
         # Connect to Neo4j
-        driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', os.getenv('NEO4J_PASSWORD', 'password')))
+        driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', os.getenv('NEO4J_PASSWORD', '')))
         
         # Clear database
         with driver.session() as session:

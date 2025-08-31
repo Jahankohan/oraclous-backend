@@ -20,7 +20,7 @@ async def quick_test_chunk_search():
     config = AdvancedPipelineConfig(
         neo4j_uri="bolt://localhost:7687",
         neo4j_user="neo4j", 
-        neo4j_password="password",
+        neo4j_password="",
         openai_api_key=""
     )
     
@@ -52,7 +52,7 @@ async def quick_test_entity_search():
     config = AdvancedPipelineConfig(
         neo4j_uri="bolt://localhost:7687",
         neo4j_user="neo4j",
-        neo4j_password="password", 
+        neo4j_password="", 
         openai_api_key=""
     )
     
@@ -82,7 +82,7 @@ async def quick_test_graph_traversal():
     config = AdvancedPipelineConfig(
         neo4j_uri="bolt://localhost:7687",
         neo4j_user="neo4j",
-        neo4j_password="password",
+        neo4j_password="",
         openai_api_key=""
     )
     
@@ -114,7 +114,7 @@ async def quick_test_database_stats():
     config = AdvancedPipelineConfig(
         neo4j_uri="bolt://localhost:7687",
         neo4j_user="neo4j",
-        neo4j_password="password"
+        neo4j_password=""
     )
     
     from neo4j import GraphDatabase

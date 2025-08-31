@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class GraphStateAnalyzer:
-    def __init__(self, uri="bolt://localhost:7687", user="neo4j", password="password"):
+    def __init__(self, uri="bolt://localhost:7687", user="neo4j", password=""):
         """Initialize the Neo4j driver"""
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
     

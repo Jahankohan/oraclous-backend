@@ -8,7 +8,7 @@ from collections import defaultdict
 
 def analyze_duplicate_entities():
     """Analyze and report duplicate entities"""
-    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'password'))
+    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', ''))
     
     print("🔍 Analyzing Duplicate Entities")
     print("=" * 50)

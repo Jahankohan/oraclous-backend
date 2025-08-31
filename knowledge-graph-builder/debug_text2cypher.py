@@ -12,7 +12,7 @@ async def test_text2cypher():
     # Neo4j connection
     driver = GraphDatabase.driver(
         "bolt://localhost:7687",
-        auth=("neo4j", "password123"),
+        auth=("neo4j", ""),
         database="neo4j"
     )
     

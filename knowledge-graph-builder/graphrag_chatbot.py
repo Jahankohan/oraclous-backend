@@ -1036,7 +1036,7 @@ async def main():
     config = AdvancedPipelineConfig(
         neo4j_uri="bolt://localhost:7687",
         neo4j_user="neo4j",
-        neo4j_password="password",
+        neo4j_password="",
         openai_api_key="",
         llm_model="gpt-4o-mini",  # Using mini for faster responses
         embedding_model="text-embedding-3-large"

@@ -23,7 +23,7 @@ async def debug_entity_chunk_connections():
     print("=" * 50)
     
     # Clean the database first
-    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'password'))
+    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', ''))
     
     with driver.session() as session:
         session.run("MATCH (n) DETACH DELETE n")

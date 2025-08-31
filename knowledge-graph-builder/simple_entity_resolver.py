@@ -12,7 +12,7 @@ def resolve_duplicate_entities():
     """
     Simple entity resolution: Create SAME_AS relationships between exact name matches
     """
-    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'password'))
+    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', ''))
     
     print("🔄 Starting Simple Entity Resolution...")
     
@@ -76,7 +76,7 @@ def analyze_entity_connectivity():
     """
     Analyze how entity resolution improved graph connectivity
     """
-    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'password'))
+    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', ''))
     
     print("\n📈 Analyzing Entity Connectivity Improvements...")
     

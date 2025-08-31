@@ -12,7 +12,7 @@ async def test_document_nodes():
     """Test that Document nodes are created properly"""
     
     # Clean the database first
-    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'password'))
+    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', ''))
     
     with driver.session() as session:
         session.run("MATCH (n) DETACH DELETE n")
@@ -24,7 +24,7 @@ async def test_document_nodes():
     config = AdvancedPipelineConfig(
         neo4j_uri="bolt://localhost:7687",
         neo4j_user="neo4j", 
-        neo4j_password="password",
+        neo4j_password="",
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         chunk_size=500,
         chunk_overlap=50,
@@ -44,7 +44,7 @@ async def test_document_nodes():
         print(f"✅ Processing result: {result.get('success', False)}")
         
         # Check what was created in the database
-        driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'password'))
+        driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', ''))
         
         with driver.session() as session:
             print("\n=== Database Analysis ===")

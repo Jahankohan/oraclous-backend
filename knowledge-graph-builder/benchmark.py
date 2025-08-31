@@ -297,7 +297,7 @@ class AdvancedPipelineConfig:
     # Neo4j Configuration
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
-    neo4j_password: str = "password"
+    neo4j_password: str = ""
     neo4j_database: str = "neo4j"
     
     # LLM Configuration
@@ -1382,7 +1382,7 @@ async def main():
     config = AdvancedPipelineConfig(
         neo4j_uri="bolt://localhost:7687",
         neo4j_user="neo4j",
-        neo4j_password="password",
+        neo4j_password="",
         openai_api_key=os.getenv("OPENAI_API_KEY", "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"),
         
         # Advanced processing configuration
