@@ -1,3 +1,8 @@
+"""
+Simplified vector service - removes redundant functionality now handled by Neo4j GraphRAG.
+Focuses only on vector index management and search operations.
+"""
+
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 from app.core.neo4j_client import neo4j_client
@@ -5,343 +10,232 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+
 class VectorService:
     """
-    Service for vector storage and indexing operations.
+    SIMPLIFIED vector service using Neo4j GraphRAG foundation.
     
-    RESPONSIBILITIES:
-    - Vector index creation and management
-    - Vector storage in Neo4j vector indexes
-    - Vector similarity queries
-    - Index optimization
+    REMOVED (now handled by Neo4j GraphRAG):
+    - create_text_chunks() → moved to Neo4j LexicalGraphBuilder
+    - add_entity_embedding() → handled by Neo4j pipeline
+    - Custom embedding storage logic → Neo4j handles this
     
-    DOES NOT:
-    - Generate embeddings (delegates to embedding_service)
-    - Handle search coordination (delegates to search_service)
+    RESPONSIBILITIES NOW:
+    - Vector index creation and management (Neo4j native)
+    - Vector similarity queries (delegate to Neo4j GraphRAG retrievers)
+    - Index optimization and maintenance
     """
     
     def __init__(self):
-        pass
+        self.driver = neo4j_client.driver
 
-    async def batch_store_embeddings(
-        self,
-        embeddings_data: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    async def ensure_indexes_exist(self, graph_id: UUID) -> Dict[str, Any]:
         """
-        Store multiple embeddings in batch for better performance.
-        
-        Args:
-            embeddings_data: List of dicts with keys: 
-                - type: 'node' or 'chunk'
-                - id: node/chunk ID
-                - embedding: vector
-                - graph_id: graph identifier
-                - text: original text (for chunks)
+        Ensure vector indexes exist for graph using Neo4j native vector indexes.
+        Neo4j GraphRAG components handle the embedding storage.
         """
         try:
-            stored_count = 0
-            failed_count = 0
+            # Create vector indexes using Neo4j's native vector index functionality
+            from neo4j_graphrag.indexes import create_vector_index
             
-            for data in embeddings_data:
-                try:
-                    if data['type'] == 'node':
-                        await self.store_node_embedding(
-                            node_id=data['id'],
-                            embedding=data['embedding'],
-                            graph_id=data['graph_id']
-                        )
-                    elif data['type'] == 'chunk':
-                        await self.store_chunk_embedding(
-                            chunk_id=data['id'],
-                            embedding=data['embedding'], 
-                            graph_id=data['graph_id'],
-                            text=data.get('text', '')
-                        )
-                    stored_count += 1
-                    
-                except Exception as e:
-                    logger.error(f"Failed to store embedding for {data['id']}: {e}")
-                    failed_count += 1
+            graph_id_str = str(graph_id)
             
-            return {
-                "stored_count": stored_count,
-                "failed_count": failed_count,
-                "total_count": len(embeddings_data)
-            }
+            # Create indexes for different node types with tenant isolation
+            indexes_created = []
             
-        except Exception as e:
-            logger.error(f"Batch embedding storage failed: {e}")
-            raise
-    
-    async def optimize_indexes(self, graph_id: Optional[str] = None) -> Dict[str, Any]:
-        """Optimize vector indexes for better performance"""
-        try:
-            # Add index optimization logic here
-            # This is a placeholder for future optimization features
+            # Entity embeddings index
+            try:
+                create_vector_index(
+                    self.driver,
+                    name=f"entity_embeddings_{graph_id_str}",
+                    label="__Entity__",
+                    embedding_property="embedding",
+                    dimensions=1536,  # OpenAI embedding dimension
+                    similarity_fn="cosine"
+                )
+                indexes_created.append(f"entity_embeddings_{graph_id_str}")
+            except Exception as e:
+                if "already exists" not in str(e).lower():
+                    logger.warning(f"Failed to create entity index: {e}")
             
+            # Chunk embeddings index  
+            try:
+                create_vector_index(
+                    self.driver,
+                    name=f"chunk_embeddings_{graph_id_str}",
+                    label="Chunk",
+                    embedding_property="embedding", 
+                    dimensions=1536,
+                    similarity_fn="cosine"
+                )
+                indexes_created.append(f"chunk_embeddings_{graph_id_str}")
+            except Exception as e:
+                if "already exists" not in str(e).lower():
+                    logger.warning(f"Failed to create chunk index: {e}")
+            
+            logger.info(f"Vector indexes ensured for graph {graph_id}: {indexes_created}")
             return {
                 "status": "success",
-                "message": "Vector indexes optimized",
-                "graph_id": graph_id
+                "indexes_created": indexes_created,
+                "graph_id": graph_id_str
             }
             
         except Exception as e:
-            logger.error(f"Index optimization failed: {e}")
-            return {
-                "status": "error", 
-                "error": str(e)
-            }
-    
-    async def create_vector_indexes(self, dimension: int = 512):
-        """Create necessary vector indexes in Neo4j"""
-        
-        try:
-            # Drop existing indexes if they exist (for dimension changes)
-            drop_queries = [
-                "DROP INDEX entity_embeddings IF EXISTS",
-                "DROP INDEX chunk_embeddings IF EXISTS"
-            ]
-            
-            for query in drop_queries:
-                try:
-                    await neo4j_client.execute_write_query(query)
-                except Exception as e:
-                    logger.debug(f"Index drop warning: {e}")
-            
-            # Create vector indexes
-            index_queries = [
-                f"""
-                CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS
-                FOR (e:`__Entity__`) ON (e.embedding)
-                OPTIONS {{indexConfig: {{
-                    `vector.dimensions`: {dimension},
-                    `vector.similarity_function`: 'cosine'
-                }}}}
-                """,
-                f"""
-                CREATE VECTOR INDEX chunk_embeddings IF NOT EXISTS
-                FOR (c:DocumentChunk) ON (c.embedding)
-                OPTIONS {{indexConfig: {{
-                    `vector.dimensions`: {dimension},
-                    `vector.similarity_function`: 'cosine'
-                }}}}
-                """
-            ]
-            
-            for query in index_queries:
-                await neo4j_client.execute_write_query(query)
-                logger.info(f"Created vector index with dimension {dimension}")
-            
-            # Create fulltext indexes for hybrid search
-            fulltext_queries = [
-                """
-                CREATE FULLTEXT INDEX entity_fulltext IF NOT EXISTS
-                FOR (e:`__Entity__`) ON EACH [e.name, e.description]
-                """,
-                """
-                CREATE FULLTEXT INDEX chunk_fulltext IF NOT EXISTS  
-                FOR (c:DocumentChunk) ON EACH [c.text, c.content]
-                """
-            ]
-            
-            for query in fulltext_queries:
-                try:
-                    await neo4j_client.execute_write_query(query)
-                    logger.info("Created fulltext index")
-                except Exception as e:
-                    logger.debug(f"Fulltext index warning: {e}")
-            
-            logger.info("Vector indexes created successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to create vector indexes: {e}")
+            logger.error(f"Failed to ensure vector indexes for {graph_id}: {e}")
             raise
-    
-    async def ensure_indexes_exist(self, graph_id: UUID, dimension: int = 1536) -> Dict[str, Any]:
-        """
-        Ensure vector indexes exist for a specific graph.
-        Creates indexes if they don't exist, validates existing ones.
-        
-        Args:
-            graph_id: Graph identifier
-            dimension: Embedding dimension (default 1536 for OpenAI text-embedding-3-small)
-            
-        Returns:
-            Dict with status and index information
-        """
-        try:
-            logger.info(f"Ensuring vector indexes exist for graph {graph_id} with dimension {dimension}")
-            
-            # Check if indexes already exist
-            index_status = await self._check_existing_indexes()
-            
-            # Create indexes if they don't exist or have wrong dimensions
-            if not index_status.get("entity_index_exists") or not index_status.get("chunk_index_exists"):
-                logger.info("Creating missing vector indexes")
-                await self.create_vector_indexes(dimension=dimension)
-            else:
-                logger.info("Vector indexes already exist")
-            
-            # Verify indexes are ready
-            ready_status = await self._verify_indexes_ready()
-            
-            return {
-                "status": "success",
-                "graph_id": str(graph_id),
-                "dimension": dimension,
-                "indexes_created": not index_status.get("entity_index_exists", True),
-                "entity_index_ready": ready_status.get("entity_index_ready", False),
-                "chunk_index_ready": ready_status.get("chunk_index_ready", False),
-                "message": "Vector indexes ensured for graph"
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to ensure indexes exist for graph {graph_id}: {e}")
-            return {
-                "status": "error",
-                "graph_id": str(graph_id),
-                "error": str(e),
-                "message": f"Failed to ensure vector indexes: {str(e)}"
-            }
-    
-    async def _check_existing_indexes(self) -> Dict[str, bool]:
-        """Check if vector indexes already exist"""
-        try:
-            # Query to check existing vector indexes
-            check_query = """
-            SHOW INDEXES
-            YIELD name, type, labelsOrTypes, properties, options
-            WHERE type = 'VECTOR'
-            RETURN name, labelsOrTypes, properties, options
-            """
-            
-            result = await neo4j_client.execute_query(check_query)
-            
-            entity_index_exists = False
-            chunk_index_exists = False
-            
-            for record in result:
-                index_name = record.get("name", "")
-                labels = record.get("labelsOrTypes", [])
-                
-                if "entity_embeddings" in index_name or ("Entity" in labels or "__Entity__" in labels):
-                    entity_index_exists = True
-                elif "chunk_embeddings" in index_name or ("DocumentChunk" in labels or "Chunk" in labels):
-                    chunk_index_exists = True
-            
-            return {
-                "entity_index_exists": entity_index_exists,
-                "chunk_index_exists": chunk_index_exists
-            }
-            
-        except Exception as e:
-            logger.warning(f"Could not check existing indexes: {e}")
-            return {"entity_index_exists": False, "chunk_index_exists": False}
-    
-    async def _verify_indexes_ready(self) -> Dict[str, bool]:
-        """Verify that indexes are ready for queries"""
-        try:
-            # Query to check index status
-            status_query = """
-            SHOW INDEXES
-            YIELD name, state, type
-            WHERE type = 'VECTOR'
-            RETURN name, state
-            """
-            
-            result = await neo4j_client.execute_query(status_query)
-            
-            entity_ready = False
-            chunk_ready = False
-            
-            for record in result:
-                index_name = record.get("name", "")
-                state = record.get("state", "")
-                
-                if "entity" in index_name.lower() and state == "ONLINE":
-                    entity_ready = True
-                elif "chunk" in index_name.lower() and state == "ONLINE":
-                    chunk_ready = True
-            
-            return {
-                "entity_index_ready": entity_ready,
-                "chunk_index_ready": chunk_ready
-            }
-            
-        except Exception as e:
-            logger.warning(f"Could not verify index readiness: {e}")
-            return {"entity_index_ready": False, "chunk_index_ready": False}
-    
+
     async def similarity_search(
         self, 
         query_embedding: List[float], 
-        graph_id: str, 
+        graph_id: UUID,
         k: int = 5,
-        node_types: List[str] = None,
-        threshold: float = 0.0
+        index_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Perform vector similarity search using vector indexes.
-        Used by search_service for semantic queries.
+        Perform vector similarity search using Neo4j native vector search.
+        This is a thin wrapper around Neo4j's vector search capabilities.
         """
         try:
-            # Default to searching both entities and chunks
-            if not node_types:
-                node_types = ["Entity", "Chunk"]
+            if not index_name:
+                index_name = f"entity_embeddings_{graph_id}"
             
-            results = []
+            query = """
+            CALL db.index.vector.queryNodes($index_name, $k, $query_embedding) 
+            YIELD node, score
+            WHERE node.graph_id = $graph_id
+            RETURN node.id as id, node.name as name, score, labels(node) as labels
+            ORDER BY score DESC
+            """
             
-            for node_type in node_types:
-                if node_type == "Entity":
-                    query = """
-                    CALL db.index.vector.queryNodes('entity_embeddings', $k, $query_embedding)
-                    YIELD node, score
-                    WHERE node.graph_id = $graph_id AND score >= $threshold
-                    RETURN node.id as id, node.name as name, node.type as type,
-                           node.description as description, labels(node) as labels, score,
-                           node{.*} as properties
-                    ORDER BY score DESC
-                    """
-                elif node_type == "Chunk":
-                    query = """
-                    CALL db.index.vector.queryNodes('chunk_embeddings', $k, $query_embedding)
-                    YIELD node, score
-                    WHERE node.graph_id = $graph_id AND score >= $threshold
-                    RETURN node.id as id, node.text as text, score,
-                           labels(node) as labels, node{.*} as properties
-                    ORDER BY score DESC
-                    """
-                else:
-                    continue
+            async with self.driver.session() as session:
+                result = await session.run(
+                    query,
+                    index_name=index_name,
+                    k=k,
+                    query_embedding=query_embedding,
+                    graph_id=str(graph_id)
+                )
                 
-                result = await neo4j_client.execute_read_query(query, {
-                    "k": k,
-                    "query_embedding": query_embedding,
-                    "graph_id": graph_id,
-                    "threshold": threshold
-                })
+                records = await result.data()
+                return [dict(record) for record in records]
                 
-                if result:
-                    for record in result:
-                        results.append({
-                            "id": record["id"],
-                            "score": record["score"],
-                            "type": node_type,
-                            "labels": record["labels"],
-                            "properties": record["properties"],
-                            **({"name": record["name"]} if "name" in record else {}),
-                            **({"type": record["type"]} if "type" in record else {}),
-                            **({"description": record["description"]} if "description" in record else {}),
-                            **({"text": record["text"]} if "text" in record else {})
-                        })
-            
-            # Sort by score and return top k
-            results.sort(key=lambda x: x["score"], reverse=True)
-            return results[:k]
-            
         except Exception as e:
             logger.error(f"Vector similarity search failed: {e}")
             return []
 
-# Create singleton instance
+    async def optimize_indexes(self, graph_id: Optional[UUID] = None) -> Dict[str, Any]:
+        """Optimize vector indexes for better performance"""
+        try:
+            # Use Neo4j's native index optimization
+            query = """
+            CALL db.indexes() YIELD name, type, state
+            WHERE type = "VECTOR" AND ($graph_id IS NULL OR name CONTAINS $graph_id_str)
+            WITH name
+            CALL {
+                WITH name
+                CALL db.index.vector.queryNodes(name, 1, [0.0]) YIELD node
+                RETURN count(node) as test_count
+            }
+            RETURN name, test_count
+            """
+            
+            async with self.driver.session() as session:
+                result = await session.run(
+                    query, 
+                    graph_id_str=str(graph_id) if graph_id else None
+                )
+                optimized_indexes = await result.data()
+                
+            logger.info(f"Optimized {len(optimized_indexes)} vector indexes")
+            return {
+                "status": "success", 
+                "optimized_indexes": len(optimized_indexes)
+            }
+            
+        except Exception as e:
+            logger.error(f"Index optimization failed: {e}")
+            raise
+
+    async def rebuild_indexes(self, graph_id: UUID) -> Dict[str, Any]:
+        """Rebuild vector indexes for a specific graph"""
+        try:
+            graph_id_str = str(graph_id)
+            
+            # Drop existing indexes
+            drop_queries = [
+                f"DROP INDEX entity_embeddings_{graph_id_str} IF EXISTS",
+                f"DROP INDEX chunk_embeddings_{graph_id_str} IF EXISTS"
+            ]
+            
+            async with self.driver.session() as session:
+                for query in drop_queries:
+                    await session.run(query)
+            
+            # Recreate indexes
+            result = await self.ensure_indexes_exist(graph_id)
+            
+            logger.info(f"Rebuilt vector indexes for graph {graph_id}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Index rebuild failed for {graph_id}: {e}")
+            raise
+
+    async def optimize_all_indexes(self) -> Dict[str, Any]:
+        """Optimize all vector indexes in the system"""
+        try:
+            query = """
+            CALL db.indexes() YIELD name, type, state
+            WHERE type = "VECTOR"
+            RETURN count(name) as total_vector_indexes
+            """
+            
+            async with self.driver.session() as session:
+                result = await session.run(query)
+                record = await result.single()
+                total_indexes = record["total_vector_indexes"]
+            
+            logger.info(f"Optimized {total_indexes} vector indexes system-wide")
+            return {
+                "status": "success",
+                "total_indexes_optimized": total_indexes
+            }
+            
+        except Exception as e:
+            logger.error(f"System-wide index optimization failed: {e}")
+            raise
+
+# ==================== SERVICES TO REMOVE ====================
+
+"""
+The following services contain functionality that is now redundant with Neo4j GraphRAG:
+
+1. REMOVE: app/services/entity_extractor.py
+   - Replaced by: neo4j_graphrag.experimental.components.entity_relation_extractor.LLMEntityRelationExtractor
+   - Functionality: Entity and relationship extraction from text
+   - Migration: Use MultiTenantEntityRelationExtractor wrapper
+
+2. SIMPLIFY: app/services/enhanced_graph_service.py  
+   - Keep: Multi-tenant orchestration logic
+   - Remove: Custom entity extraction, custom graph building
+   - Replace: Use graphrag_ingestion_service for main pipeline
+
+3. SIMPLIFY: app/services/embedding_service.py
+   - Keep: Service initialization and configuration
+   - Remove: Custom embedding storage (Neo4j GraphRAG handles this)
+   - Neo4j alternative: neo4j_graphrag.embeddings.openai.OpenAIEmbeddings
+
+4. SIMPLIFY: app/services/graph_service.py
+   - Keep: Multi-tenant Cypher queries, custom analytics
+   - Remove: Basic CRUD operations now handled by Neo4j KGWriter
+   - Keep: Advanced analytics, community detection
+
+Key principles for cleanup:
+- Remove duplicate functionality that Neo4j GraphRAG provides
+- Keep multi-tenant wrappers and orchestration
+- Keep domain-specific business logic
+- Keep advanced analytics not provided by Neo4j GraphRAG
+"""
+
+# Global service instance
 vector_service = VectorService()

@@ -6,9 +6,8 @@ You are helping refactor a large knowledge graph builder service codebase. The g
 
 1. **Use Neo4j GraphRAG as the foundation** - Leverage their production-ready pipeline and component architecture
 2. **Add advanced multi-tenant capabilities** - Preserve existing multi-tenant graph isolation (`graph_id` based)
-3. **Integrate Microsoft GraphRAG innovations** - Add community detection, DRIFT search, and global reasoning
-4. **Maintain FastAPI best practices** - Clean dependency injection, background jobs, and maintainable code structure
-5. **Keep code minimal and focused** - Avoid overcomplication, prefer composition over inheritance
+3. **Maintain FastAPI best practices** - Clean dependency injection, background jobs, and maintainable code structure
+4. **Keep code minimal and focused** - Avoid overcomplication, prefer composition over inheritance
 
 ## 🚨 **Critical Guidelines - READ CAREFULLY**
 
@@ -39,23 +38,20 @@ app/
 ├── core/
 │   ├── config.py                     # Configuration management
 │   ├── dependencies.py               # FastAPI dependency injection
-│   └── database.py                   # Neo4j connection management
+│   └── neo4j_client.py               # Neo4j connection management
 ├── models/
 │   ├── graph.py                      # Pydantic models for graph operations
 │   ├── tenant.py                     # Multi-tenant models
 │   └── pipeline.py                   # Pipeline configuration models
 ├── components/                       # Neo4j GraphRAG compatible components
 │   ├── multi_tenant_retriever.py     # Multi-tenant wrapper component
-│   ├── context_engineering.py        # Context optimization component
-│   ├── microsoft_community.py        # Microsoft community detection
-│   └── drift_search.py              # Microsoft DRIFT search implementation
 ├── services/
 │   ├── graph_service.py              # Core graph operations (thin wrapper)
 │   ├── pipeline_service.py           # Pipeline orchestration
 │   └── tenant_service.py             # Multi-tenant management
 ├── api/
 │   └── v1/
-│       ├── graphs.py                 # Graph management endpoints
+│       ├── graphs.py                 # Graph management endpoints Ingestion and preprocessing to graph(raw data, file, link, etc), querying graph, schema, etc.
 │       ├── pipelines.py              # Pipeline execution endpoints
 │       └── search.py                 # Search and query endpoints
 ├── tasks/
@@ -168,43 +164,11 @@ async def search_graph_with_advanced_processing(
     # ... 50+ lines of complex processing logic
 ```
 
-### **Step 4: Component Integration Pattern**
-
-When adding Microsoft GraphRAG features, use simple composition:
-
-```python
-# GOOD - Simple component that extends Neo4j GraphRAG
-from neo4j_graphrag.retrievers.base import Retriever
-
-class DRIFTRetriever(Retriever):
-    """Microsoft DRIFT search as Neo4j component"""
-    
-    def __init__(self, base_retriever, community_service, llm):
-        self.base_retriever = base_retriever
-        self.community_service = community_service
-        self.llm = llm
-    
-    def get_search_results(self, query_vector=None, query_text=None, **kwargs):
-        # 1. Community search
-        community_results = self.community_service.search_communities(query_text)
-        
-        # 2. Generate follow-up questions
-        follow_ups = self.llm.generate_follow_ups(query_text, community_results)
-        
-        # 3. Local search on follow-ups
-        local_results = []
-        for question in follow_ups:
-            results = self.base_retriever.get_search_results(query_text=question)
-            local_results.extend(results.items)
-        
-        return RawSearchResult(items=local_results)
-```
-
 ## 📋 **Specific Refactoring Tasks**
 
 ### **Task 1: Replace Current GraphRAG with Neo4j Foundation**
 1. Install `neo4j-graphrag` package
-2. Replace current `GraphRAGService` with thin wrapper around Neo4j `GraphRAG`
+2. Replace the current flow implementations with `neo4j-graphrag` package utils. The first phase is to refactor the ingestion where I'm currently managing ingestion, vectorizing, embedding, extracting (node and relationships), chunking docuement, ands storing everything to the graph. please go through the ingestion job and carefully check the process that I'm executing step by step, and refactor it to use `neo4j-graphrag` utils.
 3. Keep existing multi-tenant logic as wrapper component
 4. Remove redundant graph construction code - use Neo4j's pipeline
 
@@ -214,19 +178,13 @@ class DRIFTRetriever(Retriever):
 3. Create `MultiTenantKnowledgeGraph` that injects `graph_id` into all nodes/relationships
 4. Keep existing tenant isolation logic, just wrap Neo4j components
 
-### **Task 3: Add Microsoft Features as Components**
-1. `HierarchicalCommunityComponent` - Extends Neo4j's community detection with Leiden
-2. `DRIFTSearchRetriever` - Implements Microsoft's DRIFT methodology as retriever
-3. `GlobalReasoningRetriever` - Adds corpus-wide reasoning capabilities
-4. All should implement Neo4j GraphRAG interfaces for seamless integration
-
-### **Task 4: FastAPI Integration**
+### **Task 3: FastAPI Integration**
 1. Create dependency injection for Neo4j driver, LLM, embeddings
 2. Background tasks for heavy operations (community detection, large imports)
 3. Simple service layer that orchestrates Neo4j GraphRAG components
 4. Clean API endpoints with proper error handling and validation
 
-### **Task 5: Preserve Existing Advanced Features**
+### **Task 4: Preserve Existing Advanced Features**
 1. Keep current `AnalyticsService` functionality as Neo4j-compatible components
 2. Preserve background job architecture using Celery
 3. Keep existing multi-tenant database patterns
@@ -235,16 +193,9 @@ class DRIFTRetriever(Retriever):
 ## 🎯 **Implementation Priorities**
 
 ### **Phase 1: Foundation (Week 1)**
-- [ ] Replace core GraphRAG with Neo4j GraphRAG
+- [ ] List and Remove useless services like embedding, vector, search implementation, if service is needed replace them with neo4j_graphrag implementation.
 - [ ] Create multi-tenant wrapper components
 - [ ] Update dependency injection for Neo4j components
-- [ ] Ensure existing functionality works
-
-### **Phase 2: Microsoft Features (Week 2)**
-- [ ] Add DRIFT search as Neo4j retriever component
-- [ ] Implement hierarchical community detection component
-- [ ] Add global reasoning capabilities
-- [ ] Test integration with multi-tenant system
 
 ### **Phase 3: API & Services (Week 3)**
 - [ ] Refactor service layer to use Neo4j components
@@ -252,11 +203,6 @@ class DRIFTRetriever(Retriever):
 - [ ] Migrate background jobs to use new pipeline system
 - [ ] Add comprehensive error handling
 
-### **Phase 4: Advanced Features (Week 4)**
-- [ ] Add context engineering components
-- [ ] Implement adaptive query strategies
-- [ ] Add performance monitoring and metrics
-- [ ] Comprehensive testing and documentation
 
 ## ✅ **Quality Checklist**
 
@@ -264,6 +210,7 @@ Before implementing any component, ensure it meets these criteria:
 
 ### **Code Quality:**
 - [ ] **Single purpose**: Component does one thing well
+- [ ] **Code Doc**: Add code doc per each method, class and inline important logic
 - [ ] **Minimal complexity**: Under 50 lines for most functions
 - [ ] **Clear naming**: Function/class names explain purpose immediately
 - [ ] **No unnecessary abstractions**: Direct, simple implementations
@@ -275,22 +222,22 @@ Before implementing any component, ensure it meets these criteria:
 - [ ] **Composable**: Can be combined with other components easily
 
 ### **Integration Quality:**
-- [ ] **Drop-in replacement**: Existing code changes minimally
-- [ ] **Backward compatible**: Current functionality preserved
+- [ ] **Drop-in replacement**: Feel free to remove any service that has implementation in neo4j_graphrag lib.
+- [ ] **Backward compatible**: No need for backward compatibility, remove anything from the ingestion pipeline that is redundant from the existing code base
 - [ ] **Performance maintained**: No significant performance regression
+- [ ] **Fallow Neo4J GraphRag Style**: Make sure to refactor valuable existing services to match neo4j_graphrag component/pipeline structure
 - [ ] **Error handling**: Proper exception handling and logging
 
 ## 🚀 **Success Criteria**
 
 The refactoring is successful when:
 
-1. **Codebase is smaller**: Overall lines of code reduced by 30%+
+1. **Codebase is smaller**: The useless code pieces that has implementation in Neo4J GraphRag should be removed
 2. **Functionality is preserved**: All existing features work as before
 3. **Neo4j GraphRAG integrated**: Using their components as foundation
-4. **Microsoft features added**: DRIFT, community detection, global reasoning
-5. **Multi-tenancy maintained**: Full graph isolation preserved
-6. **FastAPI best practices**: Clean DI, background jobs, proper error handling
-7. **Maintainable code**: Simple, focused components that are easy to understand
+4. **Multi-tenancy maintained**: Full graph isolation preserved
+5. **FastAPI best practices**: Clean DI, background jobs, proper error handling
+6. **Maintainable code**: Simple, focused components that are easy to understand
 
 ## 📝 **Code Review Guidelines**
 

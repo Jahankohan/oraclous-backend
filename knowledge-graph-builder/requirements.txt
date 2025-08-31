@@ -17,6 +17,10 @@ nest-asyncio==1.6.0
 alembic==1.13.3
 pytest==8.4.1
 pytest-asyncio==1.1.0
+neo4j-graphrag==1.9.1
+neo4j-graphrag[openai]==1.9.1
+
+python-docx==1.2.0
 
 # LLM required configurations
 langchain-anthropic==0.3.19
