@@ -16,7 +16,7 @@ def main():
     NEO4J_URI = "bolt://localhost:7687"
     NEO4J_USER = "neo4j"
     NEO4J_PASSWORD = "password"
-    OPENAI_API_KEY = "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"
+    OPENAI_API_KEY = ""
     
     # Set OpenAI key
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY

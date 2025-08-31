@@ -17,7 +17,7 @@ async def test_text2cypher():
     )
     
     # Set OpenAI API key (hardcoded for testing)
-    os.environ["OPENAI_API_KEY"] = "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"
+    os.environ["OPENAI_API_KEY"] = ""
     
     # OpenAI LLM (using environment variable)
     llm = OpenAILLM(

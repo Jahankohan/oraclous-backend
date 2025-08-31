@@ -4,7 +4,7 @@ import os
 from neo4j_graphrag.llm.openai_llm import OpenAILLM
 
 # Hardcode API key for testing (updated)
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["OPENAI_API_KEY"] = ""
 
 def test_prompt_generation():
     """Test what the LLM generates with our prompt"""

@@ -32,12 +32,12 @@ async def debug_entity_chunk_connections():
     # Initialize LLM and embeddings
     llm = OpenAILLM(
         model_name="gpt-4o",
-        api_key="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"
+        api_key=""
     )
     
     embedder = OpenAIEmbeddings(
         model="text-embedding-3-large",
-        api_key="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"
+        api_key=""
     )
     
     # Create pipeline
