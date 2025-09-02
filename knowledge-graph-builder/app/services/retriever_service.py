@@ -1,22 +1,30 @@
 """
 Multi-Tenant Retrieval Service - Neo4j GraphRAG Foundation
-Replaces search_service.py with Neo4j GraphRAG components and multi-tenant wrappers
+Clean, maintainable retrieval service following Neo4j GraphRAG patterns with FastAPI compatibility.
+
+DESIGN PRINCIPLES:
+- Neo4j GraphRAG components as foundation  
+- Multi-tenant wrappers for perfect isolation
+- Simple factory patterns (no complex inheritance)
+- FastAPI compatible with proper async support
+- Direct driver access following existing patterns
 """
 
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 
-from neo4j_graphrag.retrievers import VectorRetriever, HybridRetriever
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
 from neo4j_graphrag.types import RetrieverResult
 
 from app.components.multi_tenant_components import (
-    MultiTenantVectorRetriever, 
+    MultiTenantVectorRetriever,
     MultiTenantVectorCypherRetriever,
-    MultiTenantHybridRetriever
+    MultiTenantHybridRetriever,
+    create_multi_tenant_vector_retriever,
+    create_multi_tenant_hybrid_retriever
 )
 from app.core.neo4j_client import neo4j_client
-from app.core.dependencies import get_neo4j_driver, get_openai_embeddings
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -25,27 +33,38 @@ logger = get_logger(__name__)
 class RetrievalService:
     """
     Multi-tenant retrieval service using Neo4j GraphRAG foundation.
-    Provides semantic search, hybrid search, and graph-aware retrieval with perfect tenant isolation.
     
-    DESIGN PRINCIPLES:
-    - Neo4j GraphRAG components as foundation
-    - Multi-tenant wrappers for perfect isolation
-    - Clean delegation pattern (no complex inheritance)
-    - FastAPI dependency injection ready
+    FEATURES:
+    - Semantic search using Neo4j GraphRAG VectorRetriever
+    - Hybrid search combining vector + fulltext search  
+    - Graph-aware search with relationship context
+    - Perfect tenant isolation with graph_id filtering
+    - FastAPI compatible with async support
+    - Simple, maintainable code following factory patterns
     """
     
     def __init__(self, driver=None, embedder=None):
         """
-        Initialize with dependency injection support.
+        Initialize with Neo4j GraphRAG components.
         
         Args:
-            driver: Neo4j driver (injected via FastAPI)
-            embedder: OpenAI embeddings (injected via FastAPI)
+            driver: Neo4j driver (defaults to global client)
+            embedder: OpenAI embedder (defaults to configured instance)
         """
-        self.driver = driver or get_neo4j_driver()
-        self.embedder = embedder or get_openai_embeddings()
-        self._retriever_cache = {}  # Cache retrievers per graph_id
+        # Use direct driver access (Neo4j GraphRAG pattern)
+        self.driver = driver or neo4j_client.driver
         
+        # Create OpenAI embedder (Neo4j GraphRAG pattern)
+        self.embedder = embedder or OpenAIEmbeddings(
+            model=settings.EMBEDDING_MODEL or "text-embedding-3-large",
+            api_key=settings.OPENAI_API_KEY
+        )
+        
+        # Simple retriever cache for performance
+        self._retriever_cache = {}
+        
+        logger.info("RetrievalService initialized with Neo4j GraphRAG components")
+    
     # ==================== ENTITY SEARCH (SEMANTIC) ====================
     
     async def similarity_search_entities(
@@ -62,7 +81,7 @@ class RetrievalService:
             query: Search query text
             graph_id: Tenant graph identifier
             k: Number of results to return
-            threshold: Similarity threshold (0.0-1.0)
+            threshold: Similarity threshold (0.0 to 1.0)
             
         Returns:
             List of entity dictionaries with similarity scores
@@ -71,24 +90,26 @@ class RetrievalService:
             # Get multi-tenant entity retriever
             retriever = self._get_entity_retriever(graph_id)
             
-            # Search using Neo4j GraphRAG
-            result = retriever.search(query_text=query, top_k=k)
+            # Perform semantic search
+            result = retriever.get_search_results(query_text=query, top_k=k)
             
-            # Convert Neo4j GraphRAG result to expected format
-            entities = self._convert_to_entity_format(result, threshold)
+            # Convert to standard format
+            entities = self._convert_retriever_result_to_entities(result, threshold)
             
             logger.info(f"Entity similarity search found {len(entities)} results for graph {graph_id}")
             return entities
             
         except Exception as e:
             logger.error(f"Entity similarity search failed for graph {graph_id}: {e}")
-            return []  # Return empty list instead of raising
+            return []
+    
+    # ==================== CHUNK SEARCH (SEMANTIC) ====================
     
     async def similarity_search_chunks(
         self,
         query: str,
         graph_id: UUID,
-        k: int = 5,
+        k: int = 10,
         threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
@@ -98,7 +119,7 @@ class RetrievalService:
             query: Search query text
             graph_id: Tenant graph identifier
             k: Number of results to return
-            threshold: Similarity threshold (0.0-1.0)
+            threshold: Similarity threshold (0.0 to 1.0)
             
         Returns:
             List of chunk dictionaries with similarity scores
@@ -107,18 +128,18 @@ class RetrievalService:
             # Get multi-tenant chunk retriever
             retriever = self._get_chunk_retriever(graph_id)
             
-            # Search using Neo4j GraphRAG
-            result = retriever.search(query_text=query, top_k=k)
+            # Perform semantic search
+            result = retriever.get_search_results(query_text=query, top_k=k)
             
-            # Convert Neo4j GraphRAG result to expected format
-            chunks = self._convert_to_chunk_format(result, threshold)
+            # Convert to standard format
+            chunks = self._convert_retriever_result_to_chunks(result, threshold)
             
             logger.info(f"Chunk similarity search found {len(chunks)} results for graph {graph_id}")
             return chunks
             
         except Exception as e:
             logger.error(f"Chunk similarity search failed for graph {graph_id}: {e}")
-            return []  # Return empty list instead of raising
+            return []
     
     # ==================== HYBRID SEARCH ====================
     
@@ -127,89 +148,45 @@ class RetrievalService:
         query: str,
         graph_id: UUID,
         k: int = 10,
-        semantic_weight: float = 0.7,
-        keyword_weight: float = 0.3
+        alpha: float = 0.5
     ) -> List[Dict[str, Any]]:
         """
-        Hybrid search combining semantic and keyword search using Neo4j GraphRAG HybridRetriever.
+        Hybrid search combining vector similarity and fulltext search.
         
         Args:
             query: Search query text
             graph_id: Tenant graph identifier
             k: Number of results to return
-            semantic_weight: Weight for semantic search (0.0-1.0)
-            keyword_weight: Weight for keyword search (0.0-1.0)
+            alpha: Balance between vector (1.0) and fulltext (0.0) search
             
         Returns:
-            List of result dictionaries with combined scores
+            List of hybrid search results with combined scores
         """
         try:
             # Get multi-tenant hybrid retriever
             retriever = self._get_hybrid_retriever(graph_id)
             
-            # Configure weights (Neo4j GraphRAG HybridRetriever supports this)
-            retriever_config = {
-                "vector_weight": semantic_weight,
-                "fulltext_weight": keyword_weight
-            }
+            # Perform hybrid search
+            result = retriever.get_search_results(
+                query_text=query, 
+                top_k=k,
+                # Pass alpha as additional parameter if supported
+                **({'alpha': alpha} if alpha != 0.5 else {})
+            )
             
-            # Search using Neo4j GraphRAG
-            result = retriever.search(query_text=query, top_k=k, **retriever_config)
+            # Convert to standard format
+            hybrid_results = self._convert_retriever_result_to_entities(result)
             
-            # Convert to expected format
-            hybrid_results = self._convert_to_hybrid_format(result)
-            
-            logger.info(f"Hybrid search returned {len(hybrid_results)} results for graph {graph_id}")
-            return hybrid_results[:k]  # Ensure we don't exceed k results
+            logger.info(f"Hybrid search found {len(hybrid_results)} results for graph {graph_id}")
+            return hybrid_results
             
         except Exception as e:
             logger.error(f"Hybrid search failed for graph {graph_id}: {e}")
-            # Fallback to semantic search only
+            # Fallback to semantic search
             logger.info("Falling back to semantic search")
-            return await self.similarity_search_entities(query, graph_id, k=k, threshold=0.5)
+            return await self.similarity_search_entities(query, graph_id, k=k)
     
-    # ==================== FULLTEXT SEARCH (KEEP EXISTING) ====================
-    
-    async def fulltext_search_entities(
-        self,
-        query: str,
-        graph_id: UUID,
-        limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        """
-        Fulltext search on entities using direct Cypher queries.
-        Keep this method as-is since it's working well and uses direct queries.
-        """
-        try:
-            cypher_query = """
-            CALL db.index.fulltext.queryNodes('entity_fulltext', $query)
-            YIELD node, score
-            WHERE node.graph_id = $graph_id
-            RETURN node.id as id,
-                   node.name as name,
-                   node.type as type,
-                   node.description as description,
-                   labels(node) as labels,
-                   score,
-                   node{.*} as properties
-            ORDER BY score DESC
-            LIMIT $limit
-            """
-            
-            result = await neo4j_client.execute_query(cypher_query, {
-                "query": query,
-                "graph_id": str(graph_id),
-                "limit": limit
-            })
-            
-            logger.info(f"Fulltext search found {len(result)} entities for graph {graph_id}")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Fulltext search failed for graph {graph_id}: {e}")
-            return []  # Return empty results if fulltext index doesn't exist yet
-    
-    # ==================== GRAPH-AWARE SEARCH (NEW) ====================
+    # ==================== GRAPH-AWARE SEARCH ====================
     
     async def graph_aware_search(
         self,
@@ -219,17 +196,25 @@ class RetrievalService:
         include_relationships: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        Graph-aware search that includes relationship context.
-        Uses VectorCypherRetriever for enhanced results.
+        Graph-aware search that includes relationship context using VectorCypherRetriever.
+        
+        Args:
+            query: Search query text
+            graph_id: Tenant graph identifier
+            k: Number of results to return
+            include_relationships: Whether to include relationship context
+            
+        Returns:
+            List of results with rich graph context
         """
         try:
             # Get multi-tenant vector+cypher retriever
             retriever = self._get_vector_cypher_retriever(graph_id)
             
-            # Search with graph context
-            result = retriever.search(query_text=query, top_k=k)
+            # Perform graph-aware search
+            result = retriever.get_search_results(query_text=query, top_k=k)
             
-            # Convert to format that includes graph context
+            # Convert to format with graph context
             graph_results = self._convert_to_graph_aware_format(result)
             
             logger.info(f"Graph-aware search found {len(graph_results)} results for graph {graph_id}")
@@ -243,100 +228,81 @@ class RetrievalService:
     # ==================== RETRIEVER FACTORIES (CACHED) ====================
     
     def _get_entity_retriever(self, graph_id: UUID) -> MultiTenantVectorRetriever:
-        """Get cached multi-tenant entity retriever for graph_id."""
+        """Get cached multi-tenant entity retriever using factory pattern."""
         cache_key = f"entity_{graph_id}"
         
         if cache_key not in self._retriever_cache:
-            # Create base Neo4j GraphRAG retriever
-            base_retriever = VectorRetriever(
+            # Use factory function for clean creation
+            self._retriever_cache[cache_key] = create_multi_tenant_vector_retriever(
                 driver=self.driver,
-                index_name="entity_embeddings",  # Entity vector index
                 embedder=self.embedder,
+                graph_id=str(graph_id),
+                index_name="entity_embeddings",
                 return_properties=["id", "name", "type", "description"]
-            )
-            
-            # Wrap with multi-tenant filtering
-            self._retriever_cache[cache_key] = MultiTenantVectorRetriever(
-                base_retriever=base_retriever,
-                graph_id=str(graph_id)
             )
         
         return self._retriever_cache[cache_key]
     
     def _get_chunk_retriever(self, graph_id: UUID) -> MultiTenantVectorRetriever:
-        """Get cached multi-tenant chunk retriever for graph_id."""
+        """Get cached multi-tenant chunk retriever using factory pattern."""
         cache_key = f"chunk_{graph_id}"
         
         if cache_key not in self._retriever_cache:
-            # Create base Neo4j GraphRAG retriever
-            base_retriever = VectorRetriever(
+            # Use factory function for clean creation
+            self._retriever_cache[cache_key] = create_multi_tenant_vector_retriever(
                 driver=self.driver,
-                index_name="text_embeddings_primary",  # Chunk vector index
                 embedder=self.embedder,
+                graph_id=str(graph_id),
+                index_name="text_embeddings_primary",
                 return_properties=["text", "chunk_index", "source"]
-            )
-            
-            # Wrap with multi-tenant filtering
-            self._retriever_cache[cache_key] = MultiTenantVectorRetriever(
-                base_retriever=base_retriever,
-                graph_id=str(graph_id)
             )
         
         return self._retriever_cache[cache_key]
     
     def _get_hybrid_retriever(self, graph_id: UUID) -> MultiTenantHybridRetriever:
-        """Get cached multi-tenant hybrid retriever for graph_id."""
+        """Get cached multi-tenant hybrid retriever using factory pattern."""
         cache_key = f"hybrid_{graph_id}"
         
         if cache_key not in self._retriever_cache:
-            # Create base Neo4j GraphRAG hybrid retriever
-            base_retriever = HybridRetriever(
+            # Use factory function for clean creation
+            self._retriever_cache[cache_key] = create_multi_tenant_hybrid_retriever(
                 driver=self.driver,
+                embedder=self.embedder,
+                graph_id=str(graph_id),
                 vector_index_name="entity_embeddings",
-                fulltext_index_name="entity_text_fulltext",
-                embedder=self.embedder
-            )
-            
-            # Wrap with multi-tenant filtering
-            self._retriever_cache[cache_key] = MultiTenantHybridRetriever(
-                base_retriever=base_retriever,
-                graph_id=str(graph_id)
+                fulltext_index_name="entity_text_fulltext"
             )
         
         return self._retriever_cache[cache_key]
     
     def _get_vector_cypher_retriever(self, graph_id: UUID) -> MultiTenantVectorCypherRetriever:
-        """Get cached multi-tenant vector+cypher retriever for graph_id."""
+        """Get cached multi-tenant vector+cypher retriever using factory pattern."""
         cache_key = f"vector_cypher_{graph_id}"
         
         if cache_key not in self._retriever_cache:
-            # Enhanced Cypher query that includes relationship context
+            # Define graph-aware retrieval query
             retrieval_query = """
-            WITH node AS entity, score
-            MATCH (entity)-[r]->(related)
-            WHERE entity.graph_id = $graph_id 
-            AND related.graph_id = $graph_id 
-            AND r.graph_id = $graph_id
-            
+            WITH node AS chunk, score
+            MATCH (chunk)<-[:FROM_CHUNK]-(entity:__Entity__)-[r]->(related_entity:__Entity__)
+            WHERE r.confidence > 0.5
             RETURN 
-                entity.id AS id,
-                entity.name AS name,
-                entity.type AS type,
-                entity.description AS description,
-                labels(entity) AS labels,
-                score,
+                chunk.text AS context,
+                chunk.chunk_index AS chunk_index,
                 collect(DISTINCT {
+                    entity: entity.name,
+                    type: labels(entity)[0],
                     relationship: type(r),
-                    related_entity: related.name,
-                    related_type: labels(related)[0]
-                })[..5] AS relationships,
-                entity{.*} AS properties
+                    related_entity: related_entity.name,
+                    confidence: r.confidence
+                }) AS knowledge_graph_context,
+                score
             ORDER BY score DESC
             """
             
-            self._retriever_cache[cache_key] = MultiTenantVectorCypherRetriever(
+            # Create retriever using factory pattern
+            self._retriever_cache[cache_key] = MultiTenantVectorCypherRetriever.create(
                 driver=self.driver,
-                index_name="entity_embeddings",
+                index_name="text_embeddings_primary",
                 embedder=self.embedder,
                 retrieval_query=retrieval_query,
                 graph_id=str(graph_id)
@@ -344,25 +310,25 @@ class RetrievalService:
         
         return self._retriever_cache[cache_key]
     
-    # ==================== RESULT CONVERTERS ====================
+    # ==================== RESULT CONVERSION HELPERS ====================
     
-    def _convert_to_entity_format(
+    def _convert_retriever_result_to_entities(
         self, 
         result: RetrieverResult, 
-        threshold: float
+        threshold: float = 0.0
     ) -> List[Dict[str, Any]]:
-        """Convert Neo4j GraphRAG result to expected entity format."""
+        """Convert Neo4j GraphRAG retriever result to entity format."""
         entities = []
         
         for item in result.items:
-            # Extract score (Neo4j GraphRAG format)
+            # Get score (similarity)
             score = getattr(item, 'score', 0.0) or 0.0
             
-            # Apply threshold filtering
+            # Apply threshold filter
             if score < threshold:
                 continue
             
-            # Extract metadata/content
+            # Get metadata
             metadata = getattr(item, 'metadata', {}) or {}
             
             entity = {
@@ -370,92 +336,70 @@ class RetrievalService:
                 "name": metadata.get("name", ""),
                 "type": metadata.get("type", ""),
                 "description": metadata.get("description", ""),
-                "labels": metadata.get("labels", []),
                 "score": score,
-                "properties": metadata.get("properties", {})
+                "properties": metadata
             }
             entities.append(entity)
         
         return entities
     
-    def _convert_to_chunk_format(
+    def _convert_retriever_result_to_chunks(
         self, 
         result: RetrieverResult, 
-        threshold: float
+        threshold: float = 0.0
     ) -> List[Dict[str, Any]]:
-        """Convert Neo4j GraphRAG result to expected chunk format."""
+        """Convert Neo4j GraphRAG retriever result to chunk format."""
         chunks = []
         
         for item in result.items:
-            # Extract score
+            # Get score (similarity)
             score = getattr(item, 'score', 0.0) or 0.0
             
-            # Apply threshold filtering
+            # Apply threshold filter
             if score < threshold:
                 continue
             
-            # Extract content/metadata
-            content = getattr(item, 'content', '') or ''
+            # Get content and metadata
+            content = getattr(item, 'content', '')
             metadata = getattr(item, 'metadata', {}) or {}
             
             chunk = {
                 "text": content or metadata.get("text", ""),
                 "chunk_index": metadata.get("chunk_index", 0),
                 "source": metadata.get("source", ""),
-                "score": score
+                "score": score,
+                "metadata": metadata
             }
             chunks.append(chunk)
         
         return chunks
     
-    def _convert_to_hybrid_format(self, result: RetrieverResult) -> List[Dict[str, Any]]:
-        """Convert Neo4j GraphRAG hybrid result to expected format."""
-        hybrid_results = []
-        
-        for item in result.items:
-            # Extract scores (hybrid results may have multiple scores)
-            total_score = getattr(item, 'score', 0.0) or 0.0
-            metadata = getattr(item, 'metadata', {}) or {}
-            
-            entity = {
-                "id": metadata.get("id", ""),
-                "name": metadata.get("name", ""),
-                "type": metadata.get("type", ""),
-                "description": metadata.get("description", ""),
-                "labels": metadata.get("labels", []),
-                "combined_score": total_score,
-                "semantic_score": metadata.get("vector_score", total_score * 0.7),  # Estimate
-                "keyword_score": metadata.get("fulltext_score", total_score * 0.3),  # Estimate
-                "properties": metadata.get("properties", {})
-            }
-            hybrid_results.append(entity)
-        
-        return hybrid_results
-    
     def _convert_to_graph_aware_format(self, result: RetrieverResult) -> List[Dict[str, Any]]:
-        """Convert Neo4j GraphRAG result with graph context to expected format."""
+        """Convert retriever result to format with graph context."""
         graph_results = []
         
         for item in result.items:
             score = getattr(item, 'score', 0.0) or 0.0
+            content = getattr(item, 'content', '')
             metadata = getattr(item, 'metadata', {}) or {}
             
-            entity = {
-                "id": metadata.get("id", ""),
-                "name": metadata.get("name", ""),
-                "type": metadata.get("type", ""),
-                "description": metadata.get("description", ""),
+            # Extract graph context if available
+            graph_context = metadata.get('knowledge_graph_context', [])
+            
+            result_item = {
+                "text": content or metadata.get("context", ""),
+                "chunk_index": metadata.get("chunk_index", 0),
                 "score": score,
-                "relationships": metadata.get("relationships", []),  # Graph context
                 "graph_context": {
-                    "direct_relationships": len(metadata.get("relationships", [])),
-                    "connected_entities": [
-                        rel.get("related_entity") 
-                        for rel in metadata.get("relationships", [])
-                    ][:5]  # Limit to 5 for readability
+                    "entities": [ctx.get("entity", "") for ctx in graph_context],
+                    "relationships": [
+                        f"{ctx.get('entity', '')} {ctx.get('relationship', '')} {ctx.get('related_entity', '')}"
+                        for ctx in graph_context
+                    ],
+                    "confidence_scores": [ctx.get("confidence", 0.0) for ctx in graph_context]
                 }
             }
-            graph_results.append(entity)
+            graph_results.append(result_item)
         
         return graph_results
     
@@ -463,7 +407,7 @@ class RetrievalService:
     
     def clear_cache(self, graph_id: Optional[UUID] = None):
         """
-        Clear retriever cache.
+        Clear retriever cache for performance management.
         
         Args:
             graph_id: If provided, clear cache for specific graph. If None, clear all.
@@ -482,67 +426,25 @@ class RetrievalService:
             # Clear all cache
             self._retriever_cache.clear()
             logger.info("Cleared all retriever cache")
-    
-    # ==================== SEARCH SUGGESTIONS (TODO: FUTURE ENHANCEMENT) ====================
-    
-    async def get_search_suggestions(
-        self,
-        partial_query: str,
-        graph_id: UUID,
-        limit: int = 5
-    ) -> List[str]:
-        """
-        TODO: Get search suggestions based on partial query.
-        This could use entity names, popular searches, or query completion.
-        
-        For now, return empty list as placeholder.
-        """
-        # TODO: Implement search suggestions
-        # Could use:
-        # - Entity name prefix matching
-        # - Popular search patterns
-        # - Query completion based on graph content
-        
-        logger.debug(f"Search suggestions requested for '{partial_query}' (not implemented)")
-        return []
-    
-    async def get_related_terms(
-        self,
-        query: str,
-        graph_id: UUID,
-        limit: int = 10
-    ) -> List[str]:
-        """
-        TODO: Get terms related to the search query.
-        Could use entity relationships, co-occurrence, or embedding similarity.
-        
-        For now, return empty list as placeholder.
-        """
-        # TODO: Implement related terms
-        # Could use:
-        # - Entity relationship analysis
-        # - Term co-occurrence in chunks
-        # - Embedding-based similarity
-        
-        logger.debug(f"Related terms requested for '{query}' (not implemented)")
-        return []
 
 
-# ==================== DEPENDENCY INJECTION SETUP ====================
+# ==================== FASTAPI DEPENDENCY INJECTION ====================
 
-def get_retrieval_service(
-    driver=None,
-    embedder=None
-) -> RetrievalService:
+def get_retrieval_service() -> RetrievalService:
     """
-    Factory function for dependency injection.
-    Can be used with FastAPI Depends().
+    FastAPI dependency factory for RetrievalService.
+    
+    Usage:
+        @router.get("/search")
+        async def search_endpoint(
+            retrieval_service: RetrievalService = Depends(get_retrieval_service)
+        ):
+            return await retrieval_service.similarity_search_entities(...)
     """
-    return RetrievalService(driver=driver, embedder=embedder)
+    return RetrievalService()
 
 
 # ==================== GLOBAL INSTANCE (BACKWARD COMPATIBILITY) ====================
 
-# Create global instance for backward compatibility
-# Your existing code can continue to use retrieval_service
+# Create global instance for backward compatibility with existing code
 retrieval_service = RetrievalService()
