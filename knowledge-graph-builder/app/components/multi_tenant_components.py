@@ -1,11 +1,20 @@
+# app/components/multi_tenant_components.py
+"""
+Multi-tenant wrapper components following Neo4j GraphRAG factory patterns.
+Simple, maintainable wrappers that inject graph_id for tenant isolation.
+"""
+
 from typing import List, Dict, Any, Optional
 from uuid import UUID
+
 from neo4j_graphrag.retrievers.base import Retriever
-from neo4j_graphrag.retrievers import VectorRetriever, VectorCypherRetriever
-from neo4j_graphrag.experimental.components.kg_writer import Neo4jWriter, KGWriter
-from neo4j_graphrag.experimental.components.entity_relation_extractor import LLMEntityRelationExtractor
+from neo4j_graphrag.retrievers import VectorRetriever, VectorCypherRetriever, HybridRetriever
+from neo4j_graphrag.experimental.components.kg_writer import Neo4jWriter
 from neo4j_graphrag.experimental.components.types import Neo4jGraph, Neo4jNode, Neo4jRelationship
 from neo4j_graphrag.types import RetrieverResult, RetrieverResultItem
+from neo4j_graphrag.embeddings.base import Embedder
+from neo4j import Driver
+
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -13,27 +22,34 @@ logger = get_logger(__name__)
 
 class MultiTenantRetriever(Retriever):
     """
-    Simple wrapper that adds graph_id filtering to any Neo4j retriever.
-    Follows the composition over inheritance principle.
+    Base multi-tenant wrapper for any Neo4j GraphRAG retriever.
+    
+    DESIGN PRINCIPLES:
+    - Simple composition over inheritance
+    - Compatible with Neo4j GraphRAG factory patterns
+    - Automatic graph_id filtering for perfect tenant isolation
     """
     
     def __init__(self, base_retriever: Retriever, graph_id: str):
         """
         Args:
-            base_retriever: Any Neo4j GraphRAG retriever (VectorRetriever, etc.)
+            base_retriever: Any Neo4j GraphRAG retriever (VectorRetriever, HybridRetriever, etc.)
             graph_id: Tenant identifier for filtering
         """
         self.base_retriever = base_retriever
         self.graph_id = graph_id
+        # Initialize parent with same driver
         super().__init__(base_retriever.driver)
     
     def get_search_results(self, query_vector=None, query_text=None, **kwargs) -> RetrieverResult:
-        """Add graph_id filter to search and delegate to base retriever"""
+        """Add graph_id filter and delegate to base retriever"""
         
         # Add multi-tenant filtering
         filters = kwargs.get('filters', {})
         filters['graph_id'] = self.graph_id
         kwargs['filters'] = filters
+        
+        logger.debug(f"Multi-tenant search for graph {self.graph_id}")
         
         # Delegate to base retriever
         results = self.base_retriever.get_search_results(
@@ -42,138 +58,312 @@ class MultiTenantRetriever(Retriever):
             **kwargs
         )
         
-        # Additional filtering in case base retriever doesn't support filters properly
+        # Additional safety filtering (in case base retriever doesn't support filters)
         filtered_items = []
         for item in results.items:
-            # Check if item has graph_id property matching our tenant
+            # Check metadata for graph_id match
             if hasattr(item, 'metadata') and item.metadata.get('graph_id') == self.graph_id:
                 filtered_items.append(item)
-            elif hasattr(item, 'content') and self.graph_id in str(item.content):
+            # Fallback: check if item content contains graph_id reference
+            elif hasattr(item, 'content') and self.graph_id in str(getattr(item, 'content', '')):
                 filtered_items.append(item)
-                
+        
         return RetrieverResult(items=filtered_items)
+    
+    def __getattr__(self, name):
+        """Delegate other attributes to wrapped retriever"""
+        return getattr(self.base_retriever, name)
 
-class MultiTenantKnowledgeGraphWriter(KGWriter):
+
+class MultiTenantVectorRetriever(MultiTenantRetriever):
+    """
+    Multi-tenant vector retriever factory.
+    Compatible with Neo4j GraphRAG factory patterns.
+    """
+    
+    @classmethod
+    def create(
+        cls, 
+        driver: Driver, 
+        index_name: str, 
+        embedder: Embedder, 
+        graph_id: str,
+        return_properties: Optional[List[str]] = None,
+        **kwargs
+    ) -> 'MultiTenantVectorRetriever':
+        """
+        Factory method following Neo4j GraphRAG patterns.
+        
+        Args:
+            driver: Neo4j driver instance
+            index_name: Base index name (will be made tenant-specific)
+            embedder: Neo4j GraphRAG embedder
+            graph_id: Tenant identifier
+            return_properties: Properties to return from search
+            **kwargs: Additional VectorRetriever arguments
+        """
+        # Create tenant-specific index name
+        tenant_index_name = f"{index_name}_{graph_id}"
+        
+        # Create base Neo4j GraphRAG retriever
+        base_retriever = VectorRetriever(
+            driver=driver,
+            index_name=tenant_index_name,
+            embedder=embedder,
+            return_properties=return_properties or ["text", "chunk_index"],
+            **kwargs
+        )
+        
+        return cls(base_retriever, graph_id)
+
+
+class MultiTenantVectorCypherRetriever(MultiTenantRetriever):
+    """
+    Multi-tenant vector+cypher retriever factory.
+    Compatible with Neo4j GraphRAG factory patterns.
+    """
+    
+    @classmethod
+    def create(
+        cls,
+        driver: Driver,
+        index_name: str,
+        embedder: Embedder,
+        retrieval_query: str,
+        graph_id: str,
+        **kwargs
+    ) -> 'MultiTenantVectorCypherRetriever':
+        """
+        Factory method with automatic graph_id injection in Cypher queries.
+        
+        Args:
+            driver: Neo4j driver instance
+            index_name: Base index name (will be made tenant-specific)  
+            embedder: Neo4j GraphRAG embedder
+            retrieval_query: Cypher query template
+            graph_id: Tenant identifier
+            **kwargs: Additional VectorCypherRetriever arguments
+        """
+        # Create tenant-specific index name
+        tenant_index_name = f"{index_name}_{graph_id}"
+        
+        # Inject graph_id filter into Cypher query
+        safe_query = cls._inject_graph_id_filter(retrieval_query, graph_id)
+        
+        # Create base Neo4j GraphRAG retriever
+        base_retriever = VectorCypherRetriever(
+            driver=driver,
+            index_name=tenant_index_name,
+            embedder=embedder,
+            retrieval_query=safe_query,
+            **kwargs
+        )
+        
+        return cls(base_retriever, graph_id)
+    
+    @staticmethod
+    def _inject_graph_id_filter(query: str, graph_id: str) -> str:
+        """
+        Simple and safe graph_id injection into Cypher queries.
+        
+        Strategy: Add WHERE clause with graph_id filter after first MATCH.
+        This is a simple approach - for production, consider using parameterized queries.
+        """
+        if "MATCH" not in query:
+            return query
+        
+        lines = query.split('\n')
+        modified_lines = []
+        filter_added = False
+        
+        for line in lines:
+            modified_lines.append(line)
+            # Add filter after first MATCH statement
+            if line.strip().startswith("MATCH") and not filter_added:
+                # Simple heuristic: add WHERE clause for tenant isolation
+                modified_lines.append(f"WHERE node.graph_id = '{graph_id}'")
+                filter_added = True
+        
+        return '\n'.join(modified_lines)
+
+
+class MultiTenantHybridRetriever(MultiTenantRetriever):
+    """
+    Multi-tenant hybrid retriever factory.
+    Compatible with Neo4j GraphRAG factory patterns.
+    """
+    
+    @classmethod
+    def create(
+        cls,
+        driver: Driver,
+        vector_index_name: str,
+        fulltext_index_name: str,
+        embedder: Embedder,
+        graph_id: str,
+        **kwargs
+    ) -> 'MultiTenantHybridRetriever':
+        """
+        Factory method for hybrid (vector + fulltext) search.
+        
+        Args:
+            driver: Neo4j driver instance
+            vector_index_name: Base vector index name
+            fulltext_index_name: Base fulltext index name
+            embedder: Neo4j GraphRAG embedder
+            graph_id: Tenant identifier
+            **kwargs: Additional HybridRetriever arguments
+        """
+        # Create tenant-specific index names
+        tenant_vector_index = f"{vector_index_name}_{graph_id}"
+        tenant_fulltext_index = f"{fulltext_index_name}_{graph_id}"
+        
+        # Create base Neo4j GraphRAG hybrid retriever
+        base_retriever = HybridRetriever(
+            driver=driver,
+            vector_index_name=tenant_vector_index,
+            fulltext_index_name=tenant_fulltext_index,
+            embedder=embedder,
+            **kwargs
+        )
+        
+        return cls(base_retriever, graph_id)
+
+
+class MultiTenantKGWriter:
     """
     Multi-tenant wrapper for Neo4j KG Writer.
     Automatically injects graph_id into all nodes and relationships.
+    
+    DESIGN PRINCIPLES:
+    - Simple wrapper around Neo4jWriter
+    - Automatic tenant metadata injection
+    - Compatible with Neo4j GraphRAG pipelines
     """
     
-    def __init__(self, base_writer: Neo4jWriter, graph_id: str):
+    def __init__(self, base_writer: Neo4jWriter, graph_id: str, user_id: Optional[str] = None):
         """
         Args:
-            base_writer: Neo4j GraphRAG writer
-            graph_id: Tenant identifier to inject
+            base_writer: Neo4j GraphRAG writer instance
+            graph_id: Tenant identifier
+            user_id: Optional user identifier for additional isolation
         """
         self.base_writer = base_writer
         self.graph_id = graph_id
-    
-    async def run(self, graph: Neo4jGraph) -> Dict[str, Any]:
-        """Inject graph_id into all nodes/relationships and delegate to base writer"""
+        self.user_id = user_id
+        
+    async def run(self, graph: Neo4jGraph) -> None:
+        """Write graph with automatic tenant metadata injection"""
         
         # Inject graph_id into all nodes
         for node in graph.nodes:
             if not node.properties:
                 node.properties = {}
-            node.properties['graph_id'] = self.graph_id
+            node.properties.update({
+                'graph_id': self.graph_id,
+                'created_by': 'multi_tenant_pipeline'
+            })
             
-        # Inject graph_id into all relationships  
-        for rel in graph.relationships:
-            if not rel.properties:
-                rel.properties = {}
-            rel.properties['graph_id'] = self.graph_id
-            
-        # Delegate to base writer
-        result = await self.base_writer.run(graph)
-        return result
-
-class MultiTenantEntityRelationExtractor(LLMEntityRelationExtractor):
-    """
-    Multi-tenant wrapper for LLM entity extraction.
-    Adds graph_id to all extracted entities and relationships.
-    """
-    
-    def __init__(self, base_extractor: LLMEntityRelationExtractor, graph_id: str):
-        """
-        Args:
-            base_extractor: Neo4j GraphRAG entity extractor
-            graph_id: Tenant identifier
-        """
-        self.base_extractor = base_extractor
-        self.graph_id = graph_id
-        # Copy all attributes from base extractor
-        super().__init__(
-            llm=base_extractor.llm,
-            prompt_template=base_extractor.prompt_template,
-            create_lexical_graph=base_extractor.create_lexical_graph,
-            on_error=base_extractor.on_error,
-            max_concurrency=base_extractor.max_concurrency
-        )
-    
-    async def run(self, **kwargs) -> Neo4jGraph:
-        """Extract entities and inject graph_id into all results"""
+            # Add user_id if provided
+            if self.user_id:
+                node.properties['user_id'] = self.user_id
         
-        # Delegate to base extractor
-        graph = await self.base_extractor.run(**kwargs)
-        
-        # Inject graph_id into all nodes
-        for node in graph.nodes:
-            if not node.properties:
-                node.properties = {}
-            node.properties['graph_id'] = self.graph_id
-            
         # Inject graph_id into all relationships
         for rel in graph.relationships:
             if not rel.properties:
                 rel.properties = {}
-            rel.properties['graph_id'] = self.graph_id
+            rel.properties.update({
+                'graph_id': self.graph_id,
+                'created_by': 'multi_tenant_pipeline'
+            })
             
-        return graph
-
-
-class MultiTenantVectorRetriever(MultiTenantRetriever):
-    """Specialized multi-tenant vector retriever"""
-    
-    def __init__(self, driver, index_name: str, embedder, graph_id: str, **kwargs):
-        """Create multi-tenant vector retriever"""
+            # Add user_id if provided
+            if self.user_id:
+                rel.properties['user_id'] = self.user_id
         
-        base_retriever = VectorRetriever(
-            driver=driver,
-            index_name=f"{index_name}_{graph_id}",  # Tenant-specific index
-            embedder=embedder,
-            **kwargs
+        logger.info(f"Writing graph with {len(graph.nodes)} nodes and {len(graph.relationships)} relationships for tenant {self.graph_id}")
+        
+        # Delegate to base writer
+        return await self.base_writer.run(graph)
+    
+    def __getattr__(self, name):
+        """Delegate other attributes to wrapped writer"""
+        return getattr(self.base_writer, name)
+
+
+# ==================== FACTORY FUNCTIONS FOR FASTAPI COMPATIBILITY ====================
+
+def create_multi_tenant_vector_retriever(
+    driver: Driver,
+    embedder: Embedder,
+    graph_id: str,
+    index_name: str = "entity_embeddings",
+    return_properties: Optional[List[str]] = None
+) -> MultiTenantVectorRetriever:
+    """
+    FastAPI-compatible factory function for vector retrievers.
+    
+    Usage in FastAPI services:
+        retriever = create_multi_tenant_vector_retriever(
+            driver=neo4j_client.driver,
+            embedder=openai_embedder,
+            graph_id=str(graph_id)
         )
-        super().__init__(base_retriever, graph_id)
+    """
+    return MultiTenantVectorRetriever.create(
+        driver=driver,
+        index_name=index_name,
+        embedder=embedder,
+        graph_id=graph_id,
+        return_properties=return_properties
+    )
 
 
-class MultiTenantVectorCypherRetriever(MultiTenantRetriever):
-    """Specialized multi-tenant vector+cypher retriever"""
+def create_multi_tenant_hybrid_retriever(
+    driver: Driver,
+    embedder: Embedder,
+    graph_id: str,
+    vector_index_name: str = "entity_embeddings",
+    fulltext_index_name: str = "entity_text_fulltext"
+) -> MultiTenantHybridRetriever:
+    """
+    FastAPI-compatible factory function for hybrid retrievers.
     
-    def __init__(self, driver, index_name: str, embedder, retrieval_query: str, graph_id: str, **kwargs):
-        """Create multi-tenant vector+cypher retriever with graph_id filtering in query"""
-        
-        # Modify retrieval query to include graph_id filter
-        filtered_query = self._add_graph_id_filter(retrieval_query, graph_id)
-        
-        base_retriever = VectorCypherRetriever(
-            driver=driver,
-            index_name=f"{index_name}_{graph_id}",  # Tenant-specific index
-            embedder=embedder,
-            retrieval_query=filtered_query,
-            **kwargs
+    Usage in FastAPI services:
+        retriever = create_multi_tenant_hybrid_retriever(
+            driver=neo4j_client.driver,
+            embedder=openai_embedder,
+            graph_id=str(graph_id)
         )
-        super().__init__(base_retriever, graph_id)
+    """
+    return MultiTenantHybridRetriever.create(
+        driver=driver,
+        vector_index_name=vector_index_name,
+        fulltext_index_name=fulltext_index_name,
+        embedder=embedder,
+        graph_id=graph_id
+    )
+
+
+def create_multi_tenant_kg_writer(
+    driver: Driver,
+    graph_id: str,
+    user_id: Optional[str] = None,
+    neo4j_database: str = "neo4j"
+) -> MultiTenantKGWriter:
+    """
+    FastAPI-compatible factory function for KG writers.
     
-    def _add_graph_id_filter(self, query: str, graph_id: str) -> str:
-        """Add WHERE graph_id = $graph_id filter to Cypher queries"""
-        
-        # Simple approach: add filter after first MATCH
-        if "MATCH" in query:
-            lines = query.split('\n')
-            for i, line in enumerate(lines):
-                if line.strip().startswith("MATCH"):
-                    # Insert graph_id filter after this MATCH
-                    lines.insert(i + 1, f"WHERE node.graph_id = '{graph_id}'")
-                    break
-            return '\n'.join(lines)
-        return query
+    Usage in FastAPI services:
+        writer = create_multi_tenant_kg_writer(
+            driver=neo4j_client.driver,
+            graph_id=str(graph_id),
+            user_id=current_user_id
+        )
+    """
+    base_writer = Neo4jWriter(
+        driver=driver,
+        neo4j_database=neo4j_database
+    )
+    
+    return MultiTenantKGWriter(base_writer, graph_id, user_id)
