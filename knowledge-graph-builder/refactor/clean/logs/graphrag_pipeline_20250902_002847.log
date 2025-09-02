@@ -1,0 +1,471 @@
+2025-09-02 00:28:47,617 - pipeline - INFO - Initializing Advanced GraphRAG Pipeline...
+2025-09-02 00:28:47,617 - neo4j.pool - DEBUG - [#0000]  _: <POOL> created, direct address IPv4Address(('localhost', 7687))
+2025-09-02 00:28:47,617 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: neo4j
+2025-09-02 00:28:47,617 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: 'neo4j'
+2025-09-02 00:28:47,617 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='WRITE', database=AcquisitionDatabase(name='neo4j', guessed=False)
+2025-09-02 00:28:47,617 - neo4j.pool - DEBUG - [#0000]  _: <POOL> trying to hand out new connection
+2025-09-02 00:28:47,617 - neo4j.io - DEBUG - [#0000]  _: <RESOLVE> in: localhost:7687
+2025-09-02 00:28:47,619 - neo4j.io - DEBUG - [#0000]  _: <RESOLVE> dns resolver out: [::1]:7687
+2025-09-02 00:28:47,619 - neo4j.io - DEBUG - [#0000]  C: <OPEN> [::1]:7687
+2025-09-02 00:28:47,620 - neo4j.io - DEBUG - [#C905]  C: <MAGIC> 0x6060B017
+2025-09-02 00:28:47,620 - neo4j.io - DEBUG - [#C905]  C: <HANDSHAKE> 0x000001FF 0x00080805 0x00020404 0x00000003
+2025-09-02 00:28:47,622 - neo4j.io - DEBUG - [#C905]  S: <HANDSHAKE> 0x00000605
+2025-09-02 00:28:47,623 - neo4j.io - DEBUG - [#C905]  C: HELLO {'user_agent': 'neo4j-python/5.28.2 Python/3.12.8-final-0 (darwin)', 'bolt_agent': {'product': 'neo4j-python/5.28.2', 'platform': 'Darwin 24.4.0; arm64', 'language': 'Python/3.12.8-final-0', 'language_details': 'CPython; 3.12.8-final-0 (v3.12.8:2dc476bcb91, Dec  3 2024 14:43:19) [Clang 13.0.0 (clang-1300.0.29.30)]'}}
+2025-09-02 00:28:47,623 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: CONNECTED > AUTHENTICATION
+2025-09-02 00:28:47,623 - neo4j.io - DEBUG - [#C905]  C: LOGON {'scheme': 'basic', 'principal': 'neo4j', 'credentials': '*******'}
+2025-09-02 00:28:47,623 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: AUTHENTICATION > READY
+2025-09-02 00:28:47,624 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'server': 'Neo4j/5.23.0', 'connection_id': 'bolt-64', 'hints': {'connection.recv_timeout_seconds': 120}}
+2025-09-02 00:28:47,624 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: CONNECTED > AUTHENTICATION
+2025-09-02 00:28:47,626 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:47,626 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: AUTHENTICATION > READY
+2025-09-02 00:28:47,626 - neo4j.io - DEBUG - [#C905]  C: RUN 'RETURN 1 as test' {} {'db': 'neo4j'}
+2025-09-02 00:28:47,626 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > STREAMING
+2025-09-02 00:28:47,626 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:47,627 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 0, 'fields': ['test']}
+2025-09-02 00:28:47,627 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > STREAMING
+2025-09-02 00:28:47,628 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:47,628 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=', 'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 'r', 't_last': 1, 'db': 'neo4j'}
+2025-09-02 00:28:47,628 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: STREAMING > READY
+2025-09-02 00:28:47,628 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:47,628 - pipeline - INFO - Neo4j connection established successfully
+2025-09-02 00:28:48,598 - neo4j_graphrag.indexes - INFO - Creating vector index named 'text_embeddings_primary'
+2025-09-02 00:28:48,599 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:48,599 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:48,599 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='WRITE', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:48,599 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:48,599 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:48,599 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:48,599 - neo4j.io - DEBUG - [#C905]  C: BEGIN {}
+2025-09-02 00:28:48,599 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: STREAMING > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,599 - neo4j.io - DEBUG - [#C905]  C: RUN 'CREATE VECTOR INDEX $name IF NOT EXISTS FOR (n:Chunk) ON n.embedding OPTIONS { indexConfig: { `vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn } }' {'name': 'text_embeddings_primary', 'dimensions': 3072, 'similarity_fn': 'cosine'} {}
+2025-09-02 00:28:48,599 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:48,600 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:48,600 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,601 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 2, 'fields': [], 'qid': 0}
+2025-09-02 00:28:48,602 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00NA0', 'neo4j_code': 'Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists', 'status_description': 'note: successful completion - index or constraint already exists. `CREATE VECTOR INDEX text_embeddings_primary IF NOT EXISTS FOR (e:Chunk) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}` has no effect. `VECTOR INDEX text_embeddings_primary FOR (e:Chunk) ON (e.embedding)` already exists.', 'diagnostic_record': {'_classification': 'SCHEMA', '_status_parameters': {'index_constr_pat': 'VECTOR INDEX text_embeddings_primary FOR (e:Chunk) ON (e.embedding)', 'cmd': 'CREATE VECTOR INDEX text_embeddings_primary IF NOT EXISTS FOR (e:Chunk) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}'}, '_severity': 'INFORMATION'}, 'description': '`VECTOR INDEX text_embeddings_primary FOR (e:Chunk) ON (e.embedding)` already exists.', 'title': '`CREATE VECTOR INDEX text_embeddings_primary IF NOT EXISTS FOR (e:Chunk) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}` has no effect.'}, {'gql_status': '00001', 'status_description': 'note: successful completion - omitted result'}], 'type': 's', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:48,602 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE VECTOR INDEX text_embeddings_primary IF NOT EXISTS FOR (e:Chunk) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}` has no effect.} {description: `VECTOR INDEX text_embeddings_primary FOR (e:Chunk) ON (e.embedding)` already exists.} {position: None} for query: 'CREATE VECTOR INDEX $name IF NOT EXISTS FOR (n:Chunk) ON n.embedding OPTIONS { indexConfig: { `vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn } }'
+2025-09-02 00:28:48,602 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:48,602 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,603 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:48,603 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,603 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:48,603 - neo4j_graphrag.indexes - INFO - Creating vector index named 'entity_embeddings'
+2025-09-02 00:28:48,603 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:48,603 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:48,603 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='WRITE', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:48,603 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:48,603 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:48,603 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:48,603 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:48,603 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,603 - neo4j.io - DEBUG - [#C905]  C: RUN 'CREATE VECTOR INDEX $name IF NOT EXISTS FOR (n:__Entity__) ON n.embedding OPTIONS { indexConfig: { `vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn } }' {'name': 'entity_embeddings', 'dimensions': 3072, 'similarity_fn': 'cosine'} {}
+2025-09-02 00:28:48,603 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:48,604 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:48,604 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,605 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 1, 'fields': [], 'qid': 0}
+2025-09-02 00:28:48,605 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00NA0', 'neo4j_code': 'Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists', 'status_description': 'note: successful completion - index or constraint already exists. `CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS FOR (e:__Entity__) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}` has no effect. `VECTOR INDEX entity_embeddings FOR (e:__Entity__) ON (e.embedding)` already exists.', 'diagnostic_record': {'_classification': 'SCHEMA', '_status_parameters': {'index_constr_pat': 'VECTOR INDEX entity_embeddings FOR (e:__Entity__) ON (e.embedding)', 'cmd': 'CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS FOR (e:__Entity__) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}'}, '_severity': 'INFORMATION'}, 'description': '`VECTOR INDEX entity_embeddings FOR (e:__Entity__) ON (e.embedding)` already exists.', 'title': '`CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS FOR (e:__Entity__) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}` has no effect.'}, {'gql_status': '00001', 'status_description': 'note: successful completion - omitted result'}], 'type': 's', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:48,605 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS FOR (e:__Entity__) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}` has no effect.} {description: `VECTOR INDEX entity_embeddings FOR (e:__Entity__) ON (e.embedding)` already exists.} {position: None} for query: 'CREATE VECTOR INDEX $name IF NOT EXISTS FOR (n:__Entity__) ON n.embedding OPTIONS { indexConfig: { `vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn } }'
+2025-09-02 00:28:48,605 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:48,605 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,606 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:48,606 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,606 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:48,606 - neo4j_graphrag.indexes - INFO - Creating vector index named 'relationship_embeddings'
+2025-09-02 00:28:48,606 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:48,606 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:48,606 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='WRITE', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:48,606 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:48,606 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:48,606 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:48,606 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:48,606 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,606 - neo4j.io - DEBUG - [#C905]  C: RUN 'CREATE VECTOR INDEX $name IF NOT EXISTS FOR (n:__Relationship__) ON n.embedding OPTIONS { indexConfig: { `vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn } }' {'name': 'relationship_embeddings', 'dimensions': 3072, 'similarity_fn': 'cosine'} {}
+2025-09-02 00:28:48,606 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:48,607 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:48,607 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,608 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 1, 'fields': [], 'qid': 0}
+2025-09-02 00:28:48,608 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00NA0', 'neo4j_code': 'Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists', 'status_description': 'note: successful completion - index or constraint already exists. `CREATE VECTOR INDEX relationship_embeddings IF NOT EXISTS FOR (e:__Relationship__) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}` has no effect. `VECTOR INDEX relationship_embeddings FOR (e:__Relationship__) ON (e.embedding)` already exists.', 'diagnostic_record': {'_classification': 'SCHEMA', '_status_parameters': {'index_constr_pat': 'VECTOR INDEX relationship_embeddings FOR (e:__Relationship__) ON (e.embedding)', 'cmd': 'CREATE VECTOR INDEX relationship_embeddings IF NOT EXISTS FOR (e:__Relationship__) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}'}, '_severity': 'INFORMATION'}, 'description': '`VECTOR INDEX relationship_embeddings FOR (e:__Relationship__) ON (e.embedding)` already exists.', 'title': '`CREATE VECTOR INDEX relationship_embeddings IF NOT EXISTS FOR (e:__Relationship__) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}` has no effect.'}, {'gql_status': '00001', 'status_description': 'note: successful completion - omitted result'}], 'type': 's', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:48,608 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE VECTOR INDEX relationship_embeddings IF NOT EXISTS FOR (e:__Relationship__) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn}}` has no effect.} {description: `VECTOR INDEX relationship_embeddings FOR (e:__Relationship__) ON (e.embedding)` already exists.} {position: None} for query: 'CREATE VECTOR INDEX $name IF NOT EXISTS FOR (n:__Relationship__) ON n.embedding OPTIONS { indexConfig: { `vector.dimensions`: toInteger($dimensions), `vector.similarity_function`: $similarity_fn } }'
+2025-09-02 00:28:48,608 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:48,608 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,609 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:48,609 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,609 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:48,609 - neo4j_graphrag.indexes - INFO - Creating fulltext index named 'chunk_text_fulltext'
+2025-09-02 00:28:48,609 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: neo4j
+2025-09-02 00:28:48,609 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: 'neo4j'
+2025-09-02 00:28:48,609 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='WRITE', database=AcquisitionDatabase(name='neo4j', guessed=False)
+2025-09-02 00:28:48,609 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:48,609 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:48,609 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:48,609 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'db': 'neo4j', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:48,609 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,609 - neo4j.io - DEBUG - [#C905]  C: RUN 'CREATE FULLTEXT INDEX $name IF NOT EXISTS FOR (n:`Chunk`) ON EACH [n.`text`]' {'name': 'chunk_text_fulltext'} {}
+2025-09-02 00:28:48,609 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:48,610 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:48,610 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,610 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 1, 'fields': [], 'qid': 0}
+2025-09-02 00:28:48,611 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00NA0', 'neo4j_code': 'Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists', 'status_description': 'note: successful completion - index or constraint already exists. `CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS FOR (e:Chunk) ON EACH [e.text]` has no effect. `FULLTEXT INDEX chunk_text_fulltext FOR (e:Chunk) ON EACH [e.text]` already exists.', 'diagnostic_record': {'_classification': 'SCHEMA', '_status_parameters': {'index_constr_pat': 'FULLTEXT INDEX chunk_text_fulltext FOR (e:Chunk) ON EACH [e.text]', 'cmd': 'CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS FOR (e:Chunk) ON EACH [e.text]'}, '_severity': 'INFORMATION'}, 'description': '`FULLTEXT INDEX chunk_text_fulltext FOR (e:Chunk) ON EACH [e.text]` already exists.', 'title': '`CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS FOR (e:Chunk) ON EACH [e.text]` has no effect.'}, {'gql_status': '00001', 'status_description': 'note: successful completion - omitted result'}], 'type': 's', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:48,611 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS FOR (e:Chunk) ON EACH [e.text]` has no effect.} {description: `FULLTEXT INDEX chunk_text_fulltext FOR (e:Chunk) ON EACH [e.text]` already exists.} {position: None} for query: 'CREATE FULLTEXT INDEX $name IF NOT EXISTS FOR (n:`Chunk`) ON EACH [n.`text`]'
+2025-09-02 00:28:48,611 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:48,611 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,611 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:48,611 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,611 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:48,611 - neo4j_graphrag.indexes - INFO - Creating fulltext index named 'entity_text_fulltext'
+2025-09-02 00:28:48,612 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: neo4j
+2025-09-02 00:28:48,612 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: 'neo4j'
+2025-09-02 00:28:48,612 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='WRITE', database=AcquisitionDatabase(name='neo4j', guessed=False)
+2025-09-02 00:28:48,612 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:48,612 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:48,612 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:48,612 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'db': 'neo4j', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:48,612 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,612 - neo4j.io - DEBUG - [#C905]  C: RUN 'CREATE FULLTEXT INDEX $name IF NOT EXISTS FOR (n:`__Entity__`) ON EACH [n.`name`, n.`description`]' {'name': 'entity_text_fulltext'} {}
+2025-09-02 00:28:48,612 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:48,612 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:48,612 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:48,613 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 0, 'fields': [], 'qid': 0}
+2025-09-02 00:28:48,613 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00NA0', 'neo4j_code': 'Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists', 'status_description': 'note: successful completion - index or constraint already exists. `CREATE FULLTEXT INDEX entity_text_fulltext IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.name, e.description]` has no effect. `FULLTEXT INDEX entity_text_fulltext FOR (e:__Entity__) ON EACH [e.name, e.description]` already exists.', 'diagnostic_record': {'_classification': 'SCHEMA', '_status_parameters': {'index_constr_pat': 'FULLTEXT INDEX entity_text_fulltext FOR (e:__Entity__) ON EACH [e.name, e.description]', 'cmd': 'CREATE FULLTEXT INDEX entity_text_fulltext IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.name, e.description]'}, '_severity': 'INFORMATION'}, 'description': '`FULLTEXT INDEX entity_text_fulltext FOR (e:__Entity__) ON EACH [e.name, e.description]` already exists.', 'title': '`CREATE FULLTEXT INDEX entity_text_fulltext IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.name, e.description]` has no effect.'}, {'gql_status': '00001', 'status_description': 'note: successful completion - omitted result'}], 'type': 's', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:48,613 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE FULLTEXT INDEX entity_text_fulltext IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.name, e.description]` has no effect.} {description: `FULLTEXT INDEX entity_text_fulltext FOR (e:__Entity__) ON EACH [e.name, e.description]` already exists.} {position: None} for query: 'CREATE FULLTEXT INDEX $name IF NOT EXISTS FOR (n:`__Entity__`) ON EACH [n.`name`, n.`description`]'
+2025-09-02 00:28:48,613 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:48,613 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,614 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:48,614 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:48,614 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:48,614 - pipeline - INFO - Pipeline initialization completed successfully
+2025-09-02 00:28:48,614 - pipeline - INFO - Processing text content...
+2025-09-02 00:28:48,614 - schema_manager - INFO - Learning schema from text sample...
+2025-09-02 00:28:48,702 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-5f8f48a8-ca4f-4da6-917c-97dd7e9986f6', 'json_data': {'messages': [{'role': 'user', 'content': '\nYou are a top-tier algorithm designed for extracting a labeled property graph schema in\nstructured formats.\n\nGenerate a generalized graph schema based on the input text. Identify key node types,\ntheir relationship types, and property types.\n\nIMPORTANT RULES:\n1. Return only abstract schema information, not concrete instances.\n2. Use singular PascalCase labels for node types (e.g., Person, Company, Product).\n3. Use UPPER_SNAKE_CASE labels for relationship types (e.g., WORKS_FOR, MANAGES).\n4. Include property definitions only when the type can be confidently inferred, otherwise omit them.\n5. When defining patterns, ensure that every node label and relationship label mentioned exists in your lists of node types and relationship types.\n6. Do not create node types that aren\'t clearly mentioned in the text.\n7. Keep your schema minimal and focused on clearly identifiable patterns in the text.\n\nAccepted property types are: BOOLEAN, DATE, DURATION, FLOAT, INTEGER, LIST,\nLOCAL_DATETIME, LOCAL_TIME, POINT, STRING, ZONED_DATETIME, ZONED_TIME.\n\nReturn a valid JSON object that follows this precise structure:\n{\n  "node_types": [\n    {\n      "label": "Person",\n      "properties": [\n        {\n          "name": "name",\n          "type": "STRING"\n        }\n      ]\n    },\n    ...\n  ],\n  "relationship_types": [\n    {\n      "label": "WORKS_FOR"\n    },\n    ...\n  ],\n  "patterns": [\n    ["Person", "WORKS_FOR", "Company"],\n    ...\n  ]\n}\n\nExamples:\n\n\nInput text:\nTechNova Corporation was founded in 2018 by Dr. Sarah Chen and Michael Rodriguez in Austin, Texas. The company initially focused on developing artificial intelligence solutions for healthcare applications. Dr. Sarah Chen, who holds a PhD in Computer Science from MIT, serves as the Chief Executive Officer and leads the strategic vision of the company. Michael Rodriguez, a former software engineer at Google, acts as the Chief Technology Officer and oversees all technical development.\n\nIn 2019, TechNova secured its first major funding round led by Venture Capital Partners, raising $15 million in Series A funding. The lead investor, James Park from Venture Capital Partners, joined the board of directors and has been instrumental in guiding the company\'s growth strategy. The funding enabled TechNova to expand its research and development team and establish partnerships with major healthcare institutions.\n\nThe company\'s flagship product, MedAI Platform, was launched in 2020 and quickly gained traction among hospitals and medical centers across the United States. MedAI Platform utilizes advanced machine learning algorithms to analyze medical imaging data and assist radiologists in early disease detection. The platform has been particularly successful in detecting breast cancer, lung cancer, and neurological disorders with accuracy rates exceeding 95%.\n\nDr. Emily Watson, the Chief Medical Officer who joined TechNova in 2020, previously worked as a radiologist at Johns Hopkins Hospital for over 15 years. She has been crucial in ensuring that MedAI Platform meets the highest medical standards and regulatory requirements. Under her guidance, the platform received FDA approval in late 2020, making it one of the first AI-powered diagnostic tools to achieve this milestone.\n\nTechNova\'s engineering team is led by Alex Thompson, the Vice President of Engineering, who previously worked at Amazon Web Services for eight years. The team consists of 45 software engineers, 12 data scienti\n'}], 'model': 'gpt-4o', 'max_tokens': 3000, 'response_format': {'type': 'json_object'}, 'temperature': 0.0}}
+2025-09-02 00:28:48,704 - openai._base_client - DEBUG - Sending HTTP Request: POST https://api.openai.com/v1/chat/completions
+2025-09-02 00:28:48,706 - httpcore.connection - DEBUG - connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=5.0 socket_options=None
+2025-09-02 00:28:48,836 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x1358d2990>
+2025-09-02 00:28:48,836 - httpcore.connection - DEBUG - start_tls.started ssl_context=<ssl.SSLContext object at 0x11b0a78d0> server_hostname='api.openai.com' timeout=5.0
+2025-09-02 00:28:48,913 - httpcore.connection - DEBUG - start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x136699430>
+2025-09-02 00:28:48,914 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2025-09-02 00:28:48,914 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-09-02 00:28:48,914 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2025-09-02 00:28:48,914 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-09-02 00:28:48,914 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2025-09-02 00:28:49,164 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 401, b'Unauthorized', [(b'Date', b'Mon, 01 Sep 2025 21:28:49 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'496'), (b'Connection', b'keep-alive'), (b'vary', b'Origin'), (b'x-request-id', b'req_44a65ebad9234897905885c6fb558009'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=dLNYXbZ9V5OYNwnfs0rHUGMK_XIPYWd9nHsirJYPrUk-1756762129-1.0.1.1-EsQxDD3O7EtX39itLgQ5ckWhGwAx0YmyKnugSgFYGIK4e26qvyKFU.YTc8RWHMwqmVSdvKDe_VOcvNRvtH_wfWeZDFSjwueHhMaXIvJnzyw; path=/; expires=Mon, 01-Sep-25 21:58:49 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=qojFwPmMzecmTjO6USqirkE6pCe86Yed6PUb_3IIyuc-1756762129311-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'9787dc0b1e25d0e4-SOF'), (b'alt-svc', b'h3=":443"; ma=86400')])
+2025-09-02 00:28:49,165 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 401 Unauthorized"
+2025-09-02 00:28:49,165 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2025-09-02 00:28:49,165 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-09-02 00:28:49,165 - httpcore.http11 - DEBUG - response_closed.started
+2025-09-02 00:28:49,165 - httpcore.http11 - DEBUG - response_closed.complete
+2025-09-02 00:28:49,165 - openai._base_client - DEBUG - HTTP Response: POST https://api.openai.com/v1/chat/completions "401 Unauthorized" Headers([('date', 'Mon, 01 Sep 2025 21:28:49 GMT'), ('content-type', 'application/json; charset=utf-8'), ('content-length', '496'), ('connection', 'keep-alive'), ('vary', 'Origin'), ('x-request-id', 'req_44a65ebad9234897905885c6fb558009'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=dLNYXbZ9V5OYNwnfs0rHUGMK_XIPYWd9nHsirJYPrUk-1756762129-1.0.1.1-EsQxDD3O7EtX39itLgQ5ckWhGwAx0YmyKnugSgFYGIK4e26qvyKFU.YTc8RWHMwqmVSdvKDe_VOcvNRvtH_wfWeZDFSjwueHhMaXIvJnzyw; path=/; expires=Mon, 01-Sep-25 21:58:49 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=qojFwPmMzecmTjO6USqirkE6pCe86Yed6PUb_3IIyuc-1756762129311-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '9787dc0b1e25d0e4-SOF'), ('alt-svc', 'h3=":443"; ma=86400')])
+2025-09-02 00:28:49,166 - openai._base_client - DEBUG - request_id: req_44a65ebad9234897905885c6fb558009
+2025-09-02 00:28:49,166 - openai._base_client - DEBUG - Encountered httpx.HTTPStatusError
+Traceback (most recent call last):
+  File "/Users/reza/workspace/Oraclous/oraclous-data-studio/.venv/lib/python3.12/site-packages/openai/_base_client.py", line 1574, in request
+    response.raise_for_status()
+  File "/Users/reza/workspace/Oraclous/oraclous-data-studio/.venv/lib/python3.12/site-packages/httpx/_models.py", line 829, in raise_for_status
+    raise HTTPStatusError(message, request=request, response=self)
+httpx.HTTPStatusError: Client error '401 Unauthorized' for url 'https://api.openai.com/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401
+2025-09-02 00:28:49,166 - openai._base_client - DEBUG - Not retrying
+2025-09-02 00:28:49,167 - openai._base_client - DEBUG - Re-raising status error
+2025-09-02 00:28:49,167 - schema_manager - WARNING - Schema learning failed, using default: Failed to generate schema from text
+2025-09-02 00:28:49,167 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: neo4j
+2025-09-02 00:28:49,167 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: 'neo4j'
+2025-09-02 00:28:49,167 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name='neo4j', guessed=False)
+2025-09-02 00:28:49,167 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,168 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,168 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,168 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'db': 'neo4j', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,168 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,168 - neo4j.io - DEBUG - [#C905]  C: RUN 'CALL dbms.components()' {} {}
+2025-09-02 00:28:49,168 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,169 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,169 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,170 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 1, 'fields': ['name', 'versions', 'edition'], 'qid': 0}
+2025-09-02 00:28:49,171 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,171 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 's', 't_last': 1, 'db': 'neo4j'}
+2025-09-02 00:28:49,171 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,171 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,172 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,172 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,172 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,172 - pipeline - INFO - Running advanced GraphRAG pipeline...
+2025-09-02 00:28:49,172 - neo4j_graphrag.experimental.pipeline.pipeline - DEBUG - PIPELINE START
+2025-09-02 00:28:49,172 - neo4j_graphrag.experimental.pipeline.pipeline - DEBUG - PIPELINE ORCHESTRATOR: 4a8d3436-5b84-4a9c-b481-a04a374b8b9c
+2025-09-02 00:28:49,173 - neo4j_graphrag.experimental.pipeline.pipeline - DEBUG - TASK START self.name='splitter' input={'text': 'TechNova Corporation was founded in 2018 by Dr. Sarah Chen and Michael Rodriguez in Austin, Texas. The company initially focused on developing artificial intelligence solutions for healthcare applicat... (3336 chars)'}
+2025-09-02 00:28:49,173 - neo4j_graphrag.experimental.pipeline.pipeline - DEBUG - TASK FINISHED splitter in 8.250000246334821e-05 res={'status': <RunStatus.DONE: 'DONE'>, 'result': {'chunks': [{'text': 'TechNova Corporation was founded in 2018 by Dr. Sarah Chen and Michael Rodriguez in Austin, Texas. The company initially focused on developing artificial intelligence solutions for healthcare applicat... (1293 chars)', 'index': 0, 'metadata': None, 'uid': 'a7dc5f8d-d54e-41e9-91d5-28ec751ee6e0'}, {'text': 'disease detection. The platform has been particularly successful in detecting breast cancer, lung cancer, and neurological disorders with accuracy rates exceeding 95%.\n\nDr. Emily Watson, the Chief Med... (1298 chars)', 'index': 1, 'metadata': None, 'uid': 'a15c8642-4fa5-431f-a5d8-a7e3e7c33ccc'}, {'text': "real-world performance data. The collaboration has been overseen by Lisa Martinez, TechNova's Vice President of Partnerships, who has extensive experience in healthcare business development.\n\nThe comp... (945 chars)", 'index': 2, 'metadata': None, 'uid': '3c472fd0-4809-4c9a-8a58-19862f62cfbc'}]}, 'timestamp': datetime.datetime(2025, 9, 1, 21, 28, 49, 173187, tzinfo=datetime.timezone.utc)}
+2025-09-02 00:28:49,173 - neo4j_graphrag.experimental.pipeline.orchestrator - DEBUG - ORCHESTRATOR 4a8d3436-5b84-4a9c-b481-a04a374b8b9c: enqueuing next task: chunk_embedder
+2025-09-02 00:28:49,173 - neo4j_graphrag.experimental.pipeline.pipeline - DEBUG - TASK START self.name='chunk_embedder' input={'text_chunks': {'chunks': [{'text': 'TechNova Corporation was founded in 2018 by Dr. Sarah Chen and Michael Rodriguez in Austin, Texas. The company initially focused on developing artificial intelligence solutions for healthcare applicat... (1293 chars)', 'index': 0, 'metadata': None, 'uid': 'a7dc5f8d-d54e-41e9-91d5-28ec751ee6e0'}, {'text': 'disease detection. The platform has been particularly successful in detecting breast cancer, lung cancer, and neurological disorders with accuracy rates exceeding 95%.\n\nDr. Emily Watson, the Chief Med... (1298 chars)', 'index': 1, 'metadata': None, 'uid': 'a15c8642-4fa5-431f-a5d8-a7e3e7c33ccc'}, {'text': "real-world performance data. The collaboration has been overseen by Lisa Martinez, TechNova's Vice President of Partnerships, who has extensive experience in healthcare business development.\n\nThe comp... (945 chars)", 'index': 2, 'metadata': None, 'uid': '3c472fd0-4809-4c9a-8a58-19862f62cfbc'}]}}
+2025-09-02 00:28:49,174 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/embeddings', 'files': None, 'idempotency_key': 'stainless-python-retry-4adafede-fa63-4e0e-b4f6-6fd5e8a90f38', 'post_parser': <function Embeddings.create.<locals>.parser at 0x168011260>, 'json_data': {'input': "TechNova Corporation was founded in 2018 by Dr. Sarah Chen and Michael Rodriguez in Austin, Texas. The company initially focused on developing artificial intelligence solutions for healthcare applications. Dr. Sarah Chen, who holds a PhD in Computer Science from MIT, serves as the Chief Executive Officer and leads the strategic vision of the company. Michael Rodriguez, a former software engineer at Google, acts as the Chief Technology Officer and oversees all technical development.\n\nIn 2019, TechNova secured its first major funding round led by Venture Capital Partners, raising $15 million in Series A funding. The lead investor, James Park from Venture Capital Partners, joined the board of directors and has been instrumental in guiding the company's growth strategy. The funding enabled TechNova to expand its research and development team and establish partnerships with major healthcare institutions.\n\nThe company's flagship product, MedAI Platform, was launched in 2020 and quickly gained traction among hospitals and medical centers across the United States. MedAI Platform utilizes advanced machine learning algorithms to analyze medical imaging data and assist radiologists in early disease detection. The platform has been particularly successful in detecting breast cancer, lung cancer, and neurological disorders with accuracy rates exceeding 95%.\n\nDr. Emily Watson, the Chief Medical Officer who joined TechNova in 2020, previously worked as a radiologist at Johns Hopkins ", 'model': 'text-embedding-3-large', 'encoding_format': 'base64'}}
+2025-09-02 00:28:49,174 - openai._base_client - DEBUG - Sending HTTP Request: POST https://api.openai.com/v1/embeddings
+2025-09-02 00:28:49,174 - httpcore.connection - DEBUG - connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=5.0 socket_options=None
+2025-09-02 00:28:49,239 - httpcore.connection - DEBUG - connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x16804c860>
+2025-09-02 00:28:49,239 - httpcore.connection - DEBUG - start_tls.started ssl_context=<ssl.SSLContext object at 0x11b0a7350> server_hostname='api.openai.com' timeout=5.0
+2025-09-02 00:28:49,310 - httpcore.connection - DEBUG - start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x13657a9c0>
+2025-09-02 00:28:49,311 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2025-09-02 00:28:49,311 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-09-02 00:28:49,311 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2025-09-02 00:28:49,311 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-09-02 00:28:49,311 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2025-09-02 00:28:49,512 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 401, b'Unauthorized', [(b'Date', b'Mon, 01 Sep 2025 21:28:49 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'496'), (b'Connection', b'keep-alive'), (b'vary', b'Origin'), (b'x-request-id', b'req_152404ce88a04cc2b9884f56099806cd'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=PFXWvXbNgjfbc4cAkP5yN4IW3rdnd4Sga384a4k3EvU-1756762129-1.0.1.1-d8L2G83sZzGX9gAp4tVsjZuYCPrjdCejnYX_ZLP3n1wvJ.2kCpEocLnFEhdVM9GmZgLFNkC.H3XcdkStup3IGl9NfSbEJqbWxu5PnD0P4js; path=/; expires=Mon, 01-Sep-25 21:58:49 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=lUHHi57M_3kYYgT.KTDAk17AMjoiAVaWDic2mtNN50k-1756762129661-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'9787dc0d8b39d0e4-SOF'), (b'alt-svc', b'h3=":443"; ma=86400')])
+2025-09-02 00:28:49,512 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 401 Unauthorized"
+2025-09-02 00:28:49,512 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2025-09-02 00:28:49,512 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-09-02 00:28:49,512 - httpcore.http11 - DEBUG - response_closed.started
+2025-09-02 00:28:49,512 - httpcore.http11 - DEBUG - response_closed.complete
+2025-09-02 00:28:49,512 - openai._base_client - DEBUG - HTTP Response: POST https://api.openai.com/v1/embeddings "401 Unauthorized" Headers([('date', 'Mon, 01 Sep 2025 21:28:49 GMT'), ('content-type', 'application/json; charset=utf-8'), ('content-length', '496'), ('connection', 'keep-alive'), ('vary', 'Origin'), ('x-request-id', 'req_152404ce88a04cc2b9884f56099806cd'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=PFXWvXbNgjfbc4cAkP5yN4IW3rdnd4Sga384a4k3EvU-1756762129-1.0.1.1-d8L2G83sZzGX9gAp4tVsjZuYCPrjdCejnYX_ZLP3n1wvJ.2kCpEocLnFEhdVM9GmZgLFNkC.H3XcdkStup3IGl9NfSbEJqbWxu5PnD0P4js; path=/; expires=Mon, 01-Sep-25 21:58:49 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=lUHHi57M_3kYYgT.KTDAk17AMjoiAVaWDic2mtNN50k-1756762129661-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '9787dc0d8b39d0e4-SOF'), ('alt-svc', 'h3=":443"; ma=86400')])
+2025-09-02 00:28:49,513 - openai._base_client - DEBUG - request_id: req_152404ce88a04cc2b9884f56099806cd
+2025-09-02 00:28:49,513 - openai._base_client - DEBUG - Encountered httpx.HTTPStatusError
+Traceback (most recent call last):
+  File "/Users/reza/workspace/Oraclous/oraclous-data-studio/.venv/lib/python3.12/site-packages/openai/_base_client.py", line 1027, in request
+    response.raise_for_status()
+  File "/Users/reza/workspace/Oraclous/oraclous-data-studio/.venv/lib/python3.12/site-packages/httpx/_models.py", line 829, in raise_for_status
+    raise HTTPStatusError(message, request=request, response=self)
+httpx.HTTPStatusError: Client error '401 Unauthorized' for url 'https://api.openai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401
+2025-09-02 00:28:49,513 - openai._base_client - DEBUG - Not retrying
+2025-09-02 00:28:49,513 - openai._base_client - DEBUG - Re-raising status error
+2025-09-02 00:28:49,513 - pipeline - ERROR - Text processing failed: Error code: 401 - {'error': {'message': "You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY), or as the password field (with blank username) if you're accessing the API from your browser and are prompted for a username and password. You can obtain an API key from https://platform.openai.com/account/api-keys.", 'type': 'invalid_request_error', 'param': None, 'code': None}}
+2025-09-02 00:28:49,513 - pipeline - INFO - Creating advanced retrieval system...
+2025-09-02 00:28:49,513 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:49,513 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:49,514 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:49,514 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,514 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,514 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,514 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,514 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,514 - neo4j.io - DEBUG - [#C905]  C: RUN 'CALL dbms.components()' {} {}
+2025-09-02 00:28:49,514 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,516 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,516 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,517 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 1, 'fields': ['name', 'versions', 'edition'], 'qid': 0}
+2025-09-02 00:28:49,517 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,517 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 's', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:49,517 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,517 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,518 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,518 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,518 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,518 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:49,518 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:49,518 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:49,518 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,518 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,518 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,518 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,518 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,518 - neo4j.io - DEBUG - [#C905]  C: RUN 'SHOW VECTOR INDEXES YIELD name, labelsOrTypes, properties, options WHERE name = $index_name RETURN labelsOrTypes as labels, properties, options.indexConfig.`vector.dimensions` as dimensions' {'index_name': 'text_embeddings_primary'} {}
+2025-09-02 00:28:49,518 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,519 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,519 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,520 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 0, 'fields': ['labels', 'properties', 'dimensions'], 'qid': 0}
+2025-09-02 00:28:49,522 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,522 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 'r', 't_last': 2, 'db': 'neo4j'}
+2025-09-02 00:28:49,522 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,522 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,523 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,523 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,523 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,523 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:49,523 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:49,523 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:49,523 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,523 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,523 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,523 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,523 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,523 - neo4j.io - DEBUG - [#C905]  C: RUN 'CALL dbms.components()' {} {}
+2025-09-02 00:28:49,523 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,524 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,524 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,525 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 0, 'fields': ['name', 'versions', 'edition'], 'qid': 0}
+2025-09-02 00:28:49,525 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,526 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 's', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:49,526 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,526 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,526 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,526 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,526 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,527 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:49,527 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:49,527 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:49,527 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,527 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,527 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,527 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,527 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,527 - neo4j.io - DEBUG - [#C905]  C: RUN 'SHOW VECTOR INDEXES YIELD name, labelsOrTypes, properties, options WHERE name = $index_name RETURN labelsOrTypes as labels, properties, options.indexConfig.`vector.dimensions` as dimensions' {'index_name': 'text_embeddings_primary'} {}
+2025-09-02 00:28:49,527 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,528 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,528 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,528 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 0, 'fields': ['labels', 'properties', 'dimensions'], 'qid': 0}
+2025-09-02 00:28:49,529 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,529 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 'r', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:49,529 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,529 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,530 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,530 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,530 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,530 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:49,530 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:49,530 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:49,530 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,530 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,530 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,530 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,530 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,530 - neo4j.io - DEBUG - [#C905]  C: RUN 'CALL dbms.components()' {} {}
+2025-09-02 00:28:49,530 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,531 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,531 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,531 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 1, 'fields': ['name', 'versions', 'edition'], 'qid': 0}
+2025-09-02 00:28:49,532 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,532 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 's', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:49,532 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,532 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,532 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,532 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,532 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,532 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:49,532 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:49,532 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:49,532 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,532 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,533 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,533 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,533 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,533 - neo4j.io - DEBUG - [#C905]  C: RUN 'SHOW VECTOR INDEXES YIELD name, labelsOrTypes, properties, options WHERE name = $index_name RETURN labelsOrTypes as labels, properties, options.indexConfig.`vector.dimensions` as dimensions' {'index_name': 'entity_embeddings'} {}
+2025-09-02 00:28:49,533 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,533 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,533 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,534 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 0, 'fields': ['labels', 'properties', 'dimensions'], 'qid': 0}
+2025-09-02 00:28:49,534 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,534 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 'r', 't_last': 1, 'db': 'neo4j'}
+2025-09-02 00:28:49,535 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,535 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,535 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,535 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,535 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,535 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:49,535 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:49,535 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:49,535 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,535 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,535 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,535 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,536 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,536 - neo4j.io - DEBUG - [#C905]  C: RUN 'CALL dbms.components()' {} {}
+2025-09-02 00:28:49,536 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,536 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,536 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,536 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 1, 'fields': ['name', 'versions', 'edition'], 'qid': 0}
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 's', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,537 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,537 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:49,537 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:49,537 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:49,537 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,537 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,537 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  C: RUN 'SHOW VECTOR INDEXES YIELD name, labelsOrTypes, properties, options WHERE name = $index_name RETURN labelsOrTypes as labels, properties, options.indexConfig.`vector.dimensions` as dimensions' {'index_name': 'text_embeddings_primary'} {}
+2025-09-02 00:28:49,537 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,538 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,538 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,538 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 0, 'fields': ['labels', 'properties', 'dimensions'], 'qid': 0}
+2025-09-02 00:28:49,539 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,539 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 'r', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:49,539 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,539 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,539 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,539 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,539 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,539 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: neo4j
+2025-09-02 00:28:49,539 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: 'neo4j'
+2025-09-02 00:28:49,539 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='WRITE', database=AcquisitionDatabase(name='neo4j', guessed=False)
+2025-09-02 00:28:49,539 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,539 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,539 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,540 - neo4j.io - DEBUG - [#C905]  C: RUN 'CALL db.schema.visualization()' {} {'db': 'neo4j'}
+2025-09-02 00:28:49,540 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > STREAMING
+2025-09-02 00:28:49,540 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,540 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 1, 'fields': ['nodes', 'relationships']}
+2025-09-02 00:28:49,540 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > STREAMING
+2025-09-02 00:28:49,546 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,547 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=', 'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 'r', 't_last': 5, 'db': 'neo4j'}
+2025-09-02 00:28:49,547 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: STREAMING > READY
+2025-09-02 00:28:49,547 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,547 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: None
+2025-09-02 00:28:49,547 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: None
+2025-09-02 00:28:49,547 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='READ', database=AcquisitionDatabase(name=None, guessed=False)
+2025-09-02 00:28:49,547 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,547 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,547 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,547 - neo4j.io - DEBUG - [#C905]  C: BEGIN {'mode': 'r', 'bookmarks': ['FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=']}
+2025-09-02 00:28:49,547 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: STREAMING > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,547 - neo4j.io - DEBUG - [#C905]  C: RUN 'CALL dbms.components()' {} {}
+2025-09-02 00:28:49,547 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,548 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {}
+2025-09-02 00:28:49,548 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > TX_READY_OR_TX_STREAMING
+2025-09-02 00:28:49,548 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 0, 'fields': ['name', 'versions', 'edition'], 'qid': 0}
+2025-09-02 00:28:49,548 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,548 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 's', 't_last': 1, 'db': 'neo4j'}
+2025-09-02 00:28:49,548 - neo4j.io - DEBUG - [#C905]  C: COMMIT
+2025-09-02 00:28:49,549 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,549 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA='}
+2025-09-02 00:28:49,549 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: TX_READY_OR_TX_STREAMING > READY
+2025-09-02 00:28:49,549 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,549 - pipeline - INFO - ✅ Created 5 retrieval strategies
+2025-09-02 00:28:49,549 - pipeline - INFO - Running performance benchmarks...
+2025-09-02 00:28:49,549 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> routing towards fixed database: neo4j
+2025-09-02 00:28:49,549 - neo4j - DEBUG - [#0000]  _: <WORKSPACE> pinning database: 'neo4j'
+2025-09-02 00:28:49,549 - neo4j.pool - DEBUG - [#0000]  _: <POOL> acquire direct connection, access_mode='WRITE', database=AcquisitionDatabase(name='neo4j', guessed=False)
+2025-09-02 00:28:49,549 - neo4j.pool - DEBUG - [#C905]  _: <POOL> picked existing connection bolt-64
+2025-09-02 00:28:49,549 - neo4j.pool - DEBUG - [#C905]  _: <POOL> checked re_auth auth=None updated=False force=False
+2025-09-02 00:28:49,549 - neo4j.pool - DEBUG - [#C905]  _: <POOL> handing out existing connection
+2025-09-02 00:28:49,549 - neo4j.io - DEBUG - [#C905]  C: RUN 'MATCH (n) RETURN count(n) as total_nodes' {} {'db': 'neo4j'}
+2025-09-02 00:28:49,549 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> client state: READY > STREAMING
+2025-09-02 00:28:49,549 - neo4j.io - DEBUG - [#C905]  C: PULL {'n': 1000}
+2025-09-02 00:28:49,550 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'t_first': 0, 'fields': ['total_nodes']}
+2025-09-02 00:28:49,550 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: READY > STREAMING
+2025-09-02 00:28:49,550 - neo4j.io - DEBUG - [#C905]  S: RECORD * 1
+2025-09-02 00:28:49,550 - neo4j.io - DEBUG - [#C905]  S: SUCCESS {'bookmark': 'FB:kcwQOhfKGZYCTwGdmWcKEJ2sTskCsZA=', 'statuses': [{'gql_status': '00000', 'status_description': 'note: successful completion'}], 'type': 'r', 't_last': 0, 'db': 'neo4j'}
+2025-09-02 00:28:49,550 - neo4j.io - DEBUG - [#C905]  _: <CONNECTION> server state: STREAMING > READY
+2025-09-02 00:28:49,550 - neo4j.pool - DEBUG - [#C905]  _: <POOL> released bolt-64
+2025-09-02 00:28:49,551 - openai._base_client - DEBUG - Request options: {'method': 'post', 'url': '/embeddings', 'files': None, 'idempotency_key': 'stainless-python-retry-8fbabfa3-e1f6-4be9-b07f-338609fe62fc', 'post_parser': <function Embeddings.create.<locals>.parser at 0x168012700>, 'json_data': {'input': 'artificial intelligence research', 'model': 'text-embedding-3-large', 'encoding_format': 'base64'}}
+2025-09-02 00:28:49,551 - openai._base_client - DEBUG - Sending HTTP Request: POST https://api.openai.com/v1/embeddings
+2025-09-02 00:28:49,551 - httpcore.http11 - DEBUG - send_request_headers.started request=<Request [b'POST']>
+2025-09-02 00:28:49,551 - httpcore.http11 - DEBUG - send_request_headers.complete
+2025-09-02 00:28:49,551 - httpcore.http11 - DEBUG - send_request_body.started request=<Request [b'POST']>
+2025-09-02 00:28:49,551 - httpcore.http11 - DEBUG - send_request_body.complete
+2025-09-02 00:28:49,551 - httpcore.http11 - DEBUG - receive_response_headers.started request=<Request [b'POST']>
+2025-09-02 00:28:49,764 - httpcore.http11 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 401, b'Unauthorized', [(b'Date', b'Mon, 01 Sep 2025 21:28:49 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'496'), (b'Connection', b'keep-alive'), (b'vary', b'Origin'), (b'x-request-id', b'req_680c9b6f4a2a4d4db078f0c4e8c34d39'), (b'cf-cache-status', b'DYNAMIC'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Server', b'cloudflare'), (b'CF-RAY', b'9787dc0f0e61d0e4-SOF'), (b'alt-svc', b'h3=":443"; ma=86400')])
+2025-09-02 00:28:49,764 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 401 Unauthorized"
+2025-09-02 00:28:49,764 - httpcore.http11 - DEBUG - receive_response_body.started request=<Request [b'POST']>
+2025-09-02 00:28:49,764 - httpcore.http11 - DEBUG - receive_response_body.complete
+2025-09-02 00:28:49,765 - httpcore.http11 - DEBUG - response_closed.started
+2025-09-02 00:28:49,765 - httpcore.http11 - DEBUG - response_closed.complete
+2025-09-02 00:28:49,765 - openai._base_client - DEBUG - HTTP Response: POST https://api.openai.com/v1/embeddings "401 Unauthorized" Headers({'date': 'Mon, 01 Sep 2025 21:28:49 GMT', 'content-type': 'application/json; charset=utf-8', 'content-length': '496', 'connection': 'keep-alive', 'vary': 'Origin', 'x-request-id': 'req_680c9b6f4a2a4d4db078f0c4e8c34d39', 'cf-cache-status': 'DYNAMIC', 'strict-transport-security': 'max-age=31536000; includeSubDomains; preload', 'x-content-type-options': 'nosniff', 'server': 'cloudflare', 'cf-ray': '9787dc0f0e61d0e4-SOF', 'alt-svc': 'h3=":443"; ma=86400'})
+2025-09-02 00:28:49,765 - openai._base_client - DEBUG - request_id: req_680c9b6f4a2a4d4db078f0c4e8c34d39
+2025-09-02 00:28:49,765 - openai._base_client - DEBUG - Encountered httpx.HTTPStatusError
+Traceback (most recent call last):
+  File "/Users/reza/workspace/Oraclous/oraclous-data-studio/.venv/lib/python3.12/site-packages/openai/_base_client.py", line 1027, in request
+    response.raise_for_status()
+  File "/Users/reza/workspace/Oraclous/oraclous-data-studio/.venv/lib/python3.12/site-packages/httpx/_models.py", line 829, in raise_for_status
+    raise HTTPStatusError(message, request=request, response=self)
+httpx.HTTPStatusError: Client error '401 Unauthorized' for url 'https://api.openai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401
+2025-09-02 00:28:49,765 - openai._base_client - DEBUG - Not retrying
+2025-09-02 00:28:49,765 - openai._base_client - DEBUG - Re-raising status error
+2025-09-02 00:28:49,766 - pipeline - ERROR - Vector benchmarks failed: Error code: 401 - {'error': {'message': "You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY), or as the password field (with blank username) if you're accessing the API from your browser and are prompted for a username and password. You can obtain an API key from https://platform.openai.com/account/api-keys.", 'type': 'invalid_request_error', 'param': None, 'code': None}}
+2025-09-02 00:28:49,766 - pipeline - INFO - Cleaning up pipeline resources...
+2025-09-02 00:28:49,766 - neo4j.pool - DEBUG - [#0000]  _: <POOL> close
+2025-09-02 00:28:49,766 - neo4j.io - DEBUG - [#C905]  C: GOODBYE
+2025-09-02 00:28:49,766 - neo4j.io - DEBUG - [#C905]  C: <CLOSE>
+2025-09-02 00:28:49,766 - pipeline - INFO - Pipeline cleanup completed
+2025-09-02 00:28:49,806 - httpcore.connection - DEBUG - close.started
+2025-09-02 00:28:49,806 - httpcore.connection - DEBUG - close.complete
