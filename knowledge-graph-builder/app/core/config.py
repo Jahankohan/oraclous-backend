@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
     DIFFBOT_API_KEY: Optional[str] = None
+    EMBEDDING_MODEL: Optional[str] = "text-embedding-3-large"
 
     # Modern Knowledge Graph Configuration
     USE_ENTITY_BASE_TYPE: bool = True  # Use __Entity__ instead of Entity
