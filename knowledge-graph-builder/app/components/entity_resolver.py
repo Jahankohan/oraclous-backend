@@ -257,82 +257,16 @@ class MultiTenantEntityDeduplicator(Component):
     async def _deduplicate_fuzzy_matches(self) -> int:
         """
         Find and consolidate entities with similar names using fuzzy matching.
-        This is a placeholder for future fuzzy matching implementation.
+        
+        This method uses APOC procedures for similarity calculations when available.
+        Falls back gracefully when APOC is not installed.
         
         Returns:
             Number of entities that were deduplicated via fuzzy matching
         """
-        # TODO: Implement fuzzy matching when needed
-        logger.debug("Fuzzy matching not yet implemented")
-        return 0
-        """
-        Find and resolve entities with identical names across different chunks.
+        entities_deduplicated = 0
         
-        Returns:
-            Number of SAME_AS relationships created
-        """
-        query = """
-        MATCH (e1:__Entity__)-[:FROM_CHUNK]->(c1:Chunk)
-        MATCH (e2:__Entity__)-[:FROM_CHUNK]->(c2:Chunk)
-        WHERE e1.graph_id = $graph_id 
-        AND e2.graph_id = $graph_id
-        AND e1.name = e2.name 
-        AND c1.index <> c2.index
-        AND elementId(e1) < elementId(e2)  // Avoid duplicates
-        AND NOT (e1)-[:SAME_AS]-(e2)  // Don't create if already exists
-        RETURN e1.name as entity_name,
-               elementId(e1) as e1_id,
-               elementId(e2) as e2_id,
-               c1.index as chunk1,
-               c2.index as chunk2
-        """
-        
-        create_query = """
-        MATCH (e1) WHERE elementId(e1) = $e1_id
-        MATCH (e2) WHERE elementId(e2) = $e2_id
-        MERGE (e1)-[:SAME_AS {
-            created_by: 'entity_resolution',
-            method: 'exact_match',
-            graph_id: $graph_id,
-            created_at: datetime()
-        }]-(e2)
-        """
-        
-        links_created = 0
-        
-        with self.driver.session(database=self.neo4j_database) as session:
-            # Find potential matches
-            result = session.run(query, graph_id=self.graph_id)
-            matches = list(result)
-            
-            # Create SAME_AS relationships
-            for record in matches:
-                try:
-                    session.run(
-                        create_query, 
-                        e1_id=record['e1_id'], 
-                        e2_id=record['e2_id'],
-                        graph_id=self.graph_id
-                    )
-                    links_created += 1
-                    logger.debug(f"   ✅ Linked '{record['entity_name']}' between "
-                                f"Chunk {record['chunk1']} ↔ Chunk {record['chunk2']}")
-                    
-                except Exception as e:
-                    logger.error(f"   ❌ Failed to link {record['entity_name']}: {e}")
-                    
-        return links_created
-        
-    async def _resolve_fuzzy_matches(self) -> int:
-        """
-        Find and resolve entities with similar names using fuzzy matching.
-        
-        Returns:
-            Number of SAME_AS relationships created
-        """
-        # For now, implement a simple similarity check
-        # In production, you might want to use more sophisticated algorithms
-        
+        # Query to find entities with similar names using fuzzy matching
         query = """
         MATCH (e1:__Entity__)-[:FROM_CHUNK]->(c1:Chunk)
         MATCH (e2:__Entity__)-[:FROM_CHUNK]->(c2:Chunk)
@@ -340,64 +274,71 @@ class MultiTenantEntityDeduplicator(Component):
         AND e2.graph_id = $graph_id
         AND c1.index <> c2.index
         AND elementId(e1) < elementId(e2)
-        AND NOT (e1)-[:SAME_AS]-(e2)
         AND NOT e1.name = e2.name  // Exclude exact matches
-        // Simple fuzzy matching using CONTAINS or similar patterns
+        // Simple fuzzy matching using CONTAINS or APOC similarity
         AND (
             e1.name CONTAINS e2.name OR 
             e2.name CONTAINS e1.name OR
-            apoc.text.levenshteinSimilarity(e1.name, e2.name) > $threshold
+            (EXISTS {
+                CALL apoc.text.levenshteinSimilarity(e1.name, e2.name) YIELD value
+                WHERE value > $threshold
+            })
         )
-        RETURN e1.name as name1,
-               e2.name as name2,
-               elementId(e1) as e1_id,
-               elementId(e2) as e2_id,
-               apoc.text.levenshteinSimilarity(e1.name, e2.name) as similarity
+        WITH e1, e2, 
+             CASE 
+                WHEN EXISTS { CALL apoc.text.levenshteinSimilarity(e1.name, e2.name) YIELD value }
+                THEN apoc.text.levenshteinSimilarity(e1.name, e2.name)
+                ELSE 0.9
+             END as similarity
+        WHERE similarity > $threshold
+        WITH e1.name as entity_name, collect(DISTINCT e1) + collect(DISTINCT e2) as entities
+        WHERE size(entities) > 1
+        RETURN entity_name, entities
         """
         
-        create_query = """
-        MATCH (e1) WHERE elementId(e1) = $e1_id
-        MATCH (e2) WHERE elementId(e2) = $e2_id
-        MERGE (e1)-[:SAME_AS {
-            created_by: 'entity_resolution',
-            method: 'fuzzy_match',
-            similarity_score: $similarity,
-            graph_id: $graph_id,
-            created_at: datetime()
-        }]-(e2)
-        """
-        
-        links_created = 0
-        
-        with self.driver.session(database=self.neo4j_database) as session:
-            try:
+        try:
+            with self.driver.session(database=self.neo4j_database) as session:
                 # Find potential fuzzy matches
                 result = session.run(
                     query, 
                     graph_id=self.graph_id,
                     threshold=self.similarity_threshold
                 )
-                matches = list(result)
+                fuzzy_groups = list(result)
                 
-                # Create SAME_AS relationships for fuzzy matches
-                for record in matches:
-                    try:
-                        session.run(
-                            create_query,
-                            e1_id=record['e1_id'],
-                            e2_id=record['e2_id'],
-                            similarity=record['similarity'],
-                            graph_id=self.graph_id
-                        )
-                        links_created += 1
-                        logger.debug(f"   ✅ Fuzzy linked '{record['name1']}' ↔ '{record['name2']}' "
-                                    f"(similarity: {record['similarity']:.2f})")
-                        
-                    except Exception as e:
-                        logger.error(f"   ❌ Failed to create fuzzy link: {e}")
-                        
-            except Exception as e:
-                # APOC might not be available, that's ok
-                logger.warning(f"Fuzzy matching requires APOC procedures: {e}")
+                logger.info(f"Found {len(fuzzy_groups)} entity groups with fuzzy matches")
                 
-        return links_created
+                # Process each group of similar entities
+                for record in fuzzy_groups:
+                    entity_name = record['entity_name']
+                    entities = record['entities']
+                    
+                    if len(entities) > 1:
+                        try:
+                            # Get chunks for these entities
+                            chunks = []
+                            for entity in entities:
+                                entity_chunks = session.run("""
+                                    MATCH (e)-[:FROM_CHUNK]->(c:Chunk)
+                                    WHERE elementId(e) = $entity_id
+                                    RETURN c
+                                """, entity_id=entity.element_id)
+                                chunks.extend([record['c'] for record in entity_chunks])
+                            
+                            # Remove duplicates
+                            unique_chunks = list({chunk.element_id: chunk for chunk in chunks}.values())
+                            
+                            # Consolidate the fuzzy matched entities
+                            deduplicated_count = await self._consolidate_entity_group(
+                                session, entity_name, entities, unique_chunks
+                            )
+                            entities_deduplicated += deduplicated_count
+                            
+                        except Exception as e:
+                            logger.error(f"Failed to deduplicate fuzzy entity group '{entity_name}': {e}")
+                
+        except Exception as e:
+            # APOC might not be available, that's ok
+            logger.warning(f"Fuzzy matching requires APOC procedures (falling back to exact matching only): {e}")
+                
+        return entities_deduplicated

@@ -4,14 +4,13 @@ Multi-tenant wrapper components following Neo4j GraphRAG factory patterns.
 Simple, maintainable wrappers that inject graph_id for tenant isolation.
 """
 
-from typing import List, Dict, Any, Optional
-from uuid import UUID
+from typing import List, Optional
 
 from neo4j_graphrag.retrievers.base import Retriever
 from neo4j_graphrag.retrievers import VectorRetriever, VectorCypherRetriever, HybridRetriever
 from neo4j_graphrag.experimental.components.kg_writer import Neo4jWriter
-from neo4j_graphrag.experimental.components.types import Neo4jGraph, Neo4jNode, Neo4jRelationship
-from neo4j_graphrag.types import RetrieverResult, RetrieverResultItem
+from neo4j_graphrag.experimental.components.types import Neo4jGraph
+from neo4j_graphrag.types import RetrieverResult
 from neo4j_graphrag.embeddings.base import Embedder
 from neo4j import Driver
 

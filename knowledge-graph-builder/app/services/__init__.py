@@ -7,7 +7,6 @@ CLEAN IMPORTS: Only services that exist after refactoring
 
 # Core services that remain after refactor
 from .analytics_service import analytics_service
-from .graph_service import graph_service
 from .llm_service import llm_service
 
 # NEW: Refactored services with Neo4j GraphRAG foundation
@@ -21,7 +20,6 @@ from .task_executor import AsyncTaskExecutor, TaskConcurrencyManager
 __all__ = [
     # Core services (kept)
     'analytics_service',
-    'graph_service', 
     'llm_service',
     
     # New Neo4j GraphRAG services

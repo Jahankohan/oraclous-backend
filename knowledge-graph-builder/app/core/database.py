@@ -1,6 +1,5 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-import asyncio
 from typing import AsyncGenerator
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -43,7 +42,7 @@ async def create_tables():
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created")
 
-async def check_db_health() -> dict:
+async def check_db_health() -> dict[str, str | bool]:
     """Check database connection health"""
     try:
         async with async_session_maker() as session:
