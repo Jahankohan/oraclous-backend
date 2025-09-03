@@ -1,4 +1,4 @@
-from neo4j import AsyncGraphDatabase, AsyncDriver
+from neo4j import AsyncGraphDatabase, GraphDatabase, AsyncDriver, Driver
 from typing import Optional, Dict, Any, List
 import asyncio
 from app.core.config import settings
@@ -7,32 +7,129 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 class Neo4jClient:
-    """Neo4j database client with async support - Single Database Edition"""
+    """
+    Enhanced Neo4j database client with dual driver support.
+    
+    Provides both asynchronous (for FastAPI endpoints) and synchronous 
+    (for neo4j_graphrag components) drivers to handle different usage patterns
+    in distributed architecture with FastAPI and Celery workers.
+    
+    Features:
+        - Async driver for FastAPI endpoints and async operations
+        - Sync driver for neo4j_graphrag components (VectorRetriever, etc.)
+        - Thread-safe connection management with locks
+        - Automatic index creation for multi-tenant graph isolation
+        - Health checking for both driver types
+    
+    Examples:
+        >>> client = Neo4jClient()
+        >>> await client.connect_async()  # For FastAPI
+        >>> client.connect_sync()         # For GraphRAG
+        >>> 
+        >>> # Use async driver for FastAPI operations
+        >>> async with client.async_driver.session() as session:
+        ...     result = await session.run("RETURN 1")
+        >>>
+        >>> # Use sync driver for GraphRAG components  
+        >>> with client.sync_driver.session() as session:
+        ...     result = session.run("RETURN 1")
+    
+    Note:
+        Both drivers connect to the same Neo4j database but serve different
+        purposes: async for web requests, sync for GraphRAG processing.
+    """
     
     def __init__(self):
-        self.driver: Optional[AsyncDriver] = None
-        self._lock = asyncio.Lock()
+        # Async driver for FastAPI endpoints
+        self.async_driver: Optional[AsyncDriver] = None
+        
+        # Sync driver for Neo4j GraphRAG components  
+        self.sync_driver: Optional[Driver] = None
+        
+        # Separate locks for thread-safe initialization
+        self._async_lock = asyncio.Lock()
+        self._sync_lock = asyncio.Lock()
     
-    async def connect(self) -> None:
-        """Establish connection to Neo4j"""
-        if self.driver is None:
-            async with self._lock:
-                if self.driver is None:
+    async def connect_async(self) -> None:
+        """
+        Establish asynchronous connection for FastAPI endpoints.
+        
+        Creates an async Neo4j driver optimized for FastAPI web requests
+        with appropriate connection pooling for concurrent HTTP operations.
+        
+        Raises:
+            ConnectionError: If unable to connect to Neo4j database
+            AuthError: If authentication credentials are invalid
+            
+        Note:
+            This method is idempotent - calling it multiple times will
+            reuse the existing connection if already established.
+        """
+        if self.async_driver is None:
+            async with self._async_lock:
+                if self.async_driver is None:
                     try:
-                        self.driver = AsyncGraphDatabase.driver(
+                        self.async_driver = AsyncGraphDatabase.driver(
                             settings.NEO4J_URI,
-                            auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD)
+                            auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
+                            max_connection_pool_size=getattr(settings, 'NEO4J_FASTAPI_POOL_SIZE', 100),
+                            connection_acquisition_timeout=getattr(settings, 'NEO4J_FASTAPI_TIMEOUT', 30)
                         )
-                        # Test connection - use default database
-                        await self.driver.verify_connectivity()
-                        logger.info("Successfully connected to Neo4j")
+                        # Test connection
+                        await self.async_driver.verify_connectivity()
+                        logger.info("FastAPI async driver connected successfully")
                         
-                        # Create graph_id index on first connection
+                        # Create indexes on first async connection
                         await self._create_initial_indexes()
                         
                     except Exception as e:
-                        logger.error(f"Failed to connect to Neo4j: {e}")
-                        raise
+                        logger.error(f"Failed to create async driver: {e}")
+                        raise ConnectionError(f"Cannot establish async Neo4j connection: {e}") from e
+
+    def connect_sync(self) -> None:
+        """
+        Establish synchronous connection for neo4j_graphrag components.
+        
+        Creates a sync Neo4j driver specifically for GraphRAG components
+        (VectorRetriever, Neo4jWriter, etc.) which require synchronous drivers.
+        
+        Raises:
+            ConnectionError: If unable to connect to Neo4j database
+            AuthError: If authentication credentials are invalid
+            
+        Note:
+            GraphRAG components require synchronous drivers. This method
+            creates a separate connection pool from the async driver.
+        """
+        if self.sync_driver is None:
+            # Note: Using a simple check here since sync operations don't need async locks
+            try:
+                self.sync_driver = GraphDatabase.driver(
+                    settings.NEO4J_URI,
+                    auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
+                    max_connection_pool_size=getattr(settings, 'NEO4J_WORKER_POOL_SIZE', 50),
+                    connection_acquisition_timeout=getattr(settings, 'NEO4J_WORKER_TIMEOUT', 30)
+                )
+                # Test connection
+                self.sync_driver.verify_connectivity()
+                logger.info("GraphRAG sync driver connected successfully")
+                
+            except Exception as e:
+                logger.error(f"Failed to create sync driver: {e}")
+                raise ConnectionError(f"Cannot establish sync Neo4j connection: {e}") from e
+    
+    # Backward compatibility method
+    async def connect(self) -> None:
+        """
+        Establish connection to Neo4j (backward compatibility).
+        
+        For backward compatibility with existing code that calls connect().
+        This method establishes the async connection.
+        
+        Note:
+            Use connect_async() for new code to be explicit about driver type.
+        """
+        await self.connect_async()
     
     async def _create_initial_indexes(self):
         """Create indexes for graph isolation"""
@@ -63,11 +160,47 @@ class Neo4jClient:
             logger.warning(f"Failed to create indexes: {e}")
 
     async def disconnect(self) -> None:
-        """Close Neo4j connection"""
-        if self.driver:
-            await self.driver.close()
-            self.driver = None
-            logger.info("Disconnected from Neo4j")
+        """
+        Close both async and sync connections.
+        
+        Cleanly shuts down both driver connections and their associated
+        connection pools. Safe to call multiple times.
+        
+        Note:
+            Always call this during application shutdown to ensure
+            proper cleanup of connection resources.
+        """
+        async with self._async_lock:
+            if self.async_driver:
+                try:
+                    await self.async_driver.close()
+                    logger.info("Async driver disconnected")
+                except Exception as e:
+                    logger.warning(f"Error closing async driver: {e}")
+                finally:
+                    self.async_driver = None
+        
+        if self.sync_driver:
+            try:
+                self.sync_driver.close()
+                logger.info("Sync driver disconnected")
+            except Exception as e:
+                logger.warning(f"Error closing sync driver: {e}")
+            finally:
+                self.sync_driver = None
+
+    # Backward compatibility method
+    async def close(self) -> None:
+        """
+        Close connection to Neo4j (backward compatibility).
+        
+        For backward compatibility with existing code that calls close().
+        This method disconnects both drivers.
+        
+        Note:
+            Use disconnect() for new code to be explicit about both drivers.
+        """
+        await self.disconnect()
     
     async def execute_query(
         self, 
@@ -75,12 +208,28 @@ class Neo4jClient:
         parameters: Optional[Dict[str, Any]] = None,
         database: Optional[str] = None  # Ignored - always use default
     ) -> List[Dict[str, Any]]:
-        """Execute a Cypher query and return results"""
-        if not self.driver:
-            await self.connect()
+        """
+        Execute a read query using the async driver.
+        
+        Args:
+            query: Cypher query string
+            parameters: Optional query parameters
+            database: Ignored for compatibility (always uses configured database)
+            
+        Returns:
+            List of query result records as dictionaries
+            
+        Raises:
+            ConnectionError: If async driver is not available
+            
+        Note:
+            Automatically connects async driver if not already connected.
+        """
+        if not self.async_driver:
+            await self.connect_async()
         
         try:
-            async with self.driver.session(database=settings.NEO4J_DATABASE) as session:
+            async with self.async_driver.session(database=settings.NEO4J_DATABASE) as session:
                 result = await session.run(query, parameters or {})
                 records = await result.data()
                 return records
@@ -96,42 +245,74 @@ class Neo4jClient:
         parameters: Optional[Dict[str, Any]] = None,
         database: Optional[str] = None  # Ignored - always use default
     ) -> List[Dict[str, Any]]:
-        """Execute a write query in a transaction"""
-        if not self.driver:
-            await self.connect()
+        """
+        Execute a write query using the async driver.
+        
+        Args:
+            query: Cypher write query string
+            parameters: Optional query parameters
+            database: Ignored for compatibility (always uses configured database)
+            
+        Returns:
+            List of query result records as dictionaries
+            
+        Raises:
+            ConnectionError: If async driver is not available
+            
+        Note:
+            Uses write transactions for data consistency.
+            Automatically connects async driver if not already connected.
+        """
+        if not self.async_driver:
+            await self.connect_async()
         
         try:
-            async with self.driver.session(database=settings.NEO4J_DATABASE) as session:
-                result = await session.execute_write(
-                    self._execute_query_tx, query, parameters or {}
-                )
+            async with self.async_driver.session(database=settings.NEO4J_DATABASE) as session:
+                async def tx_func(tx):
+                    result = await tx.run(query, parameters or {})
+                    return await result.data()
+                
+                result = await session.execute_write(tx_func)
                 return result
         except Exception as e:
             logger.error(f"Write query execution failed: {e}")
             raise
-    
-    @staticmethod
-    async def _execute_query_tx(tx, query: str, parameters: Dict[str, Any]):
-        """Transaction function for write queries"""
-        result = await tx.run(query, parameters)
-        return await result.data()
-    
+
     async def health_check(self) -> Dict[str, Any]:
-        """Check Neo4j connection health"""
+        """
+        Check Neo4j connection health for both drivers.
+        
+        Returns:
+            Dictionary with health status information including
+            connectivity status for both async and sync drivers.
+        """
         try:
-            if not self.driver:
-                await self.connect()
+            # Test async driver connection
+            if not self.async_driver:
+                await self.connect_async()
             
-            result = await self.execute_query("RETURN 1 as health")
+            # Test basic connectivity
+            await self.execute_query("RETURN 1 as health")
             
             # Get database info
             db_info = await self.execute_query(
                 "CALL dbms.components() YIELD name, versions, edition"
             )
             
+            # Test sync driver if needed by GraphRAG components
+            sync_status = "not_initialized"
+            if self.sync_driver:
+                try:
+                    with self.sync_driver.session(database=settings.NEO4J_DATABASE) as session:
+                        session.run("RETURN 1").consume()
+                    sync_status = "healthy"
+                except Exception:
+                    sync_status = "unhealthy"
+            
             return {
                 "status": "healthy",
-                "connected": True,
+                "async_driver": "connected",
+                "sync_driver": sync_status,
                 "database_info": db_info[0] if db_info else None,
                 "uri": settings.NEO4J_URI,
                 "database": settings.NEO4J_DATABASE
@@ -140,7 +321,8 @@ class Neo4jClient:
             logger.error(f"Neo4j health check failed: {e}")
             return {
                 "status": "unhealthy",
-                "connected": False,
+                "async_driver": "error", 
+                "sync_driver": "unknown",
                 "error": str(e),
                 "uri": settings.NEO4J_URI
             }

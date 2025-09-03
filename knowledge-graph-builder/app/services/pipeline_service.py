@@ -1,4 +1,4 @@
-# app/services/pipeline_service.py
+# app/services/pipeline_service.from ..components.entity_resolver import MultiTenantEntityDeduplicatory
 """
 Multi-Tenant Pipeline Service - Neo4j GraphRAG Foundation
 
@@ -11,6 +11,11 @@ DESIGN PRINCIPLES:
 - Simple, maintainable code (no complex abstractions)
 - FastAPI compatible with async support
 - Performance monitoring and error handling
+
+NEO4J DUAL DRIVER ARCHITECTURE:
+- Uses neo4j_client.sync_driver for GraphRAG components (VectorRetriever, Neo4jWriter, etc.)
+- Uses neo4j_client.execute_query() for async database operations
+- Automatic driver management and connection isolation
 """
 
 import asyncio
@@ -22,8 +27,10 @@ from fastapi import BackgroundTasks, HTTPException, status
 
 from neo4j_graphrag.llm import OpenAILLM
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
+from neo4j_graphrag.experimental.components.types import DocumentInfo, Neo4jGraph
 
 from app.components.multi_tenant_components import MultiTenantKGWriter, create_multi_tenant_kg_writer
+from app.components.entity_resolver import MultiTenantEntityDeduplicator
 from app.core.neo4j_client import neo4j_client
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -48,7 +55,7 @@ class PipelineConfig:
         
         # OpenAI Configuration
         self.openai_api_key = settings.OPENAI_API_KEY
-        self.llm_model = getattr(settings, 'LLM_MODEL', 'gpt-4')
+        self.llm_model = getattr(settings, 'LLM_MODEL', 'gpt-4o')  # Use gpt-4o which supports json_object
         self.llm_temperature = getattr(settings, 'LLM_TEMPERATURE', 0.1)
         self.llm_max_tokens = getattr(settings, 'LLM_MAX_TOKENS', 3000)
         
@@ -69,6 +76,11 @@ class PipelineConfig:
         self.enable_performance_monitoring = True
         self.enable_detailed_logging = True
         self.on_error = "IGNORE"  # Continue processing on errors
+        
+        # TODO: Implement Schema-Guided Extraction similar to benchmark's AdvancedSchemaManager
+        # The benchmark implementation uses sophisticated schema learning from text samples
+        # which could improve entity extraction accuracy, type consistency, and entity count
+        # See benchmark.py AdvancedSchemaManager class for reference implementation
 
 
 # ==================== MULTI-TENANT PIPELINE WRAPPER ====================
@@ -106,29 +118,63 @@ class MultiTenantGraphRAGPipeline:
         
         logger.info(f"MultiTenantGraphRAGPipeline created for graph {graph_id}")
     
+    def _model_supports_json_object(self, model_name: str) -> bool:
+        """
+        Check if the OpenAI model supports response_format with json_object.
+        Only newer models support this feature.
+        """
+        json_supported_models = [
+            "gpt-4o",
+            "gpt-4o-mini", 
+            "gpt-4-turbo",
+            "gpt-4-1106-preview",
+            "gpt-4-0125-preview",
+            "gpt-3.5-turbo-1106",
+            "gpt-3.5-turbo-0125"
+        ]
+        
+        # Check if the model name contains any of the supported model identifiers
+        return any(supported_model in model_name for supported_model in json_supported_models)
+    
     async def _initialize_components(self):
-        """Initialize Neo4j GraphRAG components using your patterns."""
+        """
+        Initialize Neo4j GraphRAG components using dual driver architecture.
+        
+        Uses sync driver for GraphRAG components and async operations through neo4j_client.
+        """
         if self._initialized:
             return
         
         try:
-            # Use existing Neo4j client (consistent with other services)
-            self.driver = neo4j_client.driver
+            # Ensure both drivers are available
+            await neo4j_client.connect_async()  # For async operations
+            neo4j_client.connect_sync()          # For GraphRAG components
+            
+            # Use sync driver for GraphRAG components (required by neo4j_graphrag)
+            self.driver = neo4j_client.sync_driver
             if not self.driver:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Neo4j connection not available"
+                    detail="Neo4j sync connection not available for GraphRAG"
                 )
             
-            # Initialize OpenAI LLM
+            # Initialize OpenAI LLM with conditional response format
+            model_params: Dict[str, Any] = {
+                "temperature": self.config.llm_temperature,
+                "max_tokens": self.config.llm_max_tokens
+            }
+            
+            # Only add response_format for models that support it
+            if self._model_supports_json_object(self.config.llm_model):
+                model_params["response_format"] = {"type": "json_object"}
+                logger.info(f"Using JSON object response format for model {self.config.llm_model}")
+            else:
+                logger.warning(f"Model {self.config.llm_model} does not support JSON object response format")
+            
             self.llm = OpenAILLM(
                 model_name=self.config.llm_model,
                 api_key=self.config.openai_api_key,
-                model_params={
-                    "temperature": self.config.llm_temperature,
-                    "max_tokens": self.config.llm_max_tokens,
-                    "response_format": {"type": "json_object"}
-                }
+                model_params=model_params
             )
             
             # Initialize OpenAI embedder
@@ -264,12 +310,15 @@ class MultiTenantGraphRAGPipeline:
         """
         Process a single document using Neo4j GraphRAG components.
         
-        This is a simplified implementation - you can enhance it by integrating
-        your full AdvancedGraphRAGPipeline from refactor/clean/pipeline.py
+        This processes chunks independently which can create duplicate entities.
+        The solution is to add proper entity resolution after extraction.
         """
         from neo4j_graphrag.experimental.components.text_splitters.fixed_size_splitter import FixedSizeSplitter
-        from neo4j_graphrag.experimental.components.entity_relation_extractor import LLMEntityRelationExtractor
+        from neo4j_graphrag.experimental.components.entity_relation_extractor import LLMEntityRelationExtractor, OnError
         from neo4j_graphrag.experimental.components.embedder import TextChunkEmbedder
+        
+        # 0. Create DocumentInfo for proper lexical graph support
+        document_info = DocumentInfo(path=source)
         
         # 1. Text Splitting
         splitter = FixedSizeSplitter(
@@ -279,26 +328,176 @@ class MultiTenantGraphRAGPipeline:
         chunks = await splitter.run(text=text)
         
         # 2. Chunk Embedding  
-        chunk_embedder = TextChunkEmbedder(embedder=self.embedder)
-        embedded_chunks = await chunk_embedder.run(text_chunks=chunks)
+        if self.embedder:
+            chunk_embedder = TextChunkEmbedder(embedder=self.embedder)
+            embedded_chunks = await chunk_embedder.run(text_chunks=chunks)
+        else:
+            embedded_chunks = chunks
         
-        # 3. Entity & Relationship Extraction
-        extractor = LLMEntityRelationExtractor(
-            llm=self.llm,
-            create_lexical_graph=True,  # Creates Document/Chunk nodes
-            on_error=self.config.on_error
-        )
-        graph = await extractor.run(chunks=embedded_chunks)
+        # 3. Entity & Relationship Extraction with document info
+        if self.llm:
+            extractor = LLMEntityRelationExtractor(
+                llm=self.llm,
+                create_lexical_graph=True,  # Creates Document/Chunk nodes
+                on_error=OnError.IGNORE
+            )
+            graph = await extractor.run(chunks=embedded_chunks, document_info=document_info)
+            
+            # TODO: Add Schema-Guided Extraction similar to benchmark implementation
+            # The benchmark uses AdvancedSchemaManager with schema learning from text samples
+            # This could improve entity extraction accuracy and type consistency
+            
+            # Detailed logging for entity analysis
+            logger.info(f"Raw extraction: {len(graph.nodes)} nodes, {len(graph.relationships)} relationships")
+            
+            # Log entity breakdown by type/label
+            entity_types = {}
+            entity_names = []
+            for node in graph.nodes:
+                node_label = getattr(node, 'label', 'Unknown')
+                entity_types[node_label] = entity_types.get(node_label, 0) + 1
+                if hasattr(node, 'properties') and node.properties and node.properties.get('name'):
+                    entity_names.append(node.properties['name'])
+            
+            logger.info(f"Raw extraction entity breakdown by type: {entity_types}")
+            logger.info(f"Extracted entity names: {entity_names}")
+            
+        else:
+            logger.error("LLM not available for entity extraction")
+            return {"entities_created": 0, "relationships_created": 0, "chunks_created": 0}
         
-        # 4. Multi-tenant metadata injection (automatic via kg_writer)
+        # 4. Pre-process: Normalize entity IDs to handle chunk overlap
+        logger.info("Starting entity normalization to handle chunk overlaps...")
+        graph = await self._normalize_overlapping_entities(graph)
+        logger.info(f"After normalization: {len(graph.nodes)} nodes, {len(graph.relationships)} relationships")
+        
+        # 5. Multi-tenant metadata injection (automatic via kg_writer)
         await kg_writer.run(graph)
+        logger.info(f"Graph writing completed, starting entity deduplication for graph {self.graph_id}")
         
+        # 6. Entity Deduplication - Consolidate duplicate entities across chunks
+        logger.info(f"Checking driver availability for deduplication: driver={self.driver is not None}")
+        if self.driver:  # Ensure driver is available
+            logger.info(f"Creating entity deduplicator for graph {self.graph_id}")
+            entity_deduplicator = MultiTenantEntityDeduplicator(
+                driver=self.driver,
+                graph_id=self.graph_id,
+                similarity_threshold=0.85,
+                enable_fuzzy_matching=False  # Start with exact matching only
+            )
+            
+            # Run entity deduplication on the graph
+            logger.info(f"Running entity deduplication for graph {self.graph_id}")
+            await entity_deduplicator.run(graph)
+            logger.info(f"Entity deduplication completed for graph {self.graph_id}")
+        else:
+            logger.warning("Neo4j driver not available - skipping entity deduplication")
+
         # Return statistics
         return {
             "entities_created": len(graph.nodes) if graph and graph.nodes else 0,
             "relationships_created": len(graph.relationships) if graph and graph.relationships else 0,
-            "chunks_created": len(chunks) if chunks else 0
+            "chunks_created": len(chunks.chunks) if chunks and hasattr(chunks, 'chunks') else 0
         }
+    
+    async def _normalize_overlapping_entities(self, graph: Neo4jGraph) -> Neo4jGraph:
+        """
+        Normalize entity IDs to handle chunk overlap by removing chunk prefixes
+        and creating consistent entity identifiers based on entity names.
+        
+        This solves the chunk overlap issue where the same entity appears in multiple
+        chunks with different IDs (e.g., chunk_1:Alex Thompson vs chunk_2:Alex Thompson).
+        """
+        from typing import Dict, Any
+        
+        if not graph or not graph.nodes:
+            return graph
+        
+        # Step 1: Create mapping from entity names to canonical IDs
+        entity_name_to_canonical_id: Dict[str, str] = {}
+        old_id_to_new_id: Dict[str, str] = {}
+        original_entity_count = len(graph.nodes)
+        
+        # Track what we're merging for debugging
+        entities_by_name = {}
+        
+        for node in graph.nodes:
+            if not hasattr(node, 'properties') or not node.properties:
+                continue
+                
+            entity_name = node.properties.get('name')
+            if not entity_name:
+                continue
+            
+            # Track entities with same name for debugging
+            if entity_name not in entities_by_name:
+                entities_by_name[entity_name] = []
+            entities_by_name[entity_name].append({
+                'id': node.id,
+                'label': getattr(node, 'label', 'Unknown'),
+                'properties': node.properties
+            })
+            
+            # Create canonical ID from entity name (remove chunk prefix if exists)
+            original_id = node.id
+            if ':' in original_id:
+                # Extract the actual entity name part after chunk prefix
+                canonical_id = original_id.split(':', 1)[1]
+            else:
+                canonical_id = original_id
+            
+            # Use entity name as the canonical identifier
+            if entity_name not in entity_name_to_canonical_id:
+                entity_name_to_canonical_id[entity_name] = canonical_id
+            
+            # Map old chunk-prefixed ID to canonical ID
+            old_id_to_new_id[original_id] = entity_name_to_canonical_id[entity_name]
+        
+        # Log what we're about to merge
+        entities_to_merge = {name: entities for name, entities in entities_by_name.items() if len(entities) > 1}
+        if entities_to_merge:
+            logger.info(f"🔄 Entities being merged due to same name:")
+            for entity_name, entity_variations in entities_to_merge.items():
+                logger.info(f"  📍 '{entity_name}': {len(entity_variations)} variations")
+                for i, variation in enumerate(entity_variations):
+                    logger.info(f"    {i+1}. ID: {variation['id']}, Label: {variation['label']}")
+        else:
+            logger.info("✅ No duplicate entity names found - no merging needed")
+        
+        # Step 2: Update node IDs to use canonical IDs
+        for node in graph.nodes:
+            if node.id in old_id_to_new_id:
+                node.id = old_id_to_new_id[node.id]
+        
+        # Step 3: Update relationship references to use canonical IDs
+        for rel in graph.relationships:
+            if rel.start_node_id in old_id_to_new_id:
+                rel.start_node_id = old_id_to_new_id[rel.start_node_id]
+            if rel.end_node_id in old_id_to_new_id:
+                rel.end_node_id = old_id_to_new_id[rel.end_node_id]
+        
+        # Step 4: Remove duplicate nodes with same canonical ID
+        unique_nodes = {}
+        for node in graph.nodes:
+            node_key = node.id
+            if node_key not in unique_nodes:
+                unique_nodes[node_key] = node
+            else:
+                # Merge properties if needed (take the one with more properties)
+                existing_node = unique_nodes[node_key]
+                if (hasattr(node, 'properties') and node.properties and 
+                    len(node.properties) > len(existing_node.properties or {})):
+                    unique_nodes[node_key] = node
+        
+        # Update graph with deduplicated nodes
+        graph.nodes = list(unique_nodes.values())
+        
+        logger.info(f"Entity normalization: Reduced {len(old_id_to_new_id)} entity references "
+                   f"to {len(unique_nodes)} unique entities")
+        logger.info(f"📊 Normalization summary: {original_entity_count} → {len(unique_nodes)} entities "
+                   f"({original_entity_count - len(unique_nodes)} merged)")
+        
+        return graph
     
     async def _process_documents_background(self, documents: List[Dict[str, Any]]):
         """Background processing for large document sets."""
@@ -365,7 +564,7 @@ class PipelineService:
     
     def __init__(self):
         """Initialize pipeline service."""
-        self._pipeline_cache = {}  # Cache pipelines per graph_id
+        self._pipeline_cache: Dict[str, MultiTenantGraphRAGPipeline] = {}  # Cache pipelines per graph_id
         logger.info("PipelineService initialized")
     
     def get_pipeline(self, graph_id: UUID, user_id: Optional[str] = None) -> MultiTenantGraphRAGPipeline:

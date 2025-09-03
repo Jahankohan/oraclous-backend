@@ -304,8 +304,10 @@ def create_multi_tenant_vector_retriever(
     FastAPI-compatible factory function for vector retrievers.
     
     Usage in FastAPI services:
+        # Ensure sync driver is connected for GraphRAG components
+        neo4j_client.connect_sync()
         retriever = create_multi_tenant_vector_retriever(
-            driver=neo4j_client.driver,
+            driver=neo4j_client.sync_driver,
             embedder=openai_embedder,
             graph_id=str(graph_id)
         )
@@ -330,8 +332,10 @@ def create_multi_tenant_hybrid_retriever(
     FastAPI-compatible factory function for hybrid retrievers.
     
     Usage in FastAPI services:
+        # Ensure sync driver is connected for GraphRAG components
+        neo4j_client.connect_sync()
         retriever = create_multi_tenant_hybrid_retriever(
-            driver=neo4j_client.driver,
+            driver=neo4j_client.sync_driver,
             embedder=openai_embedder,
             graph_id=str(graph_id)
         )
@@ -355,8 +359,10 @@ def create_multi_tenant_kg_writer(
     FastAPI-compatible factory function for KG writers.
     
     Usage in FastAPI services:
+        # Ensure sync driver is connected for GraphRAG components
+        neo4j_client.connect_sync()
         writer = create_multi_tenant_kg_writer(
-            driver=neo4j_client.driver,
+            driver=neo4j_client.sync_driver,
             graph_id=str(graph_id),
             user_id=current_user_id
         )

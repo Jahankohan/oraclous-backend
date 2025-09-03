@@ -8,13 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlalchemy import select, update, or_
 from sqlalchemy.pool import NullPool
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from app.core.config import settings
 from app.models.graph import IngestionJob, KnowledgeGraph
 from app.services.task_executor import AsyncTaskExecutor, TaskConcurrencyManager
 from app.services.pipeline_service import pipeline_service
+from app.services.document_processor import document_processor
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -33,6 +34,190 @@ worker_session_maker = async_sessionmaker(
     autoflush=False,
     autocommit=False
 )
+
+
+# ==================== WORKER NEO4J CONNECTION MANAGER ====================
+
+class WorkerNeo4jManager:
+    """
+    Neo4j connection manager for Celery workers using task-scoped connections.
+    
+    Follows the PostgreSQL NullPool pattern to ensure each Celery task gets
+    its own Neo4j connection, preventing connection pool conflicts between
+    FastAPI and worker processes.
+    
+    Features:
+    - Task-scoped connections (no connection pooling between tasks)
+    - Automatic cleanup after task completion
+    - Support for both sync (GraphRAG) and async operations
+    - Isolation from FastAPI connection pools
+    
+    Usage:
+        async with WorkerNeo4jManager() as neo4j:
+            driver = neo4j.get_sync_driver()  # For GraphRAG components
+            # Use driver for the task
+            # Automatic cleanup when exiting context
+    """
+    
+    def __init__(self):
+        """Initialize worker Neo4j manager."""
+        self.sync_driver = None
+        self.async_driver = None
+        self._logger = get_logger(f"{__name__}.WorkerNeo4jManager")
+    
+    async def __aenter__(self):
+        """Async context manager entry - create fresh connections."""
+        await self.connect()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - cleanup connections."""
+        await self.cleanup()
+    
+    def __enter__(self):
+        """Sync context manager entry - create fresh connections."""
+        self.connect_sync_only()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Sync context manager exit - cleanup connections."""
+        self.cleanup_sync()
+    
+    async def connect(self):
+        """
+        Create fresh Neo4j connections for this task.
+        
+        Creates both async and sync drivers with minimal connection pools
+        to ensure task isolation following the NullPool pattern.
+        """
+        try:
+            # Import here to avoid circular imports
+            from neo4j import AsyncGraphDatabase, GraphDatabase
+            
+            # Create sync driver for GraphRAG components (1 connection max)
+            if not self.sync_driver:
+                self.sync_driver = GraphDatabase.driver(
+                    settings.NEO4J_URI,
+                    auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
+                    max_connection_pool_size=1,  # Minimal pool like NullPool
+                    connection_acquisition_timeout=30
+                )
+                # Test sync connection
+                self.sync_driver.verify_connectivity()
+                self._logger.debug("Worker sync driver connected")
+            
+            # Create async driver for any async operations (1 connection max)
+            if not self.async_driver:
+                self.async_driver = AsyncGraphDatabase.driver(
+                    settings.NEO4J_URI,
+                    auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
+                    max_connection_pool_size=1,  # Minimal pool like NullPool
+                    connection_acquisition_timeout=30
+                )
+                # Test async connection
+                await self.async_driver.verify_connectivity()
+                self._logger.debug("Worker async driver connected")
+                
+        except Exception as e:
+            self._logger.error(f"Failed to create worker Neo4j connections: {e}")
+            await self.cleanup()
+            raise
+    
+    def connect_sync_only(self):
+        """
+        Create only sync Neo4j connection for sync-only tasks.
+        
+        Optimized for tasks that only need GraphRAG components.
+        """
+        try:
+            from neo4j import GraphDatabase
+            
+            if not self.sync_driver:
+                self.sync_driver = GraphDatabase.driver(
+                    settings.NEO4J_URI,
+                    auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
+                    max_connection_pool_size=1,  # Minimal pool like NullPool
+                    connection_acquisition_timeout=30
+                )
+                # Test connection
+                self.sync_driver.verify_connectivity()
+                self._logger.debug("Worker sync-only driver connected")
+                
+        except Exception as e:
+            self._logger.error(f"Failed to create worker sync Neo4j connection: {e}")
+            self.cleanup_sync()
+            raise
+    
+    def get_sync_driver(self):
+        """
+        Get sync driver for GraphRAG components.
+        
+        Returns:
+            Neo4j sync driver instance
+            
+        Raises:
+            RuntimeError: If sync driver is not available
+        """
+        if not self.sync_driver:
+            raise RuntimeError("Sync driver not available. Use context manager to connect.")
+        return self.sync_driver
+    
+    def get_async_driver(self):
+        """
+        Get async driver for async operations.
+        
+        Returns:
+            Neo4j async driver instance
+            
+        Raises:
+            RuntimeError: If async driver is not available
+        """
+        if not self.async_driver:
+            raise RuntimeError("Async driver not available. Use async context manager to connect.")
+        return self.async_driver
+    
+    async def cleanup(self):
+        """Clean up both sync and async connections."""
+        if self.async_driver:
+            try:
+                await self.async_driver.close()
+                self._logger.debug("Worker async driver closed")
+            except Exception as e:
+                self._logger.warning(f"Error closing worker async driver: {e}")
+            finally:
+                self.async_driver = None
+        
+        self.cleanup_sync()
+    
+    def cleanup_sync(self):
+        """Clean up only sync connections."""
+        if self.sync_driver:
+            try:
+                self.sync_driver.close()
+                self._logger.debug("Worker sync driver closed")
+            except Exception as e:
+                self._logger.warning(f"Error closing worker sync driver: {e}")
+            finally:
+                self.sync_driver = None
+
+
+# Example usage for future worker tasks:
+# 
+# async def some_worker_task():
+#     async with WorkerNeo4jManager() as neo4j:
+#         sync_driver = neo4j.get_sync_driver()  # For GraphRAG components
+#         async_driver = neo4j.get_async_driver()  # For async operations
+#         
+#         # Use drivers for task operations
+#         # Automatic cleanup when exiting context
+#
+# OR for sync-only tasks:
+#
+# def some_sync_worker_task():
+#     with WorkerNeo4jManager() as neo4j:
+#         sync_driver = neo4j.get_sync_driver()  # For GraphRAG components
+#         # Use driver for task operations
+#         # Automatic cleanup when exiting context
 
 # Configure Celery
 celery_app = Celery(
@@ -107,15 +292,47 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
                 meta={"progress": 10, "status": "Starting Neo4j GraphRAG pipeline processing"}
             )
         
-        # STEP 3: Convert job content to documents format
+        # STEP 3: Process document content based on source type
+        try:
+            processed_doc = document_processor.process_document(
+                content=job.source_content,
+                source_type=job.source_type or "text",
+                metadata={
+                    "job_id": job_id,
+                    "graph_id": str(job.graph_id),
+                    "user_id": user_id
+                }
+            )
+            
+            # Enhanced document metadata from processor
+            document_text = processed_doc["text"]
+            base_metadata = processed_doc["metadata"]
+            
+        except Exception as e:
+            logger.error(f"Document processing failed for job {job_id}: {e}")
+            async with worker_session_maker() as session:
+                await _update_job_status_async(session, job_id, "failed", error=f"Document processing failed: {str(e)}")
+            return {
+                "status": "failed",
+                "job_id": job_id,
+                "error": f"Document processing failed: {str(e)}"
+            }
+
+        # STEP 4: Convert processed document to GraphRAG format
         documents = [{
-            "text": job.source_content,
+            "text": document_text,
             "source": f"job_{job_id}",
             "title": f"Document from job {job_id}",
+            "id": job_id,  # Add explicit document ID
             "metadata": {
+                **base_metadata,  # Include processed metadata
                 "job_id": job_id,
                 "graph_id": str(job.graph_id),
-                "user_id": user_id
+                "user_id": user_id,
+                "source_type": job.source_type or "text",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "document_title": f"Document from job {job_id}",
+                "document_source": f"job_{job_id}"
             }
         }]
         
@@ -132,7 +349,6 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
             documents=documents,
             graph_id=job.graph_id,
             user_id=user_id
-            # No background_tasks here - we want synchronous processing in Celery
         )
         
         logger.info(f"Pipeline processing result: {pipeline_result}")

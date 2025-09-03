@@ -51,8 +51,12 @@ class RetrievalService:
             driver: Neo4j driver (defaults to global client)
             embedder: OpenAI embedder (defaults to configured instance)
         """
-        # Use direct driver access (Neo4j GraphRAG pattern)
-        self.driver = driver or neo4j_client.driver
+        # Use sync driver for Neo4j GraphRAG components (Phase 4: Dual Driver Architecture)
+        # GraphRAG components require synchronous drivers
+        if driver is None:
+            neo4j_client.connect_sync()  # Ensure sync driver is connected
+            driver = neo4j_client.sync_driver
+        self.driver = driver
         
         # Create OpenAI embedder (Neo4j GraphRAG pattern)
         self.embedder = embedder or OpenAIEmbeddings(
