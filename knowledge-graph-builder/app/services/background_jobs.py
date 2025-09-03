@@ -5,7 +5,7 @@ Clean implementation with Neo4j GraphRAG pipeline and multi-tenant support
 
 from celery import Celery
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import select, update, or_
+from sqlalchemy import select, update
 from sqlalchemy.pool import NullPool
 from typing import Dict, Any
 from datetime import datetime, timezone
@@ -13,7 +13,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.models.graph import IngestionJob, KnowledgeGraph
-from app.services.task_executor import AsyncTaskExecutor, TaskConcurrencyManager
+from app.services.task_executor import AsyncTaskExecutor
 from app.services.pipeline_service import pipeline_service
 from app.services.document_processor import document_processor
 from app.core.logging import get_logger
@@ -199,25 +199,6 @@ class WorkerNeo4jManager:
                 self._logger.warning(f"Error closing worker sync driver: {e}")
             finally:
                 self.sync_driver = None
-
-
-# Example usage for future worker tasks:
-# 
-# async def some_worker_task():
-#     async with WorkerNeo4jManager() as neo4j:
-#         sync_driver = neo4j.get_sync_driver()  # For GraphRAG components
-#         async_driver = neo4j.get_async_driver()  # For async operations
-#         
-#         # Use drivers for task operations
-#         # Automatic cleanup when exiting context
-#
-# OR for sync-only tasks:
-#
-# def some_sync_worker_task():
-#     with WorkerNeo4jManager() as neo4j:
-#         sync_driver = neo4j.get_sync_driver()  # For GraphRAG components
-#         # Use driver for task operations
-#         # Automatic cleanup when exiting context
 
 # Configure Celery
 celery_app = Celery(
@@ -493,206 +474,4 @@ async def _update_job_status_async(
     except Exception as e:
         logger.error(f"Failed to update job {job_id} status: {e}")
         await session.rollback()
-        raise
-
-
-# ==================== OTHER TASKS (KEPT UNCHANGED) ====================
-
-@celery_app.task(bind=True)
-def process_embedding_generation_job(self, graph_id: str, user_id: str):
-    """Generate embeddings for existing nodes - USES YOUR AsyncTaskExecutor pattern"""
-    return AsyncTaskExecutor.run_async_task(_generate_embeddings_async, self, graph_id, user_id)
-
-
-async def _generate_embeddings_async(task, graph_id: str, user_id: str):
-    """Generate embeddings for existing nodes"""
-    try:
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 20, "status": "Starting embedding generation"})
-        
-        # For now, we'll skip embedding generation since embedding_service was removed
-        # This can be implemented later when needed
-        logger.info(f"Embedding generation requested for graph {graph_id} - skipping for now (service refactored)")
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 100, "status": "Embedding generation skipped - service refactored"})
-        
-        return {
-            "status": "skipped",
-            "message": "Embedding generation temporarily disabled during refactor",
-            "graph_id": graph_id
-        }
-        
-    except Exception as e:
-        logger.error(f"Embedding generation failed for graph {graph_id}: {e}")
-        raise
-
-
-@celery_app.task(bind=True)
-def optimize_all_graphs(self):
-    """Optimize all graphs - SINGLETON using your TaskConcurrencyManager"""
-    if not TaskConcurrencyManager.should_allow_task('optimize_all_graphs', self.request.id):
-        return {'status': 'skipped', 'message': 'Optimization already running'}
-    
-    return AsyncTaskExecutor.run_async_task(_optimize_all_graphs_async, self)
-
-
-async def _optimize_all_graphs_async(task):
-    """Optimize all graphs in the system"""
-    try:
-        from app.services.analytics_service import analytics_service
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 20, "status": "Finding graphs to optimize"})
-        
-        # Get all graphs that need optimization
-        async with worker_session_maker() as session:
-            result = await session.execute(
-                select(KnowledgeGraph).where(
-                    or_(
-                        KnowledgeGraph.last_optimized.is_(None),
-                        KnowledgeGraph.last_optimized < datetime.utcnow() - settings.OPTIMIZATION_INTERVAL
-                    )
-                )
-            )
-            graphs = result.scalars().all()
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 40, "status": f"Optimizing {len(graphs)} graphs"})
-        
-        optimized_count = 0
-        for i, graph in enumerate(graphs):
-            try:
-                logger.info(f"Optimizing graph {graph.id} ({i+1}/{len(graphs)})")
-                
-                # Run analytics optimization
-                await analytics_service.optimize_graph_structure(graph.id)
-                optimized_count += 1
-                
-                # Update progress
-                progress = 40 + int((i + 1) / len(graphs) * 50)
-                if task:
-                    task.update_state(
-                        state="PROGRESS", 
-                        meta={"progress": progress, "status": f"Optimized {i+1}/{len(graphs)} graphs"}
-                    )
-                
-            except Exception as e:
-                logger.error(f"Failed to optimize graph {graph.id}: {e}")
-                continue
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 100, "status": "Graph optimization completed"})
-        
-        return {
-            "status": "completed",
-            "graphs_processed": len(graphs),
-            "graphs_optimized": optimized_count
-        }
-        
-    except Exception as e:
-        logger.error(f"Graph optimization failed: {e}")
-        raise
-
-
-@celery_app.task(bind=True)
-def cleanup_orphaned_data(self):
-    """Clean up orphaned data - SINGLETON using your TaskConcurrencyManager"""
-    if not TaskConcurrencyManager.should_allow_task('cleanup_orphaned_data', self.request.id):
-        return {'status': 'skipped', 'message': 'Cleanup already running'}
-    
-    return AsyncTaskExecutor.run_async_task(_cleanup_orphaned_data_async, self)
-
-
-async def _cleanup_orphaned_data_async(task):
-    """Clean up orphaned nodes and relationships"""
-    try:
-        from app.services.graph_service import graph_service
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 30, "status": "Identifying orphaned data"})
-        
-        # Clean up orphaned nodes and relationships
-        cleanup_result = await graph_service.cleanup_orphaned_data()
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 80, "status": "Compacting database"})
-        
-        # Compact database if needed
-        await graph_service.compact_database()
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 100, "status": "Cleanup completed"})
-        
-        logger.info(f"Cleanup completed: {cleanup_result.get('nodes_removed', 0)} nodes, {cleanup_result.get('relationships_removed', 0)} relationships removed")
-        return {
-            "status": "completed",
-            "nodes_removed": cleanup_result.get("nodes_removed", 0),
-            "relationships_removed": cleanup_result.get("relationships_removed", 0)
-        }
-        
-    except Exception as e:
-        logger.error(f"Data cleanup failed: {e}")
-        raise
-
-
-@celery_app.task(bind=True)
-def reindex_graph_search(self, graph_id: str):
-    """Reindex graph for search optimization - USING YOUR AsyncTaskExecutor pattern"""
-    return AsyncTaskExecutor.run_async_task(_reindex_graph_search_async, self, graph_id)
-
-
-async def _reindex_graph_search_async(task, graph_id: str):
-    """Reindex specific graph for search"""
-    try:
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 30, "status": "Rebuilding search indexes"})
-        
-        # For now, we'll skip vector indexing since vector_service was removed
-        # This can be implemented later when needed
-        logger.info(f"Search reindexing requested for graph {graph_id} - skipping for now (service refactored)")
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 100, "status": "Search reindexing skipped - service refactored"})
-        
-        return {
-            "status": "skipped",
-            "message": "Search reindexing temporarily disabled during refactor",
-            "graph_id": graph_id
-        }
-        
-    except Exception as e:
-        logger.error(f"Search reindexing failed for graph {graph_id}: {e}")
-        raise
-
-
-@celery_app.task(bind=True)
-def generate_graph_summary(self, graph_id: str):
-    """Generate graph summary - USING YOUR AsyncTaskExecutor pattern"""
-    return AsyncTaskExecutor.run_async_task(_generate_graph_summary_async, self, graph_id)
-
-
-async def _generate_graph_summary_async(task, graph_id: str):
-    """Generate comprehensive graph summary"""
-    try:
-        from app.services.analytics_service import analytics_service
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 40, "status": "Generating graph summary"})
-        
-        # Generate graph metrics and summary
-        summary = await analytics_service.get_graph_metrics(UUID(graph_id))
-        
-        if task:
-            task.update_state(state="PROGRESS", meta={"progress": 100, "status": "Graph summary completed"})
-        
-        logger.info(f"Generated summary for graph {graph_id}")
-        return {
-            "status": "completed",
-            "graph_id": graph_id,
-            "summary": summary
-        }
-        
-    except Exception as e:
-        logger.error(f"Graph summary generation failed for {graph_id}: {e}")
         raise
