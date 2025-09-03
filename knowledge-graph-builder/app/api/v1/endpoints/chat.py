@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert, update
+from sqlalchemy import select, update
 from typing import List, Optional, Dict, Any
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
@@ -10,7 +10,6 @@ from app.api.dependencies import get_current_user_id, get_database
 from app.models.graph import KnowledgeGraph
 from app.models.chat import ChatSession, ChatMessage
 from app.services.chat_service import chat_service  # COMPREHENSIVE SERVICE
-from app.services.schema_service import schema_service
 from app.core.logging import get_logger
 
 router = APIRouter()

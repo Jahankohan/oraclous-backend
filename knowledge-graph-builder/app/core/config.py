@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
+from datetime import timedelta
 
 class Settings(BaseSettings):
     # Service Configuration
@@ -68,6 +69,9 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_EXTRACTIONS: int = 5
     BATCH_SIZE: int = 100
     CACHE_TTL: int = 300
+    
+    # Optimization Settings
+    OPTIMIZATION_INTERVAL: timedelta = timedelta(hours=2)  # Run optimization every 2 hours
     
     # Embedding Processing
     DOCUMENT_EMBEDDING_BATCH_SIZE: int = 10

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from uuid import UUID
@@ -43,16 +43,11 @@ class SchemaLearnRequest(BaseModel):
     max_entities: Optional[int] = Field(20, description="Maximum number of entity types")
     max_relationships: Optional[int] = Field(15, description="Maximum number of relationship types")
 
-class SchemaUpdateRequest(BaseModel):
-    """Request for updating graph schema"""
-    graph_schema: dict = Field(..., description="Schema with entities and relationships")
-    evolution_mode: Optional[str] = Field("guided", description="Schema evolution mode")
-
 class IngestDataRequest(BaseModel):
     """Enhanced request for data ingestion with schema evolution"""
     content: str = Field(..., min_length=10)
     source_type: str = Field(default="text")
-    graph_schema: Optional[dict] = None
+    graph_schema: Optional[Dict[str, List[str]]] = None
     instructions: Optional[str] = None
     
     # Schema evolution parameters
@@ -68,7 +63,7 @@ class IngestionJobResponse(BaseModel):
     source_type: Optional[str]
     status: str
     progress: int
-    error_message: Optional[str]
+    error_message: Optional[str] = None
     extracted_entities: int
     extracted_relationships: int
     processed_chunks: int = 0

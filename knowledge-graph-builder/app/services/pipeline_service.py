@@ -14,17 +14,14 @@ DESIGN PRINCIPLES:
 """
 
 import asyncio
-import logging
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 from uuid import UUID
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import BackgroundTasks, HTTPException, status
 
 from neo4j_graphrag.llm import OpenAILLM
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
-from neo4j_graphrag.experimental.components.types import Neo4jGraph
 
 from app.components.multi_tenant_components import MultiTenantKGWriter, create_multi_tenant_kg_writer
 from app.core.neo4j_client import neo4j_client
@@ -45,7 +42,7 @@ class PipelineConfig:
     def __init__(self):
         # Neo4j Configuration
         self.neo4j_uri = settings.NEO4J_URI
-        self.neo4j_user = settings.NEO4J_USER  
+        self.neo4j_user = settings.NEO4J_USERNAME  
         self.neo4j_password = settings.NEO4J_PASSWORD
         self.neo4j_database = settings.NEO4J_DATABASE
         

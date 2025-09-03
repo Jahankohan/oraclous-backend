@@ -4,7 +4,6 @@ FastAPI dependencies for Neo4j GraphRAG components.
 Simple, maintainable dependency injection following Neo4j GraphRAG patterns.
 """
 
-from typing import Optional
 from functools import lru_cache
 
 from fastapi import Depends, HTTPException, status

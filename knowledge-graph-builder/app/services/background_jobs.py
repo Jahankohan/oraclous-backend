@@ -7,7 +7,7 @@ from celery import Celery
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import select, update, or_
 from sqlalchemy.pool import NullPool
-from typing import Dict, Any, List
+from typing import Dict, Any
 from datetime import datetime
 from uuid import UUID
 
@@ -249,17 +249,16 @@ async def _update_job_status_async(
     try:
         # Prepare update data
         update_data = {
-            "status": status,
-            "updated_at": datetime.utcnow()
+            "status": status
         }
         
         # Add metrics if provided
         if entities is not None:
-            update_data["entities_count"] = entities
+            update_data["extracted_entities"] = entities
         if relationships is not None:
-            update_data["relationships_count"] = relationships
+            update_data["extracted_relationships"] = relationships
         if chunks is not None:
-            update_data["chunks_count"] = chunks
+            update_data["processed_chunks"] = chunks
         if error is not None:
             update_data["error_message"] = error
         
