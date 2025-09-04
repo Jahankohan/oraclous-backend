@@ -11,6 +11,7 @@ Implementation of a streaming chat endpoint that provides conversational AI inte
 #### Neo4j Graph Node Structure
 
 #### Neo4j-Only Architecture
+
 - **Complete PostgreSQL migration**: Remove knowledge_graphs table entirely
 - **Graph nodes in Neo4j**: All graph metadata stored in Neo4j Graph nodes
 - **Sessions in Neo4j**: Chat sessions as Neo4j Session nodes connected to Graph
@@ -23,15 +24,15 @@ Implementation of a streaming chat endpoint that provides conversational AI inte
 ```cypher
 // Graph as root node (replaces PostgreSQL knowledge_graphs table completely)
 (graph:Graph {
-    graph_id: "uuid", 
-    name: "Graph Name", 
+    graph_id: "uuid",
+    name: "Graph Name",
     description: "Graph description",
-    user_id: "uuid", 
+    user_id: "uuid",
     created_at: datetime(),
     updated_at: datetime()
 })
 
-// Documents connected to graph  
+// Documents connected to graph
 (document:Document)-[:BELONGS_TO]->(graph)
 
 // Existing chunk/entity structure remains unchanged
@@ -41,7 +42,7 @@ Implementation of a streaming chat endpoint that provides conversational AI inte
 // Chat sessions in Neo4j (no PostgreSQL)
 (session:Session {
     session_id: "uuid",
-    session_name: "Chat Session Name", 
+    session_name: "Chat Session Name",
     created_at: datetime(),
     last_message_at: datetime()
 })-[:USES_GRAPH]->(graph)
@@ -126,25 +127,30 @@ Response: text/event-stream (SSE)
 ### Phase 1: Foundation (Priority 1) - Step by Step Testing
 
 **Step 1.1: Graph Node Migration**
+
 - Remove PostgreSQL knowledge_graphs table
-- Create Graph node creation in Neo4j  
+- Create Graph node creation in Neo4j
 - Test: Create graph, verify node structure
 
 **Step 1.2: Document-Graph Connection**
+
 - Modify document processing to connect to Graph node
 - Update pipeline to use `(Document)-[:BELONGS_TO]->(Graph)` relationship
 - Test: Process document, verify graph connection
 
-**Step 1.3: Session Management**  
+**Step 1.3: Session Management**
+
 - Implement Session node creation in Neo4j
 - Connect sessions to Graph nodes via `[:USES_GRAPH]` relationship
 - Test: Create session, verify graph connection
 
 **Step 1.4: Basic Message History**
+
 - Integrate neo4j_graphrag's `Neo4jMessageHistory` with Session nodes
 - Test: Send message, verify storage and retrieval
 
 **Step 1.5: Simple Chat Service**
+
 - Create basic GraphChatService (non-streaming)
 - Implement single hybrid retrieval
 - Test: Send query, get response
@@ -218,12 +224,14 @@ Response: text/event-stream (SSE)
 ### Immediate Action Plan:
 
 **Step 1.1: Graph Node Migration (First Step)**
+
 1. Create Graph node model/schema in Neo4j
 2. Remove PostgreSQL knowledge_graphs table dependency
 3. Update existing services to use Neo4j Graph nodes
 4. **Manual Test**: Create a graph node and verify structure
 
-**Step 1.2: Document-Graph Relationship** 
+**Step 1.2: Document-Graph Relationship**
+
 1. Modify document processing pipeline
 2. Add `[:BELONGS_TO]` relationship creation
 3. **Manual Test**: Process a document and verify graph connection
