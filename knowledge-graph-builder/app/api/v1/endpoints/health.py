@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from datetime import datetime
+from datetime import datetime, timezone
 from app.core.config import settings
 from app.core.neo4j_client import neo4j_client
 from app.core.database import check_db_health
@@ -27,7 +27,7 @@ async def health_check():
         status=overall_status,
         service=settings.SERVICE_NAME,
         version=settings.SERVICE_VERSION,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         dependencies={
             "neo4j": neo4j_health,
             "postgres": postgres_health

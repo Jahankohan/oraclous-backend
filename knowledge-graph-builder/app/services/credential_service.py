@@ -1,6 +1,5 @@
 import httpx
 from typing import Optional, Dict, Any
-from fastapi import HTTPException, status
 from app.core.config import settings
 from app.core.logging import get_logger
 

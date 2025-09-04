@@ -180,12 +180,12 @@ async def ingest_data_corrected(
         logger.info(f"Started ingestion job {job.id} for graph {graph_id}")
         
         return IngestionJobResponse(
-            id=job.id,
-            graph_id=job.graph_id,
-            status=job.status,
-            progress=job.progress,
-            created_at=job.created_at,
-            source_type=job.source_type,
+            id=job.id, # type: ignore
+            graph_id=job.graph_id, # type: ignore
+            status=job.status, # type: ignore
+            progress=job.progress, # type: ignore
+            created_at=job.created_at, # type: ignore
+            source_type=job.source_type, # type: ignore
             extracted_entities=0,
             extracted_relationships=0
         )

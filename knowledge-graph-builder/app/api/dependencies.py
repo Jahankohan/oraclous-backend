@@ -1,7 +1,7 @@
 from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any
+from typing import Dict, Any, AsyncGenerator
 from app.core.database import get_db
 from app.services.auth_service import auth_service
 
@@ -22,7 +22,7 @@ async def get_current_user_id(
     return str(current_user["id"])
 
 # Re-export database dependency
-async def get_database() -> AsyncSession:
+async def get_database() -> AsyncGenerator[AsyncSession, None]:
     """Get database session"""
     async for session in get_db():
         yield session

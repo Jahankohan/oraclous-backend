@@ -339,7 +339,8 @@ class MultiTenantGraphRAGPipeline:
             extractor = LLMEntityRelationExtractor(
                 llm=self.llm,
                 create_lexical_graph=True,  # Creates Document/Chunk nodes
-                on_error=OnError.IGNORE
+                on_error=OnError.IGNORE,
+                max_concurrency=self.config.max_concurrency  # Use configured concurrency (10)
             )
             graph = await extractor.run(chunks=embedded_chunks, document_info=document_info)
             

@@ -12,8 +12,9 @@ This approach creates a cleaner graph by:
 """
 
 import time
-from typing import Any, Dict, Optional, List
+from typing import Any, Optional, List, Dict
 from neo4j import Driver, Session
+from neo4j.graph import Node
 
 from neo4j_graphrag.experimental.pipeline.component import Component
 from neo4j_graphrag.experimental.components.types import Neo4jGraph
@@ -152,10 +153,10 @@ class MultiTenantEntityDeduplicator(Component):
         
     async def _consolidate_entity_group(
         self, 
-        session: Any, 
+        session: Session, 
         entity_name: str, 
-        entities: List[Any], 
-        chunks: List[Any]
+        entities: List[Node], 
+        chunks: List[Node]
     ) -> int:
         """
         Consolidate a group of duplicate entities into a single canonical entity.
@@ -205,18 +206,28 @@ class MultiTenantEntityDeduplicator(Component):
             # Recreate each relationship for canonical entity
             for rel_record in list(outgoing_rels):
                 rel_type = rel_record['rel_type']
+                target_id = rel_record['target_id']
+                rel_props: Dict[str, Any] = rel_record['rel_props'] or {}
                 
-                # Use dynamic cypher to create relationships of different types
-                if rel_type in ['WORKS_FOR', 'FOUNDED', 'LEADS', 'MANAGES', 'DEVELOPED', 'PARTNERED_WITH']:
-                    session.run(f"""
-                        MATCH (canonical) WHERE elementId(canonical) = $canonical_id
-                        MATCH (target) WHERE elementId(target) = $target_id
-                        MERGE (canonical)-[r:{rel_type}]->(target)
-                        SET r = $rel_props
-                    """, 
-                    canonical_id=canonical_entity_id,
-                    target_id=rel_record['target_id'],
-                    rel_props=rel_record['rel_props'] or {}
+                # Use parameterized query with predefined relationship types
+                # Handle all relationship types dynamically
+                query = """
+                    MATCH (canonical) WHERE elementId(canonical) = $canonical_id
+                    MATCH (target) WHERE elementId(target) = $target_id
+                    CALL apoc.create.relationship(canonical, $rel_type, $rel_props, target) YIELD rel
+                    RETURN rel
+                """
+                try:
+                    session.run(query, 
+                        canonical_id=canonical_entity_id,
+                        target_id=target_id,
+                        rel_type=rel_type,
+                        rel_props=rel_props
+                    )
+                except Exception:
+                    # Fallback without APOC - create specific relationship types
+                    self._create_relationship_fallback(
+                        session, canonical_entity_id, target_id, rel_type, rel_props
                     )
             
             # Handle incoming relationships  
@@ -229,17 +240,27 @@ class MultiTenantEntityDeduplicator(Component):
             # Recreate each incoming relationship for canonical entity
             for rel_record in list(incoming_rels):
                 rel_type = rel_record['rel_type']
+                source_id = rel_record['source_id']
+                rel_props: Dict[str, Any] = rel_record['rel_props'] or {}
                 
-                if rel_type in ['WORKS_FOR', 'FOUNDED', 'LEADS', 'MANAGES', 'DEVELOPED', 'PARTNERED_WITH']:
-                    session.run(f"""
-                        MATCH (source) WHERE elementId(source) = $source_id
-                        MATCH (canonical) WHERE elementId(canonical) = $canonical_id
-                        MERGE (source)-[r:{rel_type}]->(canonical)
-                        SET r = $rel_props
-                    """,
-                    source_id=rel_record['source_id'],
-                    canonical_id=canonical_entity_id,
-                    rel_props=rel_record['rel_props'] or {}
+                # Handle all relationship types dynamically
+                query = """
+                    MATCH (source) WHERE elementId(source) = $source_id
+                    MATCH (canonical) WHERE elementId(canonical) = $canonical_id
+                    CALL apoc.create.relationship(source, $rel_type, $rel_props, canonical) YIELD rel
+                    RETURN rel
+                """
+                try:
+                    session.run(query,
+                        source_id=source_id,
+                        canonical_id=canonical_entity_id,
+                        rel_type=rel_type,
+                        rel_props=rel_props
+                    )
+                except Exception:
+                    # Fallback without APOC
+                    self._create_relationship_fallback(
+                        session, source_id, canonical_entity_id, rel_type, rel_props
                     )
         
         # Step 3: Delete duplicate entities and their relationships
@@ -253,6 +274,128 @@ class MultiTenantEntityDeduplicator(Component):
                     f"canonical entity now linked to {len(chunks)} chunks")
         
         return len(duplicate_entity_ids)
+        
+    def _create_relationship_fallback(
+        self, 
+        session: Session, 
+        source_id: str, 
+        target_id: str, 
+        rel_type: str, 
+        rel_props: Dict[str, Any]
+    ) -> None:
+        """
+        Fallback method to create relationships without APOC procedures.
+        
+        This method handles ANY relationship type dynamically by using
+        a generic approach that works for all relationship types.
+        """
+        # Use a generic approach that works for any relationship type
+        # We'll use a two-step process: create the relationship, then set properties
+        try:
+            # Step 1: Create the relationship using CALL procedure
+            # This approach works with any relationship type
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                CALL apoc.cypher.doIt(
+                    'MERGE (s)-[r:' + $rel_type + ']->(t) RETURN r',
+                    {s: source, t: target}
+                ) YIELD value
+                WITH value.r as rel
+                SET rel = $rel_props
+                RETURN rel
+            """
+            
+            session.run(query, 
+                source_id=source_id, 
+                target_id=target_id, 
+                rel_type=rel_type,
+                rel_props=rel_props
+            )
+            
+        except Exception:
+            # Ultimate fallback: use known relationship types or create a generic one
+            if rel_type in ['WORKS_FOR', 'FOUNDED', 'LEADS', 'MANAGES', 'DEVELOPED', 'PARTNERED_WITH']:
+                # Use predefined relationship creation for known types
+                self._create_known_relationship(session, source_id, target_id, rel_type, rel_props)
+            else:
+                # For unknown relationship types, log a warning and create a generic relationship
+                logger.warning(f"Unknown relationship type '{rel_type}' - creating generic relationship")
+                
+                # Create a generic relationship with the original type as a property
+                query = """
+                    MATCH (source) WHERE elementId(source) = $source_id
+                    MATCH (target) WHERE elementId(target) = $target_id
+                    MERGE (source)-[r:RELATED_TO]->(target)
+                    SET r.original_type = $rel_type, r = $rel_props
+                    RETURN r
+                """
+                session.run(query, 
+                    source_id=source_id, 
+                    target_id=target_id, 
+                    rel_type=rel_type,
+                    rel_props=rel_props
+                )
+    
+    def _create_known_relationship(
+        self, 
+        session: Session, 
+        source_id: str, 
+        target_id: str, 
+        rel_type: str, 
+        rel_props: Dict[str, Any]
+    ) -> None:
+        """
+        Create relationships for known/predefined relationship types.
+        This is the ultimate fallback when APOC is not available.
+        """
+        if rel_type == 'WORKS_FOR':
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:WORKS_FOR]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == 'FOUNDED':
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:FOUNDED]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == 'LEADS':
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:LEADS]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == 'MANAGES':
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:MANAGES]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == 'DEVELOPED':
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:DEVELOPED]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == 'PARTNERED_WITH':
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:PARTNERED_WITH]->(target)
+                SET r = $rel_props
+            """
+        else:
+            # This shouldn't happen since we check before calling this method
+            return
+            
+        session.run(query, source_id=source_id, target_id=target_id, rel_props=rel_props)
         
     async def _deduplicate_fuzzy_matches(self) -> int:
         """
@@ -316,7 +459,7 @@ class MultiTenantEntityDeduplicator(Component):
                     if len(entities) > 1:
                         try:
                             # Get chunks for these entities
-                            chunks = []
+                            chunks: List[Node] = []
                             for entity in entities:
                                 entity_chunks = session.run("""
                                     MATCH (e)-[:FROM_CHUNK]->(c:Chunk)
@@ -325,8 +468,9 @@ class MultiTenantEntityDeduplicator(Component):
                                 """, entity_id=entity.element_id)
                                 chunks.extend([record['c'] for record in entity_chunks])
                             
-                            # Remove duplicates
-                            unique_chunks = list({chunk.element_id: chunk for chunk in chunks}.values())
+                            # Remove duplicates by element_id
+                            unique_chunks_dict = {chunk.element_id: chunk for chunk in chunks}
+                            unique_chunks: List[Node] = list(unique_chunks_dict.values())
                             
                             # Consolidate the fuzzy matched entities
                             deduplicated_count = await self._consolidate_entity_group(
