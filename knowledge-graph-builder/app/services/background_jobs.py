@@ -12,10 +12,11 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from app.core.config import settings
-from app.models.graph import IngestionJob, KnowledgeGraph
+from app.models.graph import IngestionJob  # Only IngestionJob, not KnowledgeGraph
 from app.services.task_executor import AsyncTaskExecutor
 from app.services.pipeline_service import pipeline_service
 from app.services.document_processor import document_processor
+from app.services.graph_node_service import GraphNodeService
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -246,7 +247,7 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
     try:
         logger.info(f"Starting clean pipeline ingestion for job {job_id}")
         
-        # STEP 1: Get job from database (keep your existing pattern)
+        # STEP 1: Get job from database and verify graph exists in Neo4j
         async with worker_session_maker() as session:
             job_query = select(IngestionJob).where(IngestionJob.id == UUID(job_id))
             result = await session.execute(job_query)
@@ -256,10 +257,27 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
                 logger.error(f"Job {job_id} not found")
                 return {"error": f"Job {job_id} not found", "status": "failed"}
 
-            graph = await session.get(KnowledgeGraph, job.graph_id)
-            if not graph:
-                logger.error(f"Graph {job.graph_id} not found for job {job_id}")
-                return {"status": "error", "message": "Graph not found"}
+            # Verify graph exists in Neo4j using GraphNodeService
+            # Use sync operations since this is a worker context
+            async with WorkerNeo4jManager() as neo4j:
+                try:
+                    graph_service = GraphNodeService(neo4j.get_sync_driver())
+                    graph = graph_service.get_graph(str(job.graph_id))
+                    
+                    if not graph:
+                        logger.error(f"Graph {job.graph_id} not found in Neo4j for job {job_id}")
+                        return {"status": "error", "message": "Graph not found"}
+                        
+                    # Verify user ownership
+                    if graph["user_id"] != user_id:
+                        logger.error(f"User {user_id} does not own graph {job.graph_id}")
+                        return {"status": "error", "message": "Access denied"}
+                        
+                    logger.info(f"Verified graph {job.graph_id} exists in Neo4j for user {user_id}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to verify graph {job.graph_id}: {e}")
+                    return {"status": "error", "message": f"Graph verification failed: {str(e)}"}
             
             # Update job status to processing
             await _update_job_status_async(session, job_id, "processing")

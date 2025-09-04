@@ -374,7 +374,22 @@ class MultiTenantGraphRAGPipeline:
         
         # 5. Multi-tenant metadata injection (automatic via kg_writer)
         await kg_writer.run(graph)
-        logger.info(f"Graph writing completed, starting entity deduplication for graph {self.graph_id}")
+        logger.info(f"Graph writing completed for graph {self.graph_id}")
+        
+        # 5.1. Simple Document-Graph connection
+        try:
+            connect_query = """
+            MATCH (d:Document {path: $source, graph_id: $graph_id})
+            MATCH (g:Graph {graph_id: $graph_id})
+            MERGE (d)-[:BELONGS_TO]->(g)
+            """
+            await neo4j_client.execute_query(connect_query, {
+                "source": source,
+                "graph_id": self.graph_id
+            })
+            logger.info(f"Connected document '{source}' to graph '{self.graph_id}'")
+        except Exception as e:
+            logger.warning(f"Could not connect document to graph: {e}")
         
         # 6. Entity Deduplication - Consolidate duplicate entities across chunks
         logger.info(f"Checking driver availability for deduplication: driver={self.driver is not None}")
