@@ -42,6 +42,12 @@ class SnapshotService:
             "CREATE INDEX version_number_idx IF NOT EXISTS FOR (v:GraphVersion) ON (v.graph_id, v.version_number)",
             # Composite index on relationships — (graph_id, transaction_time, invalidated_at)
             "CREATE INDEX rel_version_composite_idx IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id, r.transaction_time, r.invalidated_at)",
+            # ORA-138: Relationship temporal (valid-time) indexes — composite for
+            # queries that filter by r.graph_id + temporal props, and standalone
+            # for traversal queries where graph_id is only on the node side.
+            "CREATE INDEX rel_temporal_idx IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id, r.valid_from, r.valid_to)",
+            "CREATE INDEX rel_valid_from_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_from)",
+            "CREATE INDEX rel_valid_to_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_to)",
         ]
         for q in index_queries:
             try:

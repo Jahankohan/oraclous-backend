@@ -47,6 +47,15 @@ class GraphNodeService:
         # Relationship temporal index (Neo4j 5.x wildcard syntax)
         "CREATE INDEX rel_temporal_idx IF NOT EXISTS "
         "FOR ()-[r]-() ON (r.graph_id, r.valid_from, r.valid_to)",
+        # Standalone relationship indexes for traversal queries that filter by
+        # valid_from / valid_to without r.graph_id in the WHERE clause
+        # (e.g. multihop enrichment in chat_service). The composite rel_temporal_idx
+        # requires graph_id as the leading key and is not used by the planner in
+        # those traversal patterns.
+        "CREATE INDEX rel_valid_from_idx IF NOT EXISTS "
+        "FOR ()-[r]-() ON (r.valid_from)",
+        "CREATE INDEX rel_valid_to_idx IF NOT EXISTS "
+        "FOR ()-[r]-() ON (r.valid_to)",
         # __Contradiction__ label added at schema init (not ad hoc per CTO review)
         "CREATE INDEX contradiction_graph_idx IF NOT EXISTS "
         "FOR (c:__Contradiction__) ON (c.graph_id, c.detected_at)",
