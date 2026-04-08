@@ -12,10 +12,11 @@ Endpoints tested:
   DELETE /api/v1/graphs/{graphId}/memories/{memoryId}
   POST   /api/v1/graphs/{graphId}/memories/consolidate
 """
-import pytest
+
+from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.main import app
+import pytest
 
 GRAPH_ID = "test-graph-memory-api"
 MEMORY_ID = "mem-00000000-0000-0000-0000-000000000001"
@@ -23,6 +24,7 @@ MEMORY_ID = "mem-00000000-0000-0000-0000-000000000001"
 # ------------------------------------------------------------------ #
 # Auth + ReBAC bypass
 # ------------------------------------------------------------------ #
+
 
 def _patch_auth():
     """Patch auth so every request is authenticated as user-1."""
@@ -50,6 +52,7 @@ def _patch_neo4j_driver():
 # POST /memories — store
 # ------------------------------------------------------------------ #
 
+
 class TestStoreMemoryEndpoint:
     @pytest.mark.integration
     async def test_store_memory_returns_201(self, async_client):
@@ -59,11 +62,15 @@ class TestStoreMemoryEndpoint:
         store_result.contradictions_detected = []
         store_result.entity_linked = None
 
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.store_memory",
-                 new=AsyncMock(return_value=store_result),
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.store_memory",
+                new=AsyncMock(return_value=store_result),
+            ),
+        ):
             resp = await async_client.post(
                 f"/api/v1/graphs/{GRAPH_ID}/memories",
                 json={
@@ -100,11 +107,15 @@ class TestStoreMemoryEndpoint:
         ]
         store_result.entity_linked = None
 
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.store_memory",
-                 new=AsyncMock(return_value=store_result),
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.store_memory",
+                new=AsyncMock(return_value=store_result),
+            ),
+        ):
             resp = await async_client.post(
                 f"/api/v1/graphs/{GRAPH_ID}/memories",
                 json={"type": "semantic", "content": "Alice is CEO", "confidence": 0.9},
@@ -128,6 +139,7 @@ class TestStoreMemoryEndpoint:
 # GET /memories/search
 # ------------------------------------------------------------------ #
 
+
 class TestSearchMemoriesEndpoint:
     @pytest.mark.integration
     async def test_search_returns_200(self, async_client):
@@ -136,11 +148,15 @@ class TestSearchMemoriesEndpoint:
         search_result.graph_facts = []
         search_result.total = 0
 
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.search_memories",
-                 new=AsyncMock(return_value=search_result),
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.search_memories",
+                new=AsyncMock(return_value=search_result),
+            ),
+        ):
             resp = await async_client.get(
                 f"/api/v1/graphs/{GRAPH_ID}/memories/search",
                 params={"query": "Reza CEO"},
@@ -170,11 +186,15 @@ class TestSearchMemoriesEndpoint:
 
         mock_search = AsyncMock(return_value=search_result)
 
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.search_memories",
-                 new=mock_search,
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.search_memories",
+                new=mock_search,
+            ),
+        ):
             await async_client.get(
                 f"/api/v1/graphs/{GRAPH_ID}/memories/search",
                 params={
@@ -197,6 +217,7 @@ class TestSearchMemoriesEndpoint:
 # GET /memories/context
 # ------------------------------------------------------------------ #
 
+
 class TestGetContextEndpoint:
     @pytest.mark.integration
     async def test_context_returns_200(self, async_client):
@@ -206,11 +227,15 @@ class TestGetContextEndpoint:
         ctx_result.token_estimate = 42
         ctx_result.retrieval_ms = 15
 
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.get_context",
-                 new=AsyncMock(return_value=ctx_result),
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.get_context",
+                new=AsyncMock(return_value=ctx_result),
+            ),
+        ):
             resp = await async_client.get(
                 f"/api/v1/graphs/{GRAPH_ID}/memories/context",
                 params={"query": "help with Q4 planning"},
@@ -233,11 +258,15 @@ class TestGetContextEndpoint:
 
         mock_ctx = AsyncMock(return_value=ctx_result)
 
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.get_context",
-                 new=mock_ctx,
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.get_context",
+                new=mock_ctx,
+            ),
+        ):
             await async_client.get(
                 f"/api/v1/graphs/{GRAPH_ID}/memories/context",
                 params={"query": "test", "scope": "user,organization"},
@@ -252,24 +281,32 @@ class TestGetContextEndpoint:
 # PATCH /memories/{memoryId}
 # ------------------------------------------------------------------ #
 
+
 class TestUpdateMemoryEndpoint:
     @pytest.mark.integration
     async def test_update_returns_200(self, async_client):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         update_result = MagicMock()
         update_result.old_memory_id = MEMORY_ID
         update_result.new_memory_id = "mem-new-id"
-        update_result.superseded_at = datetime.now(timezone.utc)
+        update_result.superseded_at = datetime.now(UTC)
 
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.update_memory",
-                 new=AsyncMock(return_value=update_result),
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.update_memory",
+                new=AsyncMock(return_value=update_result),
+            ),
+        ):
             resp = await async_client.patch(
                 f"/api/v1/graphs/{GRAPH_ID}/memories/{MEMORY_ID}",
-                json={"content": "Reza stepped down, now Chairman", "reason": "correction"},
+                json={
+                    "content": "Reza stepped down, now Chairman",
+                    "reason": "correction",
+                },
                 headers={"Authorization": "Bearer test-token"},
             )
 
@@ -280,11 +317,17 @@ class TestUpdateMemoryEndpoint:
 
     @pytest.mark.integration
     async def test_update_not_found_returns_404(self, async_client):
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.update_memory",
-                 new=AsyncMock(side_effect=ValueError("Memory nonexistent not found in graph")),
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.update_memory",
+                new=AsyncMock(
+                    side_effect=ValueError("Memory nonexistent not found in graph")
+                ),
+            ),
+        ):
             resp = await async_client.patch(
                 f"/api/v1/graphs/{GRAPH_ID}/memories/nonexistent",
                 json={"content": "new content"},
@@ -297,14 +340,19 @@ class TestUpdateMemoryEndpoint:
 # DELETE /memories/{memoryId}
 # ------------------------------------------------------------------ #
 
+
 class TestDeleteMemoryEndpoint:
     @pytest.mark.integration
     async def test_soft_delete_returns_204(self, async_client):
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.delete_memory",
-                 new=AsyncMock(return_value=None),
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.delete_memory",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
             resp = await async_client.delete(
                 f"/api/v1/graphs/{GRAPH_ID}/memories/{MEMORY_ID}",
                 headers={"Authorization": "Bearer test-token"},
@@ -315,11 +363,15 @@ class TestDeleteMemoryEndpoint:
     async def test_hard_delete_passes_flag(self, async_client):
         mock_delete = AsyncMock(return_value=None)
 
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.memory_service.delete_memory",
-                 new=mock_delete,
-             ):
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.memory_service.delete_memory",
+                new=mock_delete,
+            ),
+        ):
             await async_client.delete(
                 f"/api/v1/graphs/{GRAPH_ID}/memories/{MEMORY_ID}",
                 params={"hard": "true"},
@@ -334,16 +386,21 @@ class TestDeleteMemoryEndpoint:
 # POST /memories/consolidate
 # ------------------------------------------------------------------ #
 
+
 class TestConsolidateEndpoint:
     @pytest.mark.integration
     async def test_consolidate_queues_task(self, async_client):
         mock_task = MagicMock()
         mock_task.id = "celery-task-id-1"
 
-        with _patch_auth(), _patch_rebac(), _patch_neo4j_driver(), \
-             patch(
-                 "app.api.v1.endpoints.memories.consolidate_memories_task"
-             ) as mock_celery_task:
+        with (
+            _patch_auth(),
+            _patch_rebac(),
+            _patch_neo4j_driver(),
+            patch(
+                "app.api.v1.endpoints.memories.consolidate_memories_task"
+            ) as mock_celery_task,
+        ):
             mock_celery_task.delay.return_value = mock_task
             resp = await async_client.post(
                 f"/api/v1/graphs/{GRAPH_ID}/memories/consolidate",

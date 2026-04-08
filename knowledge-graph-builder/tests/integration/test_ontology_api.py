@@ -8,8 +8,9 @@ Tests cover:
 - retroactive-apply dry_run vs live
 - Multi-tenant isolation: ontology from graph A does NOT affect graph B
 """
+
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,7 +24,7 @@ USER_B_ID = str(uuid.uuid4())
 GRAPH_A_ID = str(uuid.uuid4())
 GRAPH_B_ID = str(uuid.uuid4())
 
-_NOW = datetime(2026, 4, 7, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+_NOW = datetime(2026, 4, 7, 12, 0, 0, tzinfo=UTC).isoformat()
 
 _ENTITY_TYPES = [
     {"name": "Person", "description": "A human being"},
@@ -37,6 +38,7 @@ _RELATIONSHIP_TYPES = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _neo4j_graph(graph_id: str, user_id: str) -> dict:
     return {
@@ -54,6 +56,7 @@ def _neo4j_graph(graph_id: str, user_id: str) -> dict:
 
 def _ontology_response(graph_id: str, version: int = 1) -> dict:
     from app.schemas.graph_schemas import OntologyValidationMode
+
     return {
         "graph_id": graph_id,
         "entity_types": _ENTITY_TYPES,
@@ -67,6 +70,7 @@ def _ontology_response(graph_id: str, version: int = 1) -> dict:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def patch_auth():
@@ -88,17 +92,23 @@ def mock_graph_service():
 # 1. POST /graphs/{id}/ontology — set ontology
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.api
 async def test_set_ontology_returns_200(async_client, mock_graph_service):
-    from app.schemas.graph_schemas import OntologyResponse, OntologyValidationMode
+    from app.schemas.graph_schemas import OntologyResponse
 
     mock_ontology_resp = MagicMock(spec=OntologyResponse)
     mock_ontology_resp.model_dump.return_value = _ontology_response(GRAPH_A_ID)
 
-    with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-         patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_graph_service), \
-         patch("app.services.instructions_service.instructions_service") as mock_svc:
+    with (
+        patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        patch(
+            "app.api.v1.endpoints.graphs.GraphNodeService",
+            return_value=mock_graph_service,
+        ),
+        patch("app.services.instructions_service.instructions_service") as mock_svc,
+    ):
         mock_neo4j.sync_driver = MagicMock()
         mock_svc.set_ontology = AsyncMock(return_value=mock_ontology_resp)
 
@@ -119,6 +129,7 @@ async def test_set_ontology_returns_200(async_client, mock_graph_service):
 # 2. GET /graphs/{id}/ontology — retrieve existing ontology
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.api
 async def test_get_ontology_returns_200_when_set(async_client, mock_graph_service):
@@ -127,9 +138,14 @@ async def test_get_ontology_returns_200_when_set(async_client, mock_graph_servic
     mock_resp = MagicMock(spec=OntologyResponse)
     mock_resp.model_dump.return_value = _ontology_response(GRAPH_A_ID)
 
-    with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-         patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_graph_service), \
-         patch("app.services.instructions_service.instructions_service") as mock_svc:
+    with (
+        patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        patch(
+            "app.api.v1.endpoints.graphs.GraphNodeService",
+            return_value=mock_graph_service,
+        ),
+        patch("app.services.instructions_service.instructions_service") as mock_svc,
+    ):
         mock_neo4j.sync_driver = MagicMock()
         mock_svc.get_ontology = AsyncMock(return_value=mock_resp)
 
@@ -145,12 +161,18 @@ async def test_get_ontology_returns_200_when_set(async_client, mock_graph_servic
 # 3. GET /graphs/{id}/ontology — 404 when not set
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.api
 async def test_get_ontology_returns_404_when_not_set(async_client, mock_graph_service):
-    with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-         patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_graph_service), \
-         patch("app.services.instructions_service.instructions_service") as mock_svc:
+    with (
+        patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        patch(
+            "app.api.v1.endpoints.graphs.GraphNodeService",
+            return_value=mock_graph_service,
+        ),
+        patch("app.services.instructions_service.instructions_service") as mock_svc,
+    ):
         mock_neo4j.sync_driver = MagicMock()
         mock_svc.get_ontology = AsyncMock(return_value=None)
 
@@ -166,6 +188,7 @@ async def test_get_ontology_returns_404_when_not_set(async_client, mock_graph_se
 # 4. PATCH /graphs/{id}/ontology — merge update
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.api
 async def test_patch_ontology_returns_200(async_client, mock_graph_service):
@@ -174,9 +197,14 @@ async def test_patch_ontology_returns_200(async_client, mock_graph_service):
     mock_resp = MagicMock(spec=OntologyResponse)
     mock_resp.model_dump.return_value = _ontology_response(GRAPH_A_ID, version=2)
 
-    with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-         patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_graph_service), \
-         patch("app.services.instructions_service.instructions_service") as mock_svc:
+    with (
+        patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        patch(
+            "app.api.v1.endpoints.graphs.GraphNodeService",
+            return_value=mock_graph_service,
+        ),
+        patch("app.services.instructions_service.instructions_service") as mock_svc,
+    ):
         mock_neo4j.sync_driver = MagicMock()
         mock_svc.patch_ontology = AsyncMock(return_value=mock_resp)
 
@@ -193,12 +221,18 @@ async def test_patch_ontology_returns_200(async_client, mock_graph_service):
 # 5. DELETE /graphs/{id}/ontology — clear ontology
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.api
 async def test_delete_ontology_returns_204(async_client, mock_graph_service):
-    with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-         patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_graph_service), \
-         patch("app.services.instructions_service.instructions_service") as mock_svc:
+    with (
+        patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        patch(
+            "app.api.v1.endpoints.graphs.GraphNodeService",
+            return_value=mock_graph_service,
+        ),
+        patch("app.services.instructions_service.instructions_service") as mock_svc,
+    ):
         mock_neo4j.sync_driver = MagicMock()
         mock_svc.delete_ontology = AsyncMock(return_value=None)
 
@@ -214,10 +248,11 @@ async def test_delete_ontology_returns_204(async_client, mock_graph_service):
 # 6. POST /graphs/{id}/ontology/validate — counts without modifying graph
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.api
 async def test_validate_ontology_returns_report(async_client, mock_graph_service):
-    from app.schemas.graph_schemas import OntologyResponse, OntologyValidationMode
+    from app.schemas.graph_schemas import OntologyValidationMode
 
     mock_ontology = MagicMock()
     mock_ontology.entity_types = [
@@ -227,16 +262,23 @@ async def test_validate_ontology_returns_report(async_client, mock_graph_service
     mock_ontology.entity_types[0].name = "Person"
     mock_ontology.ontology_mode = OntologyValidationMode.WARN
 
-    with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-         patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_graph_service), \
-         patch("app.services.instructions_service.instructions_service") as mock_svc:
+    with (
+        patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        patch(
+            "app.api.v1.endpoints.graphs.GraphNodeService",
+            return_value=mock_graph_service,
+        ),
+        patch("app.services.instructions_service.instructions_service") as mock_svc,
+    ):
         mock_neo4j.sync_driver = MagicMock()
         mock_svc.get_ontology = AsyncMock(return_value=mock_ontology)
         # Count query result
-        mock_neo4j.execute_query = AsyncMock(side_effect=[
-            [{"total": 100, "violations": 15}],   # count query
-            [{"name": "Alien", "label": "Alien", "element_id": "e1"}],  # scan query
-        ])
+        mock_neo4j.execute_query = AsyncMock(
+            side_effect=[
+                [{"total": 100, "violations": 15}],  # count query
+                [{"name": "Alien", "label": "Alien", "element_id": "e1"}],  # scan query
+            ]
+        )
 
         response = await async_client.post(
             f"/api/v1/graphs/{GRAPH_A_ID}/ontology/validate",
@@ -253,9 +295,12 @@ async def test_validate_ontology_returns_report(async_client, mock_graph_service
 # 7. POST /graphs/{id}/ontology/retroactive-apply — dry_run=True
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.api
-async def test_retroactive_apply_dry_run_returns_counts(async_client, mock_graph_service):
+async def test_retroactive_apply_dry_run_returns_counts(
+    async_client, mock_graph_service
+):
     from app.schemas.graph_schemas import OntologyValidationMode
 
     mock_ontology = MagicMock()
@@ -263,15 +308,22 @@ async def test_retroactive_apply_dry_run_returns_counts(async_client, mock_graph
     mock_ontology.entity_types[0].name = "Person"
     mock_ontology.ontology_mode = OntologyValidationMode.WARN
 
-    with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-         patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_graph_service), \
-         patch("app.services.instructions_service.instructions_service") as mock_svc:
+    with (
+        patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        patch(
+            "app.api.v1.endpoints.graphs.GraphNodeService",
+            return_value=mock_graph_service,
+        ),
+        patch("app.services.instructions_service.instructions_service") as mock_svc,
+    ):
         mock_neo4j.sync_driver = MagicMock()
         mock_svc.get_ontology = AsyncMock(return_value=mock_ontology)
-        mock_neo4j.execute_query = AsyncMock(side_effect=[
-            [{"cnt": 500}],          # entity count
-            [{"violations": 10}],    # violation count (dry_run)
-        ])
+        mock_neo4j.execute_query = AsyncMock(
+            side_effect=[
+                [{"cnt": 500}],  # entity count
+                [{"violations": 10}],  # violation count (dry_run)
+            ]
+        )
 
         response = await async_client.post(
             f"/api/v1/graphs/{GRAPH_A_ID}/ontology/retroactive-apply",
@@ -289,6 +341,7 @@ async def test_retroactive_apply_dry_run_returns_counts(async_client, mock_graph
 # 8. retroactive-apply dry_run=False, ≤10k → inline
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.api
 async def test_retroactive_apply_live_inline(async_client, mock_graph_service):
@@ -299,16 +352,23 @@ async def test_retroactive_apply_live_inline(async_client, mock_graph_service):
     mock_ontology.entity_types[0].name = "Person"
     mock_ontology.ontology_mode = OntologyValidationMode.STRICT
 
-    with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-         patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_graph_service), \
-         patch("app.services.instructions_service.instructions_service") as mock_svc:
+    with (
+        patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        patch(
+            "app.api.v1.endpoints.graphs.GraphNodeService",
+            return_value=mock_graph_service,
+        ),
+        patch("app.services.instructions_service.instructions_service") as mock_svc,
+    ):
         mock_neo4j.sync_driver = MagicMock()
         mock_svc.get_ontology = AsyncMock(return_value=mock_ontology)
-        mock_neo4j.execute_query = AsyncMock(side_effect=[
-            [{"cnt": 100}],           # entity count — under 10k, run inline
-            [{"deleted": 5}],         # delete query result
-            [{"cnt": 0}],             # remaining violations
-        ])
+        mock_neo4j.execute_query = AsyncMock(
+            side_effect=[
+                [{"cnt": 100}],  # entity count — under 10k, run inline
+                [{"deleted": 5}],  # delete query result
+                [{"cnt": 0}],  # remaining violations
+            ]
+        )
 
         response = await async_client.post(
             f"/api/v1/graphs/{GRAPH_A_ID}/ontology/retroactive-apply",
@@ -326,6 +386,7 @@ async def test_retroactive_apply_live_inline(async_client, mock_graph_service):
 # 9. Multi-tenant isolation: ontology from graph A does NOT affect graph B
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.api
 async def test_ontology_multi_tenant_isolation(async_client):
@@ -338,9 +399,11 @@ async def test_ontology_multi_tenant_isolation(async_client):
     mock_svc = MagicMock()
     mock_svc.get_graph.return_value = graph_a_owned_by_a
 
-    with patch("app.api.dependencies.auth_service", mock_auth), \
-         patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-         patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_svc):
+    with (
+        patch("app.api.dependencies.auth_service", mock_auth),
+        patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        patch("app.api.v1.endpoints.graphs.GraphNodeService", return_value=mock_svc),
+    ):
         mock_neo4j.sync_driver = MagicMock()
 
         response = await async_client.get(

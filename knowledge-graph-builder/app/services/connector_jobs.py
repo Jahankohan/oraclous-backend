@@ -10,12 +10,12 @@ Beat schedule entries are added to background_jobs.py.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
@@ -45,11 +45,13 @@ _worker_session_maker = async_sessionmaker(
 # Webhook event → KG mappers
 # ---------------------------------------------------------------------------
 
+
 class PassthroughMapper:
     """Default mapper: JSON-dump the payload and pass through pipeline."""
 
-    def to_text(self, payload: Dict[str, Any], context_hint: str = "") -> str:
+    def to_text(self, payload: dict[str, Any], context_hint: str = "") -> str:
         import json
+
         prefix = f"Context: {context_hint}\n\n" if context_hint else ""
         return prefix + json.dumps(payload, default=str, ensure_ascii=False)
 
@@ -57,7 +59,7 @@ class PassthroughMapper:
 class GithubEventMapper:
     """Maps GitHub webhook push/issue/PR events to text summaries."""
 
-    def to_text(self, payload: Dict[str, Any], context_hint: str = "") -> str:
+    def to_text(self, payload: dict[str, Any], context_hint: str = "") -> str:
         event_type = payload.get("action") or payload.get("event_type", "")
         repo = (payload.get("repository") or {}).get("full_name", "unknown")
 
@@ -86,6 +88,7 @@ class GithubEventMapper:
             return f"GitHub push to {repo}:\n{commit_lines}"
 
         import json
+
         return f"GitHub event ({event_type}) in {repo}:\n{json.dumps(payload, default=str)[:500]}"
 
 
@@ -99,6 +102,7 @@ EVENT_MAPPERS = {
 # Helper: run async code in Celery sync context
 # ---------------------------------------------------------------------------
 
+
 def _run(coro):
     """Execute a coroutine in a new event loop (Celery workers are sync)."""
     return asyncio.get_event_loop().run_until_complete(coro)
@@ -108,8 +112,9 @@ def _run(coro):
 # Task: poll_due_connectors — master scheduler (every 60s via beat)
 # ---------------------------------------------------------------------------
 
+
 @celery_app.task(name="connectors.poll_due_connectors")
-def poll_due_connectors() -> Dict[str, Any]:
+def poll_due_connectors() -> dict[str, Any]:
     """
     Master scheduler: find all active, scheduled connectors whose next sync is due,
     and dispatch individual sync tasks.
@@ -119,9 +124,8 @@ def poll_due_connectors() -> Dict[str, Any]:
     return _run(_poll_due_connectors_async())
 
 
-async def _poll_due_connectors_async() -> Dict[str, Any]:
-    from sqlalchemy import text
-    dispatched: List[str] = []
+async def _poll_due_connectors_async() -> dict[str, Any]:
+    dispatched: list[str] = []
 
     async with _worker_session_maker() as db:
         # Find connectors that are active, have a schedule, and are due for sync.
@@ -138,7 +142,7 @@ async def _poll_due_connectors_async() -> Dict[str, Any]:
         )
         connectors = result.scalars().all()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for connector in connectors:
             if _is_sync_due(connector, now):
                 sync_connector.delay(str(connector.id))
@@ -154,7 +158,7 @@ def _is_sync_due(connector: Connector, now: datetime) -> bool:
         return True
     last = connector.last_synced_at
     if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
+        last = last.replace(tzinfo=UTC)
     return (now - last).total_seconds() >= 3600
 
 
@@ -162,8 +166,9 @@ def _is_sync_due(connector: Connector, now: datetime) -> bool:
 # Task: sync_connector — execute one full sync cycle
 # ---------------------------------------------------------------------------
 
+
 @celery_app.task(name="connectors.sync_connector", bind=True, max_retries=3)
-def sync_connector(self, connector_id: str) -> Dict[str, Any]:
+def sync_connector(self, connector_id: str) -> dict[str, Any]:
     """
     Execute one full sync cycle for a connector.
 
@@ -177,30 +182,34 @@ def sync_connector(self, connector_id: str) -> Dict[str, Any]:
         return _run(_sync_connector_async(connector_id))
     except Exception as exc:
         logger.error(f"sync_connector {connector_id} failed: {exc}")
-        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1)) from None
 
 
-async def _sync_connector_async(connector_id: str) -> Dict[str, Any]:
+async def _sync_connector_async(connector_id: str) -> dict[str, Any]:
+    from app.schemas.graph_schemas import IngestMode
     from app.services.connectors.base import ConnectorFetcher
     from app.services.pipeline_service import pipeline_service
-    from app.schemas.graph_schemas import IngestMode
 
-    log_id: Optional[str] = None
+    log_id: str | None = None
     items_processed = 0
     entities_extracted = 0
     sync_status = "error"
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     async with _worker_session_maker() as db:
         # Load connector
-        result = await db.execute(select(Connector).where(Connector.id == UUID(connector_id)))
+        result = await db.execute(
+            select(Connector).where(Connector.id == UUID(connector_id))
+        )
         connector = result.scalars().first()
         if not connector:
             logger.warning(f"sync_connector: connector {connector_id} not found")
             return {"status": "not_found"}
 
         if connector.status != "active":
-            logger.info(f"sync_connector: connector {connector_id} is {connector.status}, skipping")
+            logger.info(
+                f"sync_connector: connector {connector_id} is {connector.status}, skipping"
+            )
             return {"status": "skipped", "reason": connector.status}
 
         # Create sync log entry
@@ -212,7 +221,9 @@ async def _sync_connector_async(connector_id: str) -> Dict[str, Any]:
 
         try:
             # Fetch items
-            fetcher = ConnectorFetcher.for_type(connector.connector_type, connector.config or {})
+            fetcher = ConnectorFetcher.for_type(
+                connector.connector_type, connector.config or {}
+            )
             items = fetcher.fetch_since(connector.last_sync_cursor)
             items_processed = len(items)
 
@@ -224,11 +235,15 @@ async def _sync_connector_async(connector_id: str) -> Dict[str, Any]:
                 if not text.strip():
                     continue
 
-                context_hint = (connector.config.get("entity_mapping") or {}).get("context_hint", "")
+                context_hint = (connector.config.get("entity_mapping") or {}).get(
+                    "context_hint", ""
+                )
                 source_label = f"connector:{connector.connector_type}:{connector.name}"
 
                 result_docs = await pipeline_service.process_documents(
-                    documents=[{"text": text, "source": source_label, "context": context_hint}],
+                    documents=[
+                        {"text": text, "source": source_label, "context": context_hint}
+                    ],
                     graph_id=UUID(connector.graph_id),
                     user_id=connector.user_id,
                     mode=IngestMode.INCREMENTAL,
@@ -237,7 +252,7 @@ async def _sync_connector_async(connector_id: str) -> Dict[str, Any]:
 
             # Update connector cursor and last_synced_at
             connector.last_sync_cursor = fetcher.last_cursor
-            connector.last_synced_at = datetime.now(timezone.utc)
+            connector.last_synced_at = datetime.now(UTC)
             sync_status = "success"
 
         except Exception as exc:
@@ -250,7 +265,7 @@ async def _sync_connector_async(connector_id: str) -> Dict[str, Any]:
             update(ConnectorSyncLog)
             .where(ConnectorSyncLog.id == log.id)
             .values(
-                finished_at=datetime.now(timezone.utc),
+                finished_at=datetime.now(UTC),
                 status=sync_status,
                 items_processed=items_processed,
                 entities_extracted=entities_extracted,
@@ -272,8 +287,11 @@ async def _sync_connector_async(connector_id: str) -> Dict[str, Any]:
 # Task: process_webhook_event — ingest a single webhook event
 # ---------------------------------------------------------------------------
 
+
 @celery_app.task(name="connectors.process_webhook_event", bind=True, max_retries=5)
-def process_webhook_event(self, event_id: str, graph_id: str, connector_id: str) -> Dict[str, Any]:
+def process_webhook_event(
+    self, event_id: str, graph_id: str, connector_id: str
+) -> dict[str, Any]:
     """
     Process a single webhook event through the KG ingestion pipeline.
 
@@ -285,17 +303,19 @@ def process_webhook_event(self, event_id: str, graph_id: str, connector_id: str)
     except Exception as exc:
         retry_index = self.request.retries
         countdown = backoff_seconds[min(retry_index, len(backoff_seconds) - 1)]
-        logger.error(f"process_webhook_event {event_id} failed (attempt {retry_index + 1}): {exc}")
-        raise self.retry(exc=exc, countdown=countdown)
+        logger.error(
+            f"process_webhook_event {event_id} failed (attempt {retry_index + 1}): {exc}"
+        )
+        raise self.retry(exc=exc, countdown=countdown) from None
 
 
 async def _process_webhook_event_async(
     event_id: str,
     graph_id: str,
     connector_id: str,
-) -> Dict[str, Any]:
-    from app.services.pipeline_service import pipeline_service
+) -> dict[str, Any]:
     from app.schemas.graph_schemas import IngestMode
+    from app.services.pipeline_service import pipeline_service
 
     async with _worker_session_maker() as db:
         # Load event
@@ -322,15 +342,21 @@ async def _process_webhook_event_async(
             return {"status": "error", "reason": "connector not found"}
 
         try:
-            mapper_class = EVENT_MAPPERS.get(connector.connector_type, PassthroughMapper)
+            mapper_class = EVENT_MAPPERS.get(
+                connector.connector_type, PassthroughMapper
+            )
             mapper = mapper_class()
-            context_hint = (connector.config.get("entity_mapping") or {}).get("context_hint", "")
+            context_hint = (connector.config.get("entity_mapping") or {}).get(
+                "context_hint", ""
+            )
             text = mapper.to_text(event.payload, context_hint)
 
             if text.strip():
                 source_label = f"connector:{connector.connector_type}:{connector.name}"
                 await pipeline_service.process_documents(
-                    documents=[{"text": text, "source": source_label, "context": context_hint}],
+                    documents=[
+                        {"text": text, "source": source_label, "context": context_hint}
+                    ],
                     graph_id=UUID(graph_id),
                     user_id=connector.user_id,
                     mode=IngestMode.INCREMENTAL,
@@ -339,11 +365,13 @@ async def _process_webhook_event_async(
             await db.execute(
                 update(WebhookEvent)
                 .where(WebhookEvent.id == UUID(event_id))
-                .values(status="processed", processed_at=datetime.now(timezone.utc))
+                .values(status="processed", processed_at=datetime.now(UTC))
             )
             await db.commit()
 
-            logger.info(f"Processed webhook event {event_id} for connector {connector_id}")
+            logger.info(
+                f"Processed webhook event {event_id} for connector {connector_id}"
+            )
             return {"event_id": event_id, "status": "processed"}
 
         except Exception as exc:
@@ -360,8 +388,9 @@ async def _process_webhook_event_async(
 # Task: retry_failed_events — exponential backoff retry for errored webhooks
 # ---------------------------------------------------------------------------
 
+
 @celery_app.task(name="connectors.retry_failed_events")
-def retry_failed_events() -> Dict[str, Any]:
+def retry_failed_events() -> dict[str, Any]:
     """
     Re-dispatch webhook events stuck in 'error' status.
     Runs every 5 minutes via Celery Beat.
@@ -369,13 +398,11 @@ def retry_failed_events() -> Dict[str, Any]:
     return _run(_retry_failed_events_async())
 
 
-async def _retry_failed_events_async() -> Dict[str, Any]:
+async def _retry_failed_events_async() -> dict[str, Any]:
     dispatched = 0
     async with _worker_session_maker() as db:
         result = await db.execute(
-            select(WebhookEvent)
-            .where(WebhookEvent.status == "error")
-            .limit(50)
+            select(WebhookEvent).where(WebhookEvent.status == "error").limit(50)
         )
         events = result.scalars().all()
         for event in events:

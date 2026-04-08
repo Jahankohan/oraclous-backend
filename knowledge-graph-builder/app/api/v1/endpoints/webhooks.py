@@ -11,7 +11,7 @@ POST /api/v1/webhooks/{graph_id}/{connector_id}
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 @router.post(
     "/webhooks/{graph_id}/{connector_id}",
     summary="Receive an inbound webhook event",
-    response_model=Dict[str, Any],
+    response_model=dict[str, Any],
     responses={429: {"description": "Rate limit exceeded"}},
 )
 @limiter.limit("100/minute")
@@ -37,7 +37,7 @@ async def receive_webhook(
     connector_id: str,
     request: Request,
     db: AsyncSession = Depends(get_database),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Inbound webhook receiver for push-based connectors.
 
@@ -78,7 +78,7 @@ async def receive_webhook(
 
     # 4. Parse payload + dedup
     try:
-        payload: Dict[str, Any] = await request.json()
+        payload: dict[str, Any] = await request.json()
     except Exception:
         payload = {"_raw": raw_body.decode(errors="replace")}
 

@@ -11,6 +11,7 @@ Create Neo4j indexes for the Agent Memory API.
 Run once during deployment or after a Neo4j upgrade:
     python -m app.scripts.create_memory_indexes
 """
+
 import asyncio
 import os
 import sys
@@ -37,19 +38,16 @@ async def create_memory_indexes() -> None:
           `vector.similarity_function`: 'cosine'
         }}
         """,
-
         # 2. Fulltext index — keyword recall across memory content
         """
         CREATE FULLTEXT INDEX memory_content_idx IF NOT EXISTS
         FOR (m:Memory) ON EACH [m.content]
         """,
-
         # 3. Composite lookup — graph-scoped queries by scope/type/validity
         """
         CREATE INDEX memory_graph_scope_idx IF NOT EXISTS
         FOR (m:Memory) ON (m.graph_id, m.scope, m.memory_type, m.valid_to)
         """,
-
         # 4. Deduplication — content hash within graph
         """
         CREATE INDEX memory_content_hash_idx IF NOT EXISTS

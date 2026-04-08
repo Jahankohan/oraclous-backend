@@ -2,8 +2,6 @@
 Chat API endpoints using Neo4j GraphRAG with Enhanced Retriever Support
 """
 
-from typing import List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
@@ -16,7 +14,6 @@ from app.schemas.chat_schemas import (
     ChatModesResponse,
     ChatRequest,
     ChatResponse,
-    ErrorResponse,
     RetrievalContext,
     SourceInfo,
     get_all_modes,
@@ -104,7 +101,7 @@ async def chat_with_graph(
         )
 
         # Map GroundedSearchResult sources → SourceInfo schema objects.
-        sources: List[SourceInfo] = []
+        sources: list[SourceInfo] = []
         if body.include_sources:
             for src in result.sources:
                 sources.append(
@@ -146,7 +143,9 @@ async def chat_with_graph(
 
     except Exception as e:
         logger.error(f"Chat error for graph {body.graph_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Chat processing failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Chat processing failed: {str(e)}"
+        ) from None
 
 
 @router.post(

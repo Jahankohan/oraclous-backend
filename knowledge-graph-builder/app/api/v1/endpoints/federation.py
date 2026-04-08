@@ -3,21 +3,22 @@
 POST /api/v1/graphs/federate/query         — federated entity search
 POST /api/v1/graphs/federate/vector-search — federated vector similarity search
 """
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.api.dependencies import security
-from app.core.neo4j_client import neo4j_client
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.auth_service import auth_service
-from app.services.federation_service import FederationError, FederationService
+from app.core.neo4j_client import neo4j_client
 from app.schemas.federation_schemas import (
     FederatedQueryRequest,
     FederatedQueryResponse,
     FederatedVectorSearchRequest,
     FederatedVectorSearchResponse,
 )
+from app.services.auth_service import auth_service
+from app.services.federation_service import FederationError, FederationService
 
 logger = get_logger(__name__)
 
@@ -70,10 +71,10 @@ async def federated_query(
             principal=user,
         )
     except FederationError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
     except Exception as exc:
         logger.error("federated_query failed: %s", exc)
-        raise HTTPException(status_code=500, detail="Federation query failed")
+        raise HTTPException(status_code=500, detail="Federation query failed") from None
 
     return FederatedQueryResponse(**result)
 
@@ -114,9 +115,11 @@ async def federated_vector_search(
             principal=user,
         )
     except FederationError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
     except Exception as exc:
         logger.error("federated_vector_search failed: %s", exc)
-        raise HTTPException(status_code=500, detail="Federation vector search failed")
+        raise HTTPException(
+            status_code=500, detail="Federation vector search failed"
+        ) from None
 
     return FederatedVectorSearchResponse(**result)

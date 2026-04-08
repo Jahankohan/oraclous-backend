@@ -4,24 +4,26 @@ Unit tests for graph_schemas.py Pydantic models.
 Tests banned-property enforcement on EntityNodeProperties, RelationshipProperties
 validation, LLMExtractionOutput cross-reference validation, and MigrationOrphanLog.
 """
-import pytest
+
 from datetime import datetime
+
+import pytest
 from pydantic import ValidationError
 
 from app.schemas.graph_schemas import (
     BANNED_NODE_PROPERTIES,
     EntityNodeProperties,
-    RelationshipProperties,
     ExtractedEntity,
     ExtractedRelationship,
     LLMExtractionOutput,
     MigrationOrphanLog,
+    RelationshipProperties,
 )
-
 
 # ---------------------------------------------------------------------------
 # Tests: BANNED_NODE_PROPERTIES constant
 # ---------------------------------------------------------------------------
+
 
 class TestBannedNodePropertiesConstant:
     @pytest.mark.unit
@@ -57,6 +59,7 @@ class TestBannedNodePropertiesConstant:
 # Tests: EntityNodeProperties — banned property rejection
 # ---------------------------------------------------------------------------
 
+
 class TestEntityNodeProperties:
     @pytest.mark.unit
     def test_valid_properties_pass(self):
@@ -66,41 +69,30 @@ class TestEntityNodeProperties:
     @pytest.mark.unit
     def test_extra_non_banned_props_pass(self):
         props = EntityNodeProperties(
-            name="Acme Corp",
-            extra={"industry": "Software", "founded_year": 2010}
+            name="Acme Corp", extra={"industry": "Software", "founded_year": 2010}
         )
         assert props.extra["industry"] == "Software"
 
     @pytest.mark.unit
     def test_job_title_in_extra_raises(self):
         with pytest.raises(ValidationError, match="relational context"):
-            EntityNodeProperties(
-                name="Alice",
-                extra={"job_title": "CEO"}
-            )
+            EntityNodeProperties(name="Alice", extra={"job_title": "CEO"})
 
     @pytest.mark.unit
     def test_position_in_extra_raises(self):
         with pytest.raises(ValidationError, match="relational context"):
-            EntityNodeProperties(
-                name="Alice",
-                extra={"position": "Director"}
-            )
+            EntityNodeProperties(name="Alice", extra={"position": "Director"})
 
     @pytest.mark.unit
     def test_role_in_extra_raises(self):
         with pytest.raises(ValidationError, match="relational context"):
-            EntityNodeProperties(
-                name="Alice",
-                extra={"role": "Lead"}
-            )
+            EntityNodeProperties(name="Alice", extra={"role": "Lead"})
 
     @pytest.mark.unit
     def test_multiple_banned_props_raises(self):
         with pytest.raises(ValidationError):
             EntityNodeProperties(
-                name="Alice",
-                extra={"job_title": "CEO", "seniority": "Senior"}
+                name="Alice", extra={"job_title": "CEO", "seniority": "Senior"}
             )
 
     @pytest.mark.unit
@@ -125,13 +117,11 @@ class TestEntityNodeProperties:
 # Tests: RelationshipProperties
 # ---------------------------------------------------------------------------
 
+
 class TestRelationshipProperties:
     @pytest.mark.unit
     def test_valid_relationship_properties(self):
-        props = RelationshipProperties(
-            source_chunk_id="chunk-abc",
-            confidence=0.95
-        )
+        props = RelationshipProperties(source_chunk_id="chunk-abc", confidence=0.95)
         assert props.source_chunk_id == "chunk-abc"
         assert props.confidence == 0.95
 
@@ -172,7 +162,7 @@ class TestRelationshipProperties:
         props = RelationshipProperties(
             source_chunk_id="chunk",
             confidence=0.9,
-            extra={"position": "CTO", "start_date": "2021-03"}
+            extra={"position": "CTO", "start_date": "2021-03"},
         )
         assert props.extra["position"] == "CTO"
 
@@ -186,13 +176,14 @@ class TestRelationshipProperties:
 # Tests: ExtractedEntity
 # ---------------------------------------------------------------------------
 
+
 class TestExtractedEntity:
     @pytest.mark.unit
     def test_valid_entity(self):
         entity = ExtractedEntity(
             id="alice-001",
             label="Person",
-            properties=EntityNodeProperties(name="Alice Chen")
+            properties=EntityNodeProperties(name="Alice Chen"),
         )
         assert entity.id == "alice-001"
         assert entity.label == "Person"
@@ -204,15 +195,15 @@ class TestExtractedEntity:
                 id="alice-001",
                 label="Person",
                 properties=EntityNodeProperties(
-                    name="Alice",
-                    extra={"job_title": "CEO"}
-                )
+                    name="Alice", extra={"job_title": "CEO"}
+                ),
             )
 
 
 # ---------------------------------------------------------------------------
 # Tests: ExtractedRelationship
 # ---------------------------------------------------------------------------
+
 
 class TestExtractedRelationship:
     @pytest.mark.unit
@@ -224,8 +215,8 @@ class TestExtractedRelationship:
             properties=RelationshipProperties(
                 source_chunk_id="chunk-xyz",
                 confidence=0.93,
-                extra={"position": "CTO", "start_date": "March 2021"}
-            )
+                extra={"position": "CTO", "start_date": "March 2021"},
+            ),
         )
         assert rel.type == "WORKS_FOR"
         assert rel.properties.extra["position"] == "CTO"
@@ -237,7 +228,7 @@ class TestExtractedRelationship:
                 start_node_id="a",
                 end_node_id="b",
                 type="works_for",  # lowercase — invalid
-                properties=RelationshipProperties(source_chunk_id="c", confidence=0.9)
+                properties=RelationshipProperties(source_chunk_id="c", confidence=0.9),
             )
 
     @pytest.mark.unit
@@ -246,7 +237,7 @@ class TestExtractedRelationship:
             start_node_id="a",
             end_node_id="b",
             type="MEMBER_OF_V2",
-            properties=RelationshipProperties(source_chunk_id="c", confidence=0.9)
+            properties=RelationshipProperties(source_chunk_id="c", confidence=0.9),
         )
         assert rel.type == "MEMBER_OF_V2"
 
@@ -255,20 +246,23 @@ class TestExtractedRelationship:
 # Tests: LLMExtractionOutput — cross-reference validation
 # ---------------------------------------------------------------------------
 
+
 class TestLLMExtractionOutput:
-    def _make_entity(self, entity_id: str, label: str = "Person", name: str = "Alice") -> ExtractedEntity:
+    def _make_entity(
+        self, entity_id: str, label: str = "Person", name: str = "Alice"
+    ) -> ExtractedEntity:
         return ExtractedEntity(
-            id=entity_id,
-            label=label,
-            properties=EntityNodeProperties(name=name)
+            id=entity_id, label=label, properties=EntityNodeProperties(name=name)
         )
 
-    def _make_rel(self, start: str, end: str, rel_type: str = "WORKS_FOR") -> ExtractedRelationship:
+    def _make_rel(
+        self, start: str, end: str, rel_type: str = "WORKS_FOR"
+    ) -> ExtractedRelationship:
         return ExtractedRelationship(
             start_node_id=start,
             end_node_id=end,
             type=rel_type,
-            properties=RelationshipProperties(source_chunk_id="chunk", confidence=0.9)
+            properties=RelationshipProperties(source_chunk_id="chunk", confidence=0.9),
         )
 
     @pytest.mark.unit
@@ -276,9 +270,9 @@ class TestLLMExtractionOutput:
         output = LLMExtractionOutput(
             nodes=[
                 self._make_entity("alice", "Person", "Alice"),
-                self._make_entity("acme", "Company", "Acme Corp")
+                self._make_entity("acme", "Company", "Acme Corp"),
             ],
-            relationships=[self._make_rel("alice", "acme")]
+            relationships=[self._make_rel("alice", "acme")],
         )
         assert len(output.nodes) == 2
         assert len(output.relationships) == 1
@@ -288,7 +282,7 @@ class TestLLMExtractionOutput:
         with pytest.raises(ValidationError, match="not in extracted nodes"):
             LLMExtractionOutput(
                 nodes=[self._make_entity("acme", "Company", "Acme")],
-                relationships=[self._make_rel("alice", "acme")]  # alice not in nodes
+                relationships=[self._make_rel("alice", "acme")],  # alice not in nodes
             )
 
     @pytest.mark.unit
@@ -296,7 +290,7 @@ class TestLLMExtractionOutput:
         with pytest.raises(ValidationError, match="not in extracted nodes"):
             LLMExtractionOutput(
                 nodes=[self._make_entity("alice", "Person", "Alice")],
-                relationships=[self._make_rel("alice", "acme")]  # acme not in nodes
+                relationships=[self._make_rel("alice", "acme")],  # acme not in nodes
             )
 
     @pytest.mark.unit
@@ -313,18 +307,18 @@ class TestLLMExtractionOutput:
                         id="alice",
                         label="Person",
                         properties=EntityNodeProperties(
-                            name="Alice",
-                            extra={"job_title": "CEO"}
-                        )
+                            name="Alice", extra={"job_title": "CEO"}
+                        ),
                     )
                 ],
-                relationships=[]
+                relationships=[],
             )
 
 
 # ---------------------------------------------------------------------------
 # Tests: MigrationOrphanLog
 # ---------------------------------------------------------------------------
+
 
 class TestMigrationOrphanLog:
     @pytest.mark.unit
@@ -335,7 +329,7 @@ class TestMigrationOrphanLog:
             entity_name="Alice Chen",
             entity_type="Person",
             orphaned_properties={"job_title": "CEO"},
-            source_chunk_ids=["chunk-abc"]
+            source_chunk_ids=["chunk-abc"],
         )
         assert log.status == "pending"
         assert isinstance(log.detected_at, datetime)
@@ -348,7 +342,7 @@ class TestMigrationOrphanLog:
             entity_name="N",
             entity_type="Person",
             orphaned_properties={},
-            source_chunk_ids=[]
+            source_chunk_ids=[],
         )
         assert log.status == "pending"
 
@@ -361,6 +355,6 @@ class TestMigrationOrphanLog:
             entity_type="Person",
             orphaned_properties={},
             source_chunk_ids=[],
-            status="re_extracted"
+            status="re_extracted",
         )
         assert log.status == "re_extracted"

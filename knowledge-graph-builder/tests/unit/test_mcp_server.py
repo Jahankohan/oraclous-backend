@@ -12,11 +12,9 @@ from __future__ import annotations
 # itself doesn't fail because ORACLOUS_API_KEY is not set.
 # ---------------------------------------------------------------------------
 import os
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
 
 os.environ.setdefault("ORACLOUS_API_KEY", "test-key")
 os.environ.setdefault("ORACLOUS_BASE_URL", "http://localhost:8003")

@@ -14,13 +14,13 @@ Implements 9 endpoints from the ORA-81 spec:
 Security: every endpoint verifies the caller's tenant matches the SA's tenant.
 Error responses never reveal existence of inaccessible graphs (always 403, not 404).
 """
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.responses import Response
 
 from app.api.dependencies import (
     get_current_user,
     get_current_user_id,
-    security,
     verify_graph_access,
 )
 from app.core.neo4j_client import neo4j_client
@@ -89,6 +89,7 @@ async def _resolve_tenant_id(current_user: dict, driver) -> str:
 
 # ── Graph-scoped SA management ─────────────────────────────────────────────
 
+
 @router.post(
     "/graphs/{graphId}/service-accounts",
     response_model=ServiceAccountCreatedResponse,
@@ -117,7 +118,9 @@ async def create_service_account(
             expires_at=body.expires_at,
         )
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from None
 
     return ServiceAccountCreatedResponse(**sa)
 
@@ -136,11 +139,14 @@ async def list_service_accounts(
     await verify_graph_access(graphId, "admin", user_id)
     tenant_id = await _resolve_tenant_id(current_user, driver)
 
-    rows = await service_account_service.list_service_accounts(driver, graphId, tenant_id)
+    rows = await service_account_service.list_service_accounts(
+        driver, graphId, tenant_id
+    )
     return [ServiceAccountResponse(**r) for r in rows]
 
 
 # ── SA instance management ─────────────────────────────────────────────────
+
 
 @router.get(
     "/service-accounts/{accountId}",
@@ -158,7 +164,9 @@ async def get_service_account(
     sa = await service_account_service.get_service_account(driver, accountId, tenant_id)
     if not sa:
         # Never reveal graph existence to unauthorized callers
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
 
     # Verify caller can access the SA's home graph
     await verify_graph_access(sa["home_graph_id"], "read", user_id)
@@ -181,7 +189,9 @@ async def update_service_account(
 
     sa = await service_account_service.get_service_account(driver, accountId, tenant_id)
     if not sa:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
 
     await verify_graph_access(sa["home_graph_id"], "write", user_id)
 
@@ -189,13 +199,16 @@ async def update_service_account(
         driver, accountId, tenant_id, name=body.name, description=body.description
     )
     if not updated:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
     return ServiceAccountResponse(**updated)
 
 
 @router.delete(
     "/service-accounts/{accountId}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def revoke_service_account(
     accountId: str,
@@ -208,13 +221,19 @@ async def revoke_service_account(
 
     sa = await service_account_service.get_service_account(driver, accountId, tenant_id)
     if not sa:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
 
     await verify_graph_access(sa["home_graph_id"], "admin", user_id)
 
-    revoked = await service_account_service.revoke_service_account(driver, accountId, tenant_id)
+    revoked = await service_account_service.revoke_service_account(
+        driver, accountId, tenant_id
+    )
     if not revoked:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
 
 
 @router.post(
@@ -232,19 +251,26 @@ async def rotate_key(
 
     sa = await service_account_service.get_service_account(driver, accountId, tenant_id)
     if not sa:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
 
     await verify_graph_access(sa["home_graph_id"], "write", user_id)
 
     try:
-        result = await service_account_service.rotate_key(driver, accountId, tenant_id, user_id)
+        result = await service_account_service.rotate_key(
+            driver, accountId, tenant_id, user_id
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from None
 
     return ServiceAccountRotatedResponse(**result)
 
 
 # ── Graph grants management ────────────────────────────────────────────────
+
 
 @router.post(
     "/service-accounts/{accountId}/graph-grants",
@@ -274,7 +300,9 @@ async def add_graph_grant(
     # Verify SA exists in this tenant (403 if not — never 404)
     sa = await service_account_service.get_service_account(driver, accountId, tenant_id)
     if not sa:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
 
     # Caller must admin the target graph
     await verify_graph_access(body.graph_id, "admin", user_id)
@@ -290,7 +318,9 @@ async def add_graph_grant(
             expires_at=body.expires_at,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from None
 
     return GraphGrantResponse(**grant)
 
@@ -310,17 +340,22 @@ async def list_graph_grants(
 
     sa = await service_account_service.get_service_account(driver, accountId, tenant_id)
     if not sa:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
 
     await verify_graph_access(sa["home_graph_id"], "read", user_id)
 
-    grants = await service_account_service.list_graph_grants(driver, accountId, tenant_id)
+    grants = await service_account_service.list_graph_grants(
+        driver, accountId, tenant_id
+    )
     return [GraphGrantResponse(**g) for g in grants]
 
 
 @router.delete(
     "/service-accounts/{accountId}/graph-grants/{graphId}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def delete_graph_grant(
     accountId: str,
@@ -341,7 +376,9 @@ async def delete_graph_grant(
 
     sa = await service_account_service.get_service_account(driver, accountId, tenant_id)
     if not sa:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
 
     await verify_graph_access(graphId, "admin", user_id)
 

@@ -18,12 +18,12 @@ Test scenarios:
 These tests are stateless (all Neo4j/DB calls mocked). A live multi-tenant
 isolation test suite that seeds real Neo4j data lives in the E2E suite.
 """
+
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Tenant constants
@@ -38,12 +38,13 @@ GRAPH_B_ID = str(uuid.uuid4())
 USER_A = {"id": USER_A_ID, "email": "tenant-a@example.com"}
 USER_B = {"id": USER_B_ID, "email": "tenant-b@example.com"}
 
-_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=UTC).isoformat()
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _graph_node(graph_id: str, user_id: str, name: str = "Graph") -> dict:
     return {
@@ -74,6 +75,7 @@ def _headers():
 # 1. Graph-level access control
 # ---------------------------------------------------------------------------
 
+
 class TestCrossGraphAccess:
 
     @pytest.mark.integration
@@ -86,10 +88,14 @@ class TestCrossGraphAccess:
 
         auth = _auth_for(USER_A)  # authenticated as User A
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
-                MockSvc.return_value.get_graph.return_value = graph_b  # Neo4j returns it, API must gate
+                MockSvc.return_value.get_graph.return_value = (
+                    graph_b  # Neo4j returns it, API must gate
+                )
 
                 response = await async_client.get(
                     f"/api/v1/graphs/{GRAPH_B_ID}", headers=_headers()
@@ -112,8 +118,10 @@ class TestCrossGraphAccess:
 
         auth = _auth_for(USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockSvc.return_value.get_graph.return_value = graph_b
 
@@ -135,14 +143,18 @@ class TestCrossGraphAccess:
 
         auth = _auth_for(USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockSvc.return_value.get_graph.return_value = graph_b
 
                 response = await async_client.post(
                     f"/api/v1/graphs/{GRAPH_B_ID}/ingest",
-                    json={"content": "Injected content from tenant A into tenant B graph"},
+                    json={
+                        "content": "Injected content from tenant A into tenant B graph"
+                    },
                     headers=_headers(),
                 )
         finally:
@@ -166,8 +178,10 @@ class TestCrossGraphAccess:
 
         auth = _auth_for(USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 svc = MockSvc.return_value
                 svc.list_user_graphs.return_value = user_a_graphs
@@ -199,8 +213,10 @@ class TestCrossGraphAccess:
 
         auth = _auth_for(USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockSvc.return_value.get_graph.return_value = graph_b
 
@@ -218,11 +234,14 @@ class TestCrossGraphAccess:
 # 2. Chat cross-tenant isolation
 # ---------------------------------------------------------------------------
 
+
 class TestChatCrossTenantIsolation:
 
     @pytest.mark.integration
     @pytest.mark.security
-    async def test_chat_scoped_to_graph_a_does_not_return_graph_b_data(self, async_client):
+    async def test_chat_scoped_to_graph_a_does_not_return_graph_b_data(
+        self, async_client
+    ):
         """
         ISOLATION: Chat against graph_A with graph_B's unique entity name
         must not return that entity in the response.
@@ -252,26 +271,36 @@ class TestChatCrossTenantIsolation:
         graph_a_items = [_item("TechNova Corp in San Francisco")]
 
         try:
-            with patch("app.services.chat_service.OpenAIEmbeddings"), \
-                 patch("app.services.chat_service.OpenAILLM"), \
-                 patch("app.services.chat_service.settings") as mock_cfg, \
-                 patch("app.services.chat_service.retriever_factory") as mock_fac, \
-                 patch("app.services.chat_service.GraphRAG") as MockRAG, \
-                 patch("app.api.v1.endpoints.chat.GraphNodeService") as MockGS, \
-                 patch("app.api.v1.endpoints.chat.auth_service") as mock_auth:
+            with (
+                patch("app.services.chat_service.OpenAIEmbeddings"),
+                patch("app.services.chat_service.OpenAILLM"),
+                patch("app.services.chat_service.settings") as mock_cfg,
+                patch("app.services.chat_service.retriever_factory") as mock_fac,
+                patch("app.services.chat_service.GraphRAG") as MockRAG,
+                patch("app.api.v1.endpoints.chat.GraphNodeService") as MockGS,
+                patch("app.api.v1.endpoints.chat.auth_service") as mock_auth,
+            ):
 
                 mock_cfg.OPENAI_API_KEY = "test-key"
                 mock_fac.create_retriever = AsyncMock(return_value=MagicMock())
                 rag = MagicMock()
-                rag.search.return_value = _make_rag_result(graph_a_answer, graph_a_items)
+                rag.search.return_value = _make_rag_result(
+                    graph_a_answer, graph_a_items
+                )
                 MockRAG.return_value = rag
                 # Ownership check: graph A is owned by User A
-                MockGS.return_value.get_graph.return_value = {"user_id": USER_A_ID, "graph_id": GRAPH_A_ID}
+                MockGS.return_value.get_graph.return_value = {
+                    "user_id": USER_A_ID,
+                    "graph_id": GRAPH_A_ID,
+                }
                 mock_auth.verify_token = AsyncMock(return_value={"id": USER_A_ID})
 
                 response = await async_client.post(
                     "/api/v1/api/v1/chat",
-                    json={"query": f"Tell me about {tenant_b_secret}", "graph_id": GRAPH_A_ID},
+                    json={
+                        "query": f"Tell me about {tenant_b_secret}",
+                        "graph_id": GRAPH_A_ID,
+                    },
                     headers=_headers(),
                 )
         finally:
@@ -280,9 +309,9 @@ class TestChatCrossTenantIsolation:
         assert response.status_code == 200
         data = response.json()
         # Tenant B's exclusive entity name must not appear in the answer
-        assert tenant_b_secret not in data.get("answer", ""), (
-            "Tenant B's data leaked into a chat response scoped to Tenant A's graph"
-        )
+        assert tenant_b_secret not in data.get(
+            "answer", ""
+        ), "Tenant B's data leaked into a chat response scoped to Tenant A's graph"
 
     @pytest.mark.integration
     @pytest.mark.security
@@ -302,24 +331,31 @@ class TestChatCrossTenantIsolation:
             return r
 
         try:
-            with patch("app.services.chat_service.OpenAIEmbeddings"), \
-                 patch("app.services.chat_service.OpenAILLM"), \
-                 patch("app.services.chat_service.settings") as mock_cfg, \
-                 patch("app.services.chat_service.retriever_factory") as mock_fac, \
-                 patch("app.services.chat_service.GraphRAG") as MockRAG, \
-                 patch("app.api.v1.endpoints.chat.GraphNodeService") as MockGS, \
-                 patch("app.api.v1.endpoints.chat.auth_service") as mock_auth:
+            with (
+                patch("app.services.chat_service.OpenAIEmbeddings"),
+                patch("app.services.chat_service.OpenAILLM"),
+                patch("app.services.chat_service.settings") as mock_cfg,
+                patch("app.services.chat_service.retriever_factory") as mock_fac,
+                patch("app.services.chat_service.GraphRAG") as MockRAG,
+                patch("app.api.v1.endpoints.chat.GraphNodeService") as MockGS,
+                patch("app.api.v1.endpoints.chat.auth_service") as mock_auth,
+            ):
 
                 mock_cfg.OPENAI_API_KEY = "test-key"
                 # Ownership check: graph A is owned by User A
-                MockGS.return_value.get_graph.return_value = {"user_id": USER_A_ID, "graph_id": GRAPH_A_ID}
+                MockGS.return_value.get_graph.return_value = {
+                    "user_id": USER_A_ID,
+                    "graph_id": GRAPH_A_ID,
+                }
                 mock_auth.verify_token = AsyncMock(return_value={"id": USER_A_ID})
 
                 async def capture_create_retriever(*args, **kwargs):
                     captured_calls.append(kwargs)
                     return MagicMock()
 
-                mock_fac.create_retriever = AsyncMock(side_effect=capture_create_retriever)
+                mock_fac.create_retriever = AsyncMock(
+                    side_effect=capture_create_retriever
+                )
                 rag = MagicMock()
                 rag.search.return_value = _make_rag_result()
                 MockRAG.return_value = rag
@@ -335,32 +371,37 @@ class TestChatCrossTenantIsolation:
         # Verify the retriever was asked to scope to graph A
         assert len(captured_calls) > 0
         all_graph_ids = [
-            kw.get("graph_id") or kw.get("neo4j_graph_id", "")
-            for kw in captured_calls
+            kw.get("graph_id") or kw.get("neo4j_graph_id", "") for kw in captured_calls
         ]
         # At least one call should reference the correct graph_id
         # (exact kwarg name depends on retriever_factory API)
         # We do a soft check: GRAPH_B_ID must not appear anywhere
         for gid in all_graph_ids:
-            assert GRAPH_B_ID not in str(gid), (
-                f"Retriever was called with Graph B's ID — cross-tenant contamination risk"
-            )
+            assert GRAPH_B_ID not in str(
+                gid
+            ), "Retriever was called with Graph B's ID — cross-tenant contamination risk"
 
 
 # ---------------------------------------------------------------------------
 # 3. Schema cross-tenant isolation
 # ---------------------------------------------------------------------------
 
+
 class TestSchemaCrossTenantIsolation:
 
     @pytest.mark.integration
     @pytest.mark.security
-    async def test_schema_for_graph_a_does_not_contain_graph_b_entities(self, async_client):
+    async def test_schema_for_graph_a_does_not_contain_graph_b_entities(
+        self, async_client
+    ):
         """
         ISOLATION: Schema extraction for Graph A must only return entity types
         present in Graph A. Graph B entity types must never appear.
         """
-        from app.services.schema_service import GraphSchema, NodeSchema, RelationshipSchema
+        from app.services.schema_service import (
+            GraphSchema,
+            NodeSchema,
+        )
 
         # Graph A schema: has Company and Person
         schema_a = GraphSchema(
@@ -370,13 +411,13 @@ class TestSchemaCrossTenantIsolation:
                     label="Company",
                     properties={"name": "string", "graph_id": "string"},
                     sample_count=3,
-                    indexes=[]
+                    indexes=[],
                 ),
             },
             relationships={},
             constraints=[],
             indexes=[],
-            last_updated=datetime.now(timezone.utc),
+            last_updated=datetime.now(UTC),
             schema_version="v1",
         )
 
@@ -396,17 +437,23 @@ class TestSchemaCrossTenantIsolation:
 
         # Graph B entity types (e.g., "MedicalRecord") must not appear
         tenant_b_type = "MedicalRecord"
-        assert tenant_b_type not in data["nodes"], (
-            f"Schema for Graph A unexpectedly contains Graph B entity type '{tenant_b_type}'"
-        )
+        assert (
+            tenant_b_type not in data["nodes"]
+        ), f"Schema for Graph A unexpectedly contains Graph B entity type '{tenant_b_type}'"
         assert "Company" in data["nodes"]
 
         # Confirm schema_manager was called with the correct graph_id
         # (force_refresh defaults to False; don't assert on explicit kwarg presence)
         mock_manager.extract_schema.assert_called_once()
         called_with = mock_manager.extract_schema.call_args
-        called_graph_id = called_with.args[0] if called_with.args else called_with.kwargs.get("graph_id")
-        assert called_graph_id == GRAPH_A_ID, f"extract_schema called with wrong graph_id: {called_graph_id}"
+        called_graph_id = (
+            called_with.args[0]
+            if called_with.args
+            else called_with.kwargs.get("graph_id")
+        )
+        assert (
+            called_graph_id == GRAPH_A_ID
+        ), f"extract_schema called with wrong graph_id: {called_graph_id}"
 
     @pytest.mark.integration
     @pytest.mark.security
@@ -414,7 +461,7 @@ class TestSchemaCrossTenantIsolation:
         """
         ISOLATION: POST /schema/refresh for Graph A must not refresh Graph B's cache.
         """
-        from app.services.schema_service import GraphSchema, NodeSchema
+        from app.services.schema_service import GraphSchema
 
         schema_a = GraphSchema(
             graph_id=GRAPH_A_ID,
@@ -422,7 +469,7 @@ class TestSchemaCrossTenantIsolation:
             relationships={},
             constraints=[],
             indexes=[],
-            last_updated=datetime.now(timezone.utc),
+            last_updated=datetime.now(UTC),
             schema_version="v1",
         )
 
@@ -442,7 +489,9 @@ class TestSchemaCrossTenantIsolation:
         # extract_schema must only have been called for Graph A, NOT for Graph B
         calls = mock_manager.extract_schema.call_args_list
         assert len(calls) == 1
-        called_graph_id = calls[0].args[0] if calls[0].args else calls[0].kwargs.get("graph_id")
+        called_graph_id = (
+            calls[0].args[0] if calls[0].args else calls[0].kwargs.get("graph_id")
+        )
         assert called_graph_id == GRAPH_A_ID
         assert called_graph_id != GRAPH_B_ID
 
@@ -450,6 +499,7 @@ class TestSchemaCrossTenantIsolation:
 # ---------------------------------------------------------------------------
 # 4. Delete isolation
 # ---------------------------------------------------------------------------
+
 
 class TestDeleteIsolation:
 
@@ -467,8 +517,10 @@ class TestDeleteIsolation:
 
         auth = _auth_for(USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 svc = MockSvc.return_value
                 svc.get_graph.return_value = graph_a
@@ -489,10 +541,14 @@ class TestDeleteIsolation:
                 # Verify delete_graph was called with the CORRECT graph_id only
                 svc.delete_graph.assert_called_once()
                 call_args = svc.delete_graph.call_args
-                deleted_id = call_args.args[0] if call_args.args else call_args.kwargs.get("graph_id")
-                assert deleted_id == GRAPH_A_ID, (
-                    f"delete_graph called with {deleted_id} instead of {GRAPH_A_ID}"
+                deleted_id = (
+                    call_args.args[0]
+                    if call_args.args
+                    else call_args.kwargs.get("graph_id")
                 )
+                assert (
+                    deleted_id == GRAPH_A_ID
+                ), f"delete_graph called with {deleted_id} instead of {GRAPH_A_ID}"
                 assert deleted_id != GRAPH_B_ID
         else:
             # DELETE endpoint not yet implemented — document as known gap
@@ -506,6 +562,7 @@ class TestDeleteIsolation:
 # 5. Instructions cross-tenant isolation
 # ---------------------------------------------------------------------------
 
+
 class TestInstructionsCrossTenantIsolation:
 
     @pytest.mark.integration
@@ -516,8 +573,10 @@ class TestInstructionsCrossTenantIsolation:
 
         auth = _auth_for(USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockSvc.return_value.get_graph.return_value = graph_b
 
@@ -539,8 +598,10 @@ class TestInstructionsCrossTenantIsolation:
 
         auth = _auth_for(USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockSvc,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockSvc.return_value.get_graph.return_value = graph_b
 
@@ -558,6 +619,7 @@ class TestInstructionsCrossTenantIsolation:
 # 6. Token / auth boundary checks
 # ---------------------------------------------------------------------------
 
+
 class TestAuthBoundaryChecks:
 
     @pytest.mark.integration
@@ -569,11 +631,11 @@ class TestAuthBoundaryChecks:
         """
         fake_id = str(uuid.uuid4())
         unauthenticated_endpoints = [
-            ("GET",    f"/api/v1/graphs/{fake_id}"),
-            ("PUT",    f"/api/v1/graphs/{fake_id}"),
-            ("GET",    "/api/v1/graphs"),
-            ("POST",   "/api/v1/graphs"),
-            ("POST",   f"/api/v1/graphs/{fake_id}/ingest"),
+            ("GET", f"/api/v1/graphs/{fake_id}"),
+            ("PUT", f"/api/v1/graphs/{fake_id}"),
+            ("GET", "/api/v1/graphs"),
+            ("POST", "/api/v1/graphs"),
+            ("POST", f"/api/v1/graphs/{fake_id}/ingest"),
         ]
 
         for method, path in unauthenticated_endpoints:

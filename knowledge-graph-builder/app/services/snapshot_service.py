@@ -12,11 +12,11 @@ Architecture rules:
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from app.core.neo4j_client import neo4j_client
 from app.core.logging import get_logger
+from app.core.neo4j_client import neo4j_client
 
 logger = get_logger(__name__)
 
@@ -42,6 +42,12 @@ class SnapshotService:
             "CREATE INDEX version_number_idx IF NOT EXISTS FOR (v:GraphVersion) ON (v.graph_id, v.version_number)",
             # Composite index on relationships — (graph_id, transaction_time, invalidated_at)
             "CREATE INDEX rel_version_composite_idx IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id, r.transaction_time, r.invalidated_at)",
+            # ORA-138: Relationship temporal (valid-time) indexes — composite for
+            # queries that filter by r.graph_id + temporal props, and standalone
+            # for traversal queries where graph_id is only on the node side.
+            "CREATE INDEX rel_temporal_idx IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id, r.valid_from, r.valid_to)",
+            "CREATE INDEX rel_valid_from_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_from)",
+            "CREATE INDEX rel_valid_to_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_to)",
         ]
         for q in index_queries:
             try:
@@ -56,12 +62,12 @@ class SnapshotService:
     async def create_snapshot(
         self,
         graph_id: str,
-        label: Optional[str],
-        description: Optional[str],
+        label: str | None,
+        description: str | None,
         created_by: str,
         is_auto: bool = False,
-        parent_version_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        parent_version_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Create a GraphVersion node anchored to the current datetime.
 
@@ -88,7 +94,7 @@ class SnapshotService:
         version_number = int(num_result[0]["next_num"]) if num_result else 1
 
         version_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         create_q = """
         MATCH (g:Graph {graph_id: $graph_id})
@@ -148,14 +154,16 @@ class SnapshotService:
             """
             result = await neo4j_client.execute_query(create_no_graph_q, params)
 
-        logger.info(f"Created snapshot {version_id} (v{version_number}) for graph {graph_id}")
+        logger.info(
+            f"Created snapshot {version_id} (v{version_number}) for graph {graph_id}"
+        )
         return self._node_to_dict(result[0]["v"])
 
     # ------------------------------------------------------------------
     # List snapshots
     # ------------------------------------------------------------------
 
-    async def list_snapshots(self, graph_id: str) -> List[Dict[str, Any]]:
+    async def list_snapshots(self, graph_id: str) -> list[dict[str, Any]]:
         """Return all snapshots for a graph, newest first."""
         q = """
         MATCH (v:GraphVersion {graph_id: $graph_id})
@@ -169,13 +177,17 @@ class SnapshotService:
     # Get single snapshot
     # ------------------------------------------------------------------
 
-    async def get_snapshot(self, graph_id: str, snapshot_id: str) -> Optional[Dict[str, Any]]:
+    async def get_snapshot(
+        self, graph_id: str, snapshot_id: str
+    ) -> dict[str, Any] | None:
         """Fetch a single snapshot by ID, scoped to graph_id."""
         q = """
         MATCH (v:GraphVersion {graph_id: $graph_id, version_id: $version_id})
         RETURN v
         """
-        results = await neo4j_client.execute_query(q, {"graph_id": graph_id, "version_id": snapshot_id})
+        results = await neo4j_client.execute_query(
+            q, {"graph_id": graph_id, "version_id": snapshot_id}
+        )
         return self._node_to_dict(results[0]["v"]) if results else None
 
     # ------------------------------------------------------------------
@@ -191,7 +203,9 @@ class SnapshotService:
         MATCH (v:GraphVersion {graph_id: $graph_id, version_id: $version_id})
         DETACH DELETE v
         """
-        await neo4j_client.execute_query(q, {"graph_id": graph_id, "version_id": snapshot_id})
+        await neo4j_client.execute_query(
+            q, {"graph_id": graph_id, "version_id": snapshot_id}
+        )
         logger.info(f"Deleted snapshot {snapshot_id} for graph {graph_id}")
         return True
 
@@ -206,7 +220,7 @@ class SnapshotService:
         compare_to: str,
         offset: int = 0,
         limit: int = 100,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Compute entities and relationships added/deleted between two snapshots.
 
@@ -255,10 +269,26 @@ class SnapshotService:
         RETURN count(r) AS cnt
         """
 
-        ea_cnt = int((await neo4j_client.execute_query(ea_q, count_params) or [{"cnt": 0}])[0]["cnt"])
-        ed_cnt = int((await neo4j_client.execute_query(ed_q, count_params) or [{"cnt": 0}])[0]["cnt"])
-        ra_cnt = int((await neo4j_client.execute_query(ra_q, count_params) or [{"cnt": 0}])[0]["cnt"])
-        rd_cnt = int((await neo4j_client.execute_query(rd_q, count_params) or [{"cnt": 0}])[0]["cnt"])
+        ea_cnt = int(
+            (await neo4j_client.execute_query(ea_q, count_params) or [{"cnt": 0}])[0][
+                "cnt"
+            ]
+        )
+        ed_cnt = int(
+            (await neo4j_client.execute_query(ed_q, count_params) or [{"cnt": 0}])[0][
+                "cnt"
+            ]
+        )
+        ra_cnt = int(
+            (await neo4j_client.execute_query(ra_q, count_params) or [{"cnt": 0}])[0][
+                "cnt"
+            ]
+        )
+        rd_cnt = int(
+            (await neo4j_client.execute_query(rd_q, count_params) or [{"cnt": 0}])[0][
+                "cnt"
+            ]
+        )
 
         changes_q = """
         CALL {
@@ -309,7 +339,14 @@ class SnapshotService:
         SKIP $offset LIMIT $limit
         """
         change_rows = await neo4j_client.execute_query(
-            changes_q, {"graph_id": graph_id, "v1_ts": t1, "v2_ts": t2, "offset": offset, "limit": limit}
+            changes_q,
+            {
+                "graph_id": graph_id,
+                "v1_ts": t1,
+                "v2_ts": t2,
+                "offset": offset,
+                "limit": limit,
+            },
         )
         changes = [
             {
@@ -355,8 +392,8 @@ class SnapshotService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _node_to_dict(node: Any) -> Dict[str, Any]:
-        d: Dict[str, Any] = {}
+    def _node_to_dict(node: Any) -> dict[str, Any]:
+        d: dict[str, Any] = {}
         for key, val in node.items():
             if hasattr(val, "iso_format"):
                 d[key] = val.iso_format()
@@ -365,7 +402,7 @@ class SnapshotService:
         return d
 
 
-def _snapshot_ts(snapshot: Dict[str, Any]) -> str:
+def _snapshot_ts(snapshot: dict[str, Any]) -> str:
     """Return captured_at as an ISO-8601 string for Cypher datetime() parameter."""
     ts = snapshot.get("captured_at")
     if ts is None:

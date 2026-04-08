@@ -23,10 +23,10 @@ back to Phase A (CAN_ACCESS) so existing tenants are never locked out.
 
 Multi-tenancy: EVERY query includes graph_id filter — Architecture Rule #4.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from neo4j import AsyncDriver
@@ -53,41 +53,69 @@ _SYSTEM_ROLES = ["owner", "admin", "editor", "viewer", "restricted_viewer"]
 
 # System permissions seeded once globally (idempotent MERGE).
 _SYSTEM_PERMISSIONS = [
-    {"name": "graph:read",          "resource_type": "graph",    "action": "read"},
-    {"name": "graph:write",         "resource_type": "graph",    "action": "write"},
-    {"name": "graph:delete",        "resource_type": "graph",    "action": "delete"},
-    {"name": "graph:manage_access", "resource_type": "graph",    "action": "manage"},
-    {"name": "entity:read",         "resource_type": "entity",   "action": "read"},
-    {"name": "entity:write",        "resource_type": "entity",   "action": "write"},
-    {"name": "entity:delete",       "resource_type": "entity",   "action": "delete"},
-    {"name": "chunk:read",          "resource_type": "chunk",    "action": "read"},
-    {"name": "document:read",       "resource_type": "document", "action": "read"},
-    {"name": "document:write",      "resource_type": "document", "action": "write"},
-    {"name": "session:read",        "resource_type": "session",  "action": "read"},
-    {"name": "session:write",       "resource_type": "session",  "action": "write"},
-    {"name": "pii:read",            "resource_type": "entity",   "action": "read"},
+    {"name": "graph:read", "resource_type": "graph", "action": "read"},
+    {"name": "graph:write", "resource_type": "graph", "action": "write"},
+    {"name": "graph:delete", "resource_type": "graph", "action": "delete"},
+    {"name": "graph:manage_access", "resource_type": "graph", "action": "manage"},
+    {"name": "entity:read", "resource_type": "entity", "action": "read"},
+    {"name": "entity:write", "resource_type": "entity", "action": "write"},
+    {"name": "entity:delete", "resource_type": "entity", "action": "delete"},
+    {"name": "chunk:read", "resource_type": "chunk", "action": "read"},
+    {"name": "document:read", "resource_type": "document", "action": "read"},
+    {"name": "document:write", "resource_type": "document", "action": "write"},
+    {"name": "session:read", "resource_type": "session", "action": "read"},
+    {"name": "session:write", "resource_type": "session", "action": "write"},
+    {"name": "pii:read", "resource_type": "entity", "action": "read"},
 ]
 
 # Permissions granted to each built-in role.
 _ROLE_PERMISSIONS: dict[str, list[str]] = {
-    "owner":             [p["name"] for p in _SYSTEM_PERMISSIONS],  # all
-    "admin":             ["graph:read", "graph:write", "graph:manage_access",
-                          "entity:read", "entity:write", "entity:delete",
-                          "chunk:read", "document:read", "document:write",
-                          "session:read", "session:write", "pii:read"],
-    "editor":            ["graph:read", "graph:write",
-                          "entity:read", "entity:write",
-                          "chunk:read", "document:read", "document:write",
-                          "session:read", "session:write"],
-    "viewer":            ["graph:read", "entity:read", "chunk:read",
-                          "document:read", "session:read", "pii:read"],
-    "restricted_viewer": ["graph:read", "entity:read", "chunk:read",
-                          "document:read", "session:read"],
+    "owner": [p["name"] for p in _SYSTEM_PERMISSIONS],  # all
+    "admin": [
+        "graph:read",
+        "graph:write",
+        "graph:manage_access",
+        "entity:read",
+        "entity:write",
+        "entity:delete",
+        "chunk:read",
+        "document:read",
+        "document:write",
+        "session:read",
+        "session:write",
+        "pii:read",
+    ],
+    "editor": [
+        "graph:read",
+        "graph:write",
+        "entity:read",
+        "entity:write",
+        "chunk:read",
+        "document:read",
+        "document:write",
+        "session:read",
+        "session:write",
+    ],
+    "viewer": [
+        "graph:read",
+        "entity:read",
+        "chunk:read",
+        "document:read",
+        "session:read",
+        "pii:read",
+    ],
+    "restricted_viewer": [
+        "graph:read",
+        "entity:read",
+        "chunk:read",
+        "document:read",
+        "session:read",
+    ],
 }
 
 # Level → minimum role name for Phase A→B bridging.
 _LEVEL_TO_PERM: dict[str, str] = {
-    "read":  "graph:read",
+    "read": "graph:read",
     "write": "graph:write",
     "admin": "graph:manage_access",
 }
@@ -108,11 +136,12 @@ class ReBACService:
     """
 
     def __init__(self) -> None:
-        self._redis: Optional[object] = None
+        self._redis: object | None = None
 
     async def _get_redis(self):
         if self._redis is None:
             import redis.asyncio as aioredis
+
             self._redis = await aioredis.from_url(
                 settings.REDIS_URL, decode_responses=True
             )
@@ -178,13 +207,15 @@ class ReBACService:
                         p.is_system     = true
                     """,
                     {
-                        "name":          perm["name"],
-                        "pid":           str(uuid4()),
+                        "name": perm["name"],
+                        "pid": str(uuid4()),
                         "resource_type": perm["resource_type"],
-                        "action":        perm["action"],
+                        "action": perm["action"],
                     },
                 )
-        logger.info(f"ReBAC: {len(_SYSTEM_PERMISSIONS)} system permissions seeded/verified")
+        logger.info(
+            f"ReBAC: {len(_SYSTEM_PERMISSIONS)} system permissions seeded/verified"
+        )
 
     # ── SYNC SCRIPTS ──────────────────────────────────────────────────────
 
@@ -195,6 +226,7 @@ class ReBACService:
         all existing graph owners. Idempotent — uses MERGE, safe to re-run.
         """
         from sqlalchemy import select
+
         from app.models.graph import KnowledgeGraph
 
         result = await db.execute(select(KnowledgeGraph))
@@ -204,7 +236,7 @@ class ReBACService:
             logger.info("ReBAC sync: no existing graphs found")
             return
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with driver.session() as session:
             for kg in graphs:
                 await session.run(
@@ -221,11 +253,11 @@ class ReBACService:
                     ON CREATE SET r.level = "admin", r.granted_by = $user_id, r.granted_at = $now
                     """,
                     {
-                        "user_id":  str(kg.user_id),
+                        "user_id": str(kg.user_id),
                         "graph_id": str(kg.id),
-                        "name":     kg.name,
-                        "status":   kg.status or "active",
-                        "now":      now,
+                        "name": kg.name,
+                        "status": kg.status or "active",
+                        "now": now,
                     },
                 )
 
@@ -286,9 +318,9 @@ class ReBACService:
                     RETURN perm_count > 0 AS authorized
                     """,
                     {
-                        "user_id":  user_id,
+                        "user_id": user_id,
                         "graph_id": graph_id,
-                        "perm":     required_perm,
+                        "perm": required_perm,
                     },
                 )
                 record = await result.single()
@@ -297,7 +329,9 @@ class ReBACService:
                     # cache and return — Phase B data is authoritative
                     try:
                         redis = await self._get_redis()
-                        await redis.set(cache_key, "1" if authorized else "0", ex=_PERM_CACHE_TTL)
+                        await redis.set(
+                            cache_key, "1" if authorized else "0", ex=_PERM_CACHE_TTL
+                        )
                     except Exception:
                         pass
                     # Only return if Phase B nodes actually exist for this graph
@@ -340,7 +374,11 @@ class ReBACService:
             async with driver.session() as session:
                 result = await session.run(
                     query,
-                    {"user_id": user_id, "graph_id": graph_id, "acceptable": acceptable},
+                    {
+                        "user_id": user_id,
+                        "graph_id": graph_id,
+                        "acceptable": acceptable,
+                    },
                 )
                 record = await result.single()
                 authorized = bool(record and record["authorized"])
@@ -380,7 +418,7 @@ class ReBACService:
         Also bootstraps Phase B roles so fine-grained permissions are immediately
         available.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with driver.session() as session:
             await session.run(
                 """
@@ -421,12 +459,12 @@ class ReBACService:
         Idempotent — uses MERGE. Safe to re-run.
         Architecture Rule #4: all queries include graph_id.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         role_descriptions = {
-            "owner":             "Full control including deletion and role management",
-            "admin":             "Read/write + manage members, cannot delete graph",
-            "editor":            "Read + write entities/relationships, cannot manage access",
-            "viewer":            "Read-only on all nodes/edges",
+            "owner": "Full control including deletion and role management",
+            "admin": "Read/write + manage members, cannot delete graph",
+            "editor": "Read + write entities/relationships, cannot manage access",
+            "viewer": "Read-only on all nodes/edges",
             "restricted_viewer": "Read-only on non-PII nodes only",
         }
 
@@ -448,11 +486,11 @@ class ReBACService:
                     RETURN r.role_id AS role_id
                     """,
                     {
-                        "graph_id":    graph_id,
-                        "name":        role_name,
-                        "role_id":     role_id,
+                        "graph_id": graph_id,
+                        "name": role_name,
+                        "role_id": role_id,
                         "description": role_descriptions[role_name],
-                        "now":         now,
+                        "now": now,
                     },
                 )
                 record = await rec.single()
@@ -469,10 +507,10 @@ class ReBACService:
                         ON CREATE SET hp.graph_id = $graph_id, hp.granted_at = $now
                         """,
                         {
-                            "graph_id":  graph_id,
+                            "graph_id": graph_id,
                             "role_name": role_name,
                             "perm_name": perm_name,
-                            "now":       now,
+                            "now": now,
                         },
                     )
 
@@ -492,7 +530,12 @@ class ReBACService:
                     MERGE (parent)-[i:INHERITS_FROM]->(child)
                     ON CREATE SET i.graph_id = $graph_id, i.created_at = $now
                     """,
-                    {"graph_id": graph_id, "parent": parent, "child": child, "now": now},
+                    {
+                        "graph_id": graph_id,
+                        "parent": parent,
+                        "child": child,
+                        "now": now,
+                    },
                 )
 
             # Grant owner role to creating user
@@ -525,8 +568,8 @@ class ReBACService:
         target_user_id: str,
         role_name: str,
         granted_by: str,
-        expires_at: Optional[str] = None,
-        email: Optional[str] = None,
+        expires_at: str | None = None,
+        email: str | None = None,
     ) -> None:
         """
         Grant target_user_id the named role on graph_id.
@@ -537,7 +580,7 @@ class ReBACService:
         if not graph_id:
             raise ValueError("graph_id is required for grant_role")
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with driver.session() as session:
             await session.run(
                 """
@@ -562,13 +605,13 @@ class ReBACService:
                     hr.is_active  = true
                 """,
                 {
-                    "user_id":    target_user_id,
-                    "graph_id":   graph_id,
-                    "role_name":  role_name,
+                    "user_id": target_user_id,
+                    "graph_id": graph_id,
+                    "role_name": role_name,
                     "granted_by": granted_by,
                     "expires_at": expires_at,
-                    "email":      email,
-                    "now":        now,
+                    "email": email,
+                    "now": now,
                 },
             )
         await self.invalidate_permission_cache(target_user_id, graph_id)
@@ -597,7 +640,11 @@ class ReBACService:
                 SET hr.is_active = false
                 RETURN count(hr) AS revoked_count
                 """,
-                {"user_id": target_user_id, "graph_id": graph_id, "role_name": role_name},
+                {
+                    "user_id": target_user_id,
+                    "graph_id": graph_id,
+                    "role_name": role_name,
+                },
             )
             record = await result.single()
             count = record["revoked_count"] if record else 0
@@ -635,9 +682,9 @@ class ReBACService:
             )
             return [
                 {
-                    "user_id":    r["user_id"],
-                    "email":      r["email"],
-                    "role":       r["role"],
+                    "user_id": r["user_id"],
+                    "email": r["email"],
+                    "role": r["role"],
                     "granted_at": str(r["granted_at"]) if r["granted_at"] else None,
                     "expires_at": str(r["expires_at"]) if r["expires_at"] else None,
                 }
@@ -688,8 +735,10 @@ class ReBACService:
             if record is None:
                 return {"has_global_read": False, "allowed_subgraph_ids": []}
             return {
-                "has_global_read":      bool(record["has_global_read"]),
-                "allowed_subgraph_ids": [s for s in record["allowed_subgraph_ids"] if s],
+                "has_global_read": bool(record["has_global_read"]),
+                "allowed_subgraph_ids": [
+                    s for s in record["allowed_subgraph_ids"] if s
+                ],
             }
 
     # ── PHASE B — SUBGRAPH MANAGEMENT ────────────────────────────────────
@@ -699,8 +748,8 @@ class ReBACService:
         driver: AsyncDriver,
         graph_id: str,
         name: str,
-        description: Optional[str] = None,
-        created_by: Optional[str] = None,
+        description: str | None = None,
+        created_by: str | None = None,
     ) -> dict:
         """
         Create a named SubGraph partition within graph_id.
@@ -710,7 +759,7 @@ class ReBACService:
             raise ValueError("graph_id is required for create_subgraph")
 
         subgraph_id = str(uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with driver.session() as session:
             result = await session.run(
                 """
@@ -727,21 +776,23 @@ class ReBACService:
                     sg.created_at  AS created_at
                 """,
                 {
-                    "graph_id":    graph_id,
-                    "name":        name,
+                    "graph_id": graph_id,
+                    "name": name,
                     "subgraph_id": subgraph_id,
                     "description": description,
-                    "created_by":  created_by,
-                    "now":         now,
+                    "created_by": created_by,
+                    "now": now,
                 },
             )
             record = await result.single()
             return {
                 "subgraph_id": record["subgraph_id"],
-                "graph_id":    graph_id,
-                "name":        record["name"],
+                "graph_id": graph_id,
+                "name": record["name"],
                 "description": record["description"],
-                "created_at":  str(record["created_at"]) if record["created_at"] else now,
+                "created_at": (
+                    str(record["created_at"]) if record["created_at"] else now
+                ),
             }
 
     async def list_subgraphs(self, driver: AsyncDriver, graph_id: str) -> list[dict]:
@@ -768,10 +819,10 @@ class ReBACService:
             return [
                 {
                     "subgraph_id": r["subgraph_id"],
-                    "graph_id":    graph_id,
-                    "name":        r["name"],
+                    "graph_id": graph_id,
+                    "name": r["name"],
                     "description": r["description"],
-                    "created_at":  str(r["created_at"]) if r["created_at"] else None,
+                    "created_at": str(r["created_at"]) if r["created_at"] else None,
                 }
                 async for r in result
             ]

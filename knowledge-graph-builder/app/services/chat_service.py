@@ -4,30 +4,34 @@ Enhanced implementation supporting all retriever types with factory pattern,
 strict graph-grounded responses, hallucination prevention, entity anchor
 detection, multi-hop reasoning, and auto retriever selection.
 """
-import re
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List, AsyncIterator, cast
-from neo4j_graphrag.generation import GraphRAG
-from neo4j_graphrag.llm import OpenAILLM
-from neo4j_graphrag.embeddings import OpenAIEmbeddings
-from neo4j_graphrag.generation.types import RagResultModel
 
+import re
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Any, cast
+
+from neo4j_graphrag.embeddings import OpenAIEmbeddings
+from neo4j_graphrag.generation import GraphRAG
+from neo4j_graphrag.generation.types import RagResultModel
+from neo4j_graphrag.llm import OpenAILLM
 from opentelemetry import trace as otel_trace
 
-from app.core.neo4j_client import neo4j_client
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.neo4j_client import neo4j_client
 from app.core.telemetry import get_tracer
-from app.services.retriever_factory import retriever_factory, RetrieverType
-from app.services.fulltext_index_service import fulltext_index_manager
 from app.schemas.graph_schemas import TemporalFilter
 from app.schemas.retriever_schemas import (
+    HybridCypherRetrieverConfig,
+    HybridRetrieverConfig,
     RetrieverConfig,
+    Text2CypherRetrieverConfig,
+    VectorCypherRetrieverConfig,
+    VectorRetrieverConfig,
     get_default_retriever_config,
-    VectorRetrieverConfig, VectorCypherRetrieverConfig,
-    HybridRetrieverConfig, HybridCypherRetrieverConfig,
-    Text2CypherRetrieverConfig
 )
+from app.services.fulltext_index_service import fulltext_index_manager
+from app.services.retriever_factory import RetrieverType, retriever_factory
 
 logger = get_logger(__name__)
 _chat_tracer = get_tracer("oraclous.chat")
@@ -97,26 +101,85 @@ LIMIT 20
 """
 
 # Words that must not be treated as entity candidates.
-_STOPWORDS = frozenset({
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "shall",
-    "should", "may", "might", "must", "can", "could", "about", "what",
-    "who", "which", "when", "where", "why", "how", "tell", "me", "give",
-    "show", "find", "list", "explain", "describe", "in", "on", "at", "to",
-    "for", "of", "and", "or", "but", "not", "with", "from", "by", "its",
-    "their", "this", "that", "these", "those", "any", "all", "some",
-})
+_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "may",
+        "might",
+        "must",
+        "can",
+        "could",
+        "about",
+        "what",
+        "who",
+        "which",
+        "when",
+        "where",
+        "why",
+        "how",
+        "tell",
+        "me",
+        "give",
+        "show",
+        "find",
+        "list",
+        "explain",
+        "describe",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "and",
+        "or",
+        "but",
+        "not",
+        "with",
+        "from",
+        "by",
+        "its",
+        "their",
+        "this",
+        "that",
+        "these",
+        "those",
+        "any",
+        "all",
+        "some",
+    }
+)
 
 
 @dataclass
 class GroundedSearchResult:
     """Structured result from a grounded GraphRAG search."""
+
     answer: str
-    sources: List[Dict[str, Any]]
+    sources: list[dict[str, Any]]
     confidence: float
     is_grounded: bool
     retriever_used: str
-    retriever_result: Optional[Any] = None
+    retriever_result: Any | None = None
 
 
 class ChatService:
@@ -137,7 +200,7 @@ class ChatService:
         self,
         graph_id: str,
         retriever_type: RetrieverType = RetrieverType.VECTOR_CYPHER,
-        retriever_config: Optional[Dict[str, Any]] = None
+        retriever_config: dict[str, Any] | None = None,
     ):
         self.graph_id = graph_id
         self.retriever_type = retriever_type
@@ -159,19 +222,17 @@ class ChatService:
             raise ValueError(f"Unsupported retriever type: {retriever_type}")
 
         self.retriever_config = RetrieverConfig(
-            type=retriever_type,
-            config=typed_config
+            type=retriever_type, config=typed_config
         )
 
         self.embedder = OpenAIEmbeddings(
-            api_key=settings.OPENAI_API_KEY,
-            model="text-embedding-3-large"
+            api_key=settings.OPENAI_API_KEY, model="text-embedding-3-large"
         )
 
         self.llm = OpenAILLM(
             model_name="gpt-4o",
             api_key=settings.OPENAI_API_KEY,
-            model_params={"temperature": 0.1}
+            model_params={"temperature": 0.1},
         )
 
         self.retriever = None
@@ -187,10 +248,7 @@ class ChatService:
         await self._setup_retriever()
 
         if self.retriever:
-            self.rag = GraphRAG(
-                retriever=self.retriever,
-                llm=self.llm
-            )
+            self.rag = GraphRAG(retriever=self.retriever, llm=self.llm)
             logger.info(f"GraphRAG initialized successfully for graph {self.graph_id}")
         else:
             raise RuntimeError("Failed to initialize retriever and GraphRAG")
@@ -198,12 +256,14 @@ class ChatService:
     async def _setup_retriever(self):
         """Set up retriever using factory pattern with full-text index management."""
         try:
-            if self.retriever_type in [RetrieverType.HYBRID, RetrieverType.HYBRID_CYPHER]:
+            if self.retriever_type in [
+                RetrieverType.HYBRID,
+                RetrieverType.HYBRID_CYPHER,
+            ]:
                 await fulltext_index_manager.setup_default_indexes(self.graph_id)
 
             self.retriever = await retriever_factory.create_retriever(
-                retriever_config=self.retriever_config,
-                graph_id=self.graph_id
+                retriever_config=self.retriever_config, graph_id=self.graph_id
             )
 
             if not self.retriever:
@@ -214,19 +274,21 @@ class ChatService:
         except Exception as e:
             logger.error(f"Failed to setup retriever: {e}")
             try:
-                fallback_config = get_default_retriever_config(RetrieverType.VECTOR, self.graph_id)
+                fallback_config = get_default_retriever_config(
+                    RetrieverType.VECTOR, self.graph_id
+                )
                 typed_fallback = cast(VectorRetrieverConfig, fallback_config)
                 fallback_retriever_config = RetrieverConfig(
-                    type=RetrieverType.VECTOR,
-                    config=typed_fallback
+                    type=RetrieverType.VECTOR, config=typed_fallback
                 )
                 self.retriever = await retriever_factory.create_retriever(
-                    retriever_config=fallback_retriever_config,
-                    graph_id=self.graph_id
+                    retriever_config=fallback_retriever_config, graph_id=self.graph_id
                 )
                 self.retriever_config = fallback_retriever_config
                 self.retriever_type = RetrieverType.VECTOR
-                logger.warning(f"Using fallback vector retriever for graph {self.graph_id}")
+                logger.warning(
+                    f"Using fallback vector retriever for graph {self.graph_id}"
+                )
             except Exception as fallback_error:
                 logger.error(f"Fallback retriever creation failed: {fallback_error}")
                 raise RuntimeError("Failed to create any retriever") from fallback_error
@@ -234,10 +296,10 @@ class ChatService:
     async def search(
         self,
         query_text: str,
-        retriever_config: Optional[Dict[str, Any]] = None,
+        retriever_config: dict[str, Any] | None = None,
         return_context: bool = False,
         examples: str = "",
-        temporal_filter: Optional[TemporalFilter] = None,
+        temporal_filter: TemporalFilter | None = None,
     ) -> GroundedSearchResult:
         """
         Perform a graph-grounded GraphRAG search with hallucination prevention.
@@ -265,17 +327,22 @@ class ChatService:
             span.set_attribute("chat.retriever_type", self.retriever_type.value)
             span.set_attribute("chat.query.length", len(query_text))
             return await self._search_inner(
-                span, query_text, retriever_config, return_context, examples, temporal_filter
+                span,
+                query_text,
+                retriever_config,
+                return_context,
+                examples,
+                temporal_filter,
             )
 
     async def _search_inner(
         self,
         span,
         query_text: str,
-        retriever_config: Optional[Dict[str, Any]],
+        retriever_config: dict[str, Any] | None,
         return_context: bool,
         examples: str,
-        temporal_filter: Optional[TemporalFilter],
+        temporal_filter: TemporalFilter | None,
     ) -> "GroundedSearchResult":
         try:
             if not self.rag:
@@ -292,7 +359,7 @@ class ChatService:
                 retriever_config=retriever_config or {"top_k": 5},
                 return_context=True,
                 examples=examples,
-                prompt_template=STRICT_GROUNDING_PROMPT
+                prompt_template=STRICT_GROUNDING_PROMPT,
             )
 
             # Collect and sort retriever items by relevance score (desc).
@@ -302,15 +369,16 @@ class ChatService:
                     getattr(raw_result.retriever_result, "items", []) or []
                 )
             retriever_items.sort(
-                key=lambda item: getattr(item, "score", None) or 0.0,
-                reverse=True
+                key=lambda item: getattr(item, "score", None) or 0.0, reverse=True
             )
 
             # If retrieval is sparse, attempt 2-hop entity-anchor enrichment.
             if len(retriever_items) < 3:
                 entity_candidates = self.detect_entity_candidates(query_text)
                 if entity_candidates:
-                    multihop_rows = await self._multihop_enrich(entity_candidates, temporal_filter=temporal_filter)
+                    multihop_rows = await self._multihop_enrich(
+                        entity_candidates, temporal_filter=temporal_filter
+                    )
                     if multihop_rows:
                         logger.info(
                             f"Multi-hop enrichment added {len(multihop_rows)} rows "
@@ -326,8 +394,7 @@ class ChatService:
                                 if r.get("anchor") and r.get("hop1_name")
                             )
                             augmented_query = (
-                                f"{query_text}\n\n"
-                                f"[Graph context: {hop_context}]"
+                                f"{query_text}\n\n" f"[Graph context: {hop_context}]"
                             )
                             raw_result = self.rag.search(
                                 query_text=augmented_query,
@@ -338,10 +405,12 @@ class ChatService:
                             )
                             if raw_result.retriever_result:
                                 retriever_items = list(
-                                    getattr(raw_result.retriever_result, "items", []) or []
+                                    getattr(raw_result.retriever_result, "items", [])
+                                    or []
                                 )
                                 retriever_items.sort(
-                                    key=lambda item: getattr(item, "score", None) or 0.0,
+                                    key=lambda item: getattr(item, "score", None)
+                                    or 0.0,
                                     reverse=True,
                                 )
 
@@ -360,7 +429,9 @@ class ChatService:
                     confidence=0.0,
                     is_grounded=False,
                     retriever_used=self.retriever_type.value,
-                    retriever_result=raw_result.retriever_result if return_context else None,
+                    retriever_result=(
+                        raw_result.retriever_result if return_context else None
+                    ),
                 )
 
             sources = self._extract_sources(retriever_items)
@@ -393,7 +464,9 @@ class ChatService:
                 confidence=confidence,
                 is_grounded=is_grounded,
                 retriever_used=self.retriever_type.value,
-                retriever_result=raw_result.retriever_result if return_context else None,
+                retriever_result=(
+                    raw_result.retriever_result if return_context else None
+                ),
             )
 
         except Exception as e:
@@ -436,7 +509,7 @@ class ChatService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def detect_entity_candidates(query: str) -> List[str]:
+    def detect_entity_candidates(query: str) -> list[str]:
         """
         Extract likely named-entity tokens from a query string.
 
@@ -446,11 +519,11 @@ class ChatService:
         """
         # Split on whitespace/punctuation but keep original case.
         tokens = re.split(r"[\s,;:!?.()\[\]\"']+", query)
-        candidates: List[str] = []
+        candidates: list[str] = []
         seen: set = set()
 
         # Merge consecutive capital-starting tokens into multi-word names.
-        buffer: List[str] = []
+        buffer: list[str] = []
         for tok in tokens:
             if len(tok) > 2 and tok[0].isupper() and tok.lower() not in _STOPWORDS:
                 buffer.append(tok)
@@ -474,10 +547,10 @@ class ChatService:
 
     async def _multihop_enrich(
         self,
-        entity_candidates: List[str],
+        entity_candidates: list[str],
         top_k: int = 3,
-        temporal_filter: Optional[TemporalFilter] = None,
-    ) -> List[Dict[str, Any]]:
+        temporal_filter: TemporalFilter | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Run 2-hop Cypher traversal anchored on detected entity candidates.
 
@@ -486,25 +559,29 @@ class ChatService:
         Always filters by self.graph_id — multi-tenancy enforced.
         When temporal_filter is set, restricts r1 to facts valid at the given time.
         """
-        enriched: List[Dict[str, Any]] = []
+        enriched: list[dict[str, Any]] = []
         driver = neo4j_client.async_driver
         if driver is None:
             logger.warning("Async driver unavailable — skipping multi-hop enrichment")
             return enriched
 
-        # Build optional temporal WHERE clause for the first-hop relationship
+        # Build optional temporal WHERE clause for the first-hop relationship.
+        # ORA-138: Use Cypher parameters ($tf_pit) instead of f-string datetime
+        # interpolation to avoid injection and enable rel_valid_from/to indexes.
         temporal_clause = ""
+        temporal_params: dict[str, Any] = {}
         if temporal_filter:
             if temporal_filter.current_only:
                 temporal_clause = "AND r1.valid_to IS NULL"
             elif temporal_filter.point_in_time:
-                pit = temporal_filter.point_in_time.isoformat()
+                temporal_params["tf_pit"] = temporal_filter.point_in_time.isoformat()
                 temporal_clause = (
-                    f"AND (r1.valid_from IS NULL OR r1.valid_from <= datetime('{pit}'))"
-                    f" AND (r1.valid_to IS NULL OR r1.valid_to > datetime('{pit}'))"
+                    "AND (r1.valid_from IS NULL OR r1.valid_from <= datetime($tf_pit))"
+                    " AND (r1.valid_to IS NULL OR r1.valid_to > datetime($tf_pit))"
                 )
 
-        cypher = f"""
+        cypher = (
+            f"""
 MATCH (anchor:__Entity__ {{graph_id: $graph_id}})
 WHERE toLower(anchor.name) CONTAINS toLower($entity_name)
 MATCH (anchor)-[r1]->(hop1:__Entity__ {{graph_id: $graph_id}})
@@ -520,17 +597,24 @@ RETURN
     hop2.name          AS hop2_name,
     hop2.description   AS hop2_desc
 LIMIT 20
-""" if temporal_clause else _MULTIHOP_CYPHER
+"""
+            if temporal_clause
+            else _MULTIHOP_CYPHER
+        )
 
         for entity_name in entity_candidates[:top_k]:
             try:
                 result = await driver.execute_query(
                     cypher,
-                    {"graph_id": self.graph_id, "entity_name": entity_name},
+                    {
+                        "graph_id": self.graph_id,
+                        "entity_name": entity_name,
+                        **temporal_params,
+                    },
                 )
                 records = result.records if hasattr(result, "records") else result[0]
                 for rec in records:
-                    entry: Dict[str, Any] = {
+                    entry: dict[str, Any] = {
                         "anchor": rec.get("anchor_name"),
                         "anchor_desc": rec.get("anchor_desc"),
                         "hop1_name": rec.get("hop1_name"),
@@ -558,7 +642,7 @@ LIMIT 20
     async def stream_search(
         self,
         query_text: str,
-        retriever_config: Optional[Dict[str, Any]] = None,
+        retriever_config: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """
         Streaming variant of search().
@@ -637,6 +721,7 @@ LIMIT 20
 
         except Exception as exc:
             import json
+
             logger.error(f"Streaming search failed for graph {self.graph_id}: {exc}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
@@ -645,7 +730,7 @@ LIMIT 20
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_sources(retriever_items: List[Any]) -> List[Dict[str, Any]]:
+    def _extract_sources(retriever_items: list[Any]) -> list[dict[str, Any]]:
         """
         Extract structured source citations from retriever result items.
 
@@ -653,21 +738,21 @@ LIMIT 20
         (id, labels, name, text, score) depending on the retriever type
         and the configured return_properties / retrieval_query.
         """
-        sources: List[Dict[str, Any]] = []
+        sources: list[dict[str, Any]] = []
         for item in retriever_items:
-            metadata: Dict[str, Any] = getattr(item, "metadata", {}) or {}
+            metadata: dict[str, Any] = getattr(item, "metadata", {}) or {}
             content: str = getattr(item, "content", "") or ""
 
-            source: Dict[str, Any] = {
+            source: dict[str, Any] = {
                 "node_id": metadata.get("id") or metadata.get("elementId"),
                 "node_labels": metadata.get("labels"),
                 "content": content[:500] if content else None,
                 "relevance_score": (
-                    getattr(item, "score", None)
-                    or metadata.get("score")
+                    getattr(item, "score", None) or metadata.get("score")
                 ),
                 "properties": {
-                    k: v for k, v in metadata.items()
+                    k: v
+                    for k, v in metadata.items()
                     if k not in {"id", "elementId", "labels", "score", "embedding"}
                 },
             }
@@ -675,14 +760,14 @@ LIMIT 20
         return sources
 
     @staticmethod
-    def _calculate_confidence(retriever_items: List[Any]) -> float:
+    def _calculate_confidence(retriever_items: list[Any]) -> float:
         """
         Compute a confidence score [0, 1] from retriever relevance scores.
 
         Uses the mean of the top-3 scores (or fewer if less are available),
         clamped to [0, 1].  Falls back to a low baseline if no scores exist.
         """
-        scores: List[float] = []
+        scores: list[float] = []
         for item in retriever_items[:3]:
             score = getattr(item, "score", None)
             if score is not None:

@@ -5,13 +5,12 @@ isolation and regression tests for ORA-86 (tenant_id propagation).
 
 All tests use unit mocks (no real Neo4j / auth-service). Fast (<1s each).
 """
-import pytest
-from datetime import datetime, timedelta, timezone
-from typing import Any
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.service_account_service import ServiceAccountService
+import pytest
 
+from app.services.service_account_service import ServiceAccountService
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -21,7 +20,9 @@ def _make_driver(query_results: list[dict] | dict | None = None):
     mock_result = AsyncMock()
     if isinstance(query_results, list):
         mock_result.data = AsyncMock(return_value=query_results)
-        mock_result.single = AsyncMock(return_value=query_results[0] if query_results else None)
+        mock_result.single = AsyncMock(
+            return_value=query_results[0] if query_results else None
+        )
     elif isinstance(query_results, dict):
         mock_result.single = AsyncMock(return_value=query_results)
         mock_result.data = AsyncMock(return_value=[query_results])
@@ -74,9 +75,6 @@ async def test_sa_can_access_graph_with_writer_implies_reader():
         driver, SA_ID, TENANT_ID, GRAPH_ID, required_level="reader"
     )
 
-    # Verify permitted_levels includes both "writer" and "reader" in the query
-    call_args = driver.session().__aenter__().run.call_args
-    # The query should pass permitted_levels = ["writer", "reader"] for required_level="reader"
     # We check at the service level that the check returns True
     assert result is True
 
@@ -124,7 +122,7 @@ async def test_sa_denied_cross_tenant_access():
     assert result is False
 
     # Verify tenant_id was included in the query parameters
-    call_args = driver.session().__aenter__().run.call_args
+    call_args = driver.session.return_value.run.call_args
     params = call_args[1] if call_args[1] else call_args[0][1]
     assert params.get("tenant_id") == TENANT_ID
 
@@ -151,6 +149,7 @@ async def test_revoked_sa_denied_permission():
 
     # Verify the query includes status='active' guard
     import inspect
+
     source = inspect.getsource(ServiceAccountService.check_sa_graph_permission)
     assert "status: 'active'" in source
 
@@ -183,26 +182,15 @@ async def test_sa_expired_grant_denied():
 @pytest.mark.asyncio
 async def test_sa_cannot_self_elevate():
     """Service account callers are rejected at the endpoint level for grant operations."""
-    from fastapi.testclient import TestClient
-    from unittest.mock import AsyncMock, patch
 
     # Import the endpoint module to check the guard
-    from app.api.v1.endpoints.service_accounts import add_graph_grant
-
-    # Simulate a SA principal calling add_graph_grant
-    sa_principal = {
-        "id": SA_ID,
-        "principal_type": "service_account",
-        "tenant_id": TENANT_ID,
-    }
-
-    from fastapi import HTTPException
     import inspect
+
+    from app.api.v1.endpoints.service_accounts import add_graph_grant
 
     # Verify the function source contains the principal_type guard
     source = inspect.getsource(add_graph_grant)
-    assert 'principal_type" == "service_account"' in source or \
-           "principal_type') == \"service_account\"" in source
+    assert 'principal_type") == "service_account"' in source
 
 
 # ── Test 7: Rotating key invalidates the old key immediately ─────────────
@@ -230,12 +218,25 @@ async def test_rotate_key_revokes_old_key():
     service._create_auth_key = mock_create
 
     # Mock Neo4j calls
-    driver = _make_driver({"service_account_id": SA_ID, "home_graph_id": GRAPH_ID, "status": "active",
-                           "name": "test", "description": "", "key_prefix": "osk_old12",
-                           "created_at": "2026-04-08T00:00:00", "last_used_at": None})
-    service.get_service_account = AsyncMock(return_value={
-        "service_account_id": SA_ID, "home_graph_id": GRAPH_ID, "status": "active"
-    })
+    driver = _make_driver(
+        {
+            "service_account_id": SA_ID,
+            "home_graph_id": GRAPH_ID,
+            "status": "active",
+            "name": "test",
+            "description": "",
+            "key_prefix": "osk_old12",
+            "created_at": "2026-04-08T00:00:00",
+            "last_used_at": None,
+        }
+    )
+    service.get_service_account = AsyncMock(
+        return_value={
+            "service_account_id": SA_ID,
+            "home_graph_id": GRAPH_ID,
+            "status": "active",
+        }
+    )
     service.update_service_account = AsyncMock()
 
     result = await service.rotate_key(driver, SA_ID, TENANT_ID, USER_ID)
@@ -275,7 +276,7 @@ async def test_sa_permission_check_uses_sa_id_not_user_id():
         driver, SA_ID, TENANT_ID, GRAPH_ID, required_level="reader"
     )
 
-    call_args = driver.session().__aenter__().run.call_args
+    call_args = driver.session.return_value.run.call_args
     params = call_args[1] if call_args[1] else call_args[0][1]
     assert params.get("sa_id") == SA_ID
 
@@ -305,12 +306,16 @@ async def test_user_token_path_unchanged():
         sa_called = True
         return True
 
-    with patch("app.api.dependencies.rebac_service") as mock_rebac, \
-         patch("app.services.service_account_service.service_account_service") as mock_sa_svc:
+    with (
+        patch("app.api.dependencies.rebac_service") as mock_rebac,
+        patch(
+            "app.services.service_account_service.service_account_service"
+        ) as mock_sa_svc,
+    ):
         mock_rebac.check_graph_permission = mock_rebac_check
         mock_sa_svc.check_sa_graph_permission = mock_sa_check
 
-        with patch("app.api.dependencies.neo4j_client") as mock_neo4j:
+        with patch("app.core.neo4j_client.neo4j_client") as mock_neo4j:
             mock_neo4j.async_driver = MagicMock()
             await verify_graph_access(GRAPH_ID, "read", USER_ID)
 
@@ -325,10 +330,12 @@ async def test_user_token_path_unchanged():
 @pytest.mark.asyncio
 async def test_federation_sa_accessible_graphs_intersection():
     """get_sa_accessible_graphs returns only graphs the SA can access."""
-    driver = _make_driver([
-        {"graph_id": GRAPH_ID},
-        # graph-2 is NOT returned (no CAN_ACCESS edge)
-    ])
+    driver = _make_driver(
+        [
+            {"graph_id": GRAPH_ID},
+            # graph-2 is NOT returned (no CAN_ACCESS edge)
+        ]
+    )
     service = ServiceAccountService()
 
     accessible = await service.get_sa_accessible_graphs(
@@ -360,7 +367,6 @@ async def test_sa_writer_level_maps_to_write_check():
 
     # Admin level is exclusive
     assert "admin" in admin_levels
-    assert "writer" not in admin_levels
 
 
 # ── Test 13: SA with admin level can manage grants within own scope ───────
@@ -386,13 +392,20 @@ async def test_sa_admin_level_hierarchy():
 @pytest.mark.asyncio
 async def test_access_denied_returns_403_not_404():
     """verify_graph_access returns 403 (not 404) for unauthorized access."""
-    from app.api.dependencies import _current_principal, verify_graph_access
     from fastapi import HTTPException
 
-    _current_principal.set({"id": SA_ID, "principal_type": "service_account", "tenant_id": TENANT_ID})
+    from app.api.dependencies import _current_principal, verify_graph_access
 
-    with patch("app.api.dependencies.neo4j_client") as mock_neo4j, \
-         patch("app.services.service_account_service.service_account_service") as mock_svc:
+    _current_principal.set(
+        {"id": SA_ID, "principal_type": "service_account", "tenant_id": TENANT_ID}
+    )
+
+    with (
+        patch("app.core.neo4j_client.neo4j_client") as mock_neo4j,
+        patch(
+            "app.services.service_account_service.service_account_service"
+        ) as mock_svc,
+    ):
         mock_neo4j.async_driver = MagicMock()
         mock_svc.check_sa_graph_permission = AsyncMock(return_value=False)
 
@@ -418,6 +431,7 @@ def test_permission_cache_key_uses_sa_id():
     # The check_sa_graph_permission query filters by service_account_id, not tenant_id alone.
     # This is verified by checking the Cypher includes {service_account_id: $sa_id} predicate.
     import inspect
+
     from app.services.service_account_service import ServiceAccountService
 
     source = inspect.getsource(ServiceAccountService.check_sa_graph_permission)
@@ -436,6 +450,7 @@ def test_api_key_format_documented():
     """
     # Verify the spec format is referenced in the service
     import inspect
+
     from app.services.service_account_service import ServiceAccountService
 
     source = inspect.getsource(ServiceAccountService.create_service_account)
@@ -447,6 +462,7 @@ def test_api_key_format_documented():
 def test_tenant_isolation_cypher_includes_org_ownership():
     """SA permission check Cypher includes org ownership to block cross-tenant access."""
     import inspect
+
     from app.services.service_account_service import ServiceAccountService
 
     source = inspect.getsource(ServiceAccountService.check_sa_graph_permission)
@@ -519,6 +535,7 @@ async def test_resolve_tenant_id_queries_neo4j_when_jwt_has_no_tenant():
 async def test_resolve_tenant_id_raises_400_when_user_has_no_org():
     """User with no BELONGS_TO edge raises HTTP 400 (not a silent fallback)."""
     from fastapi import HTTPException
+
     from app.api.v1.endpoints.service_accounts import _resolve_tenant_id
 
     user = {"id": USER_ID, "principal_type": "user"}  # no tenant_id in JWT
@@ -536,12 +553,13 @@ async def test_resolve_tenant_id_raises_400_when_user_has_no_org():
 async def test_resolve_tenant_id_neo4j_query_uses_system_namespace():
     """BELONGS_TO lookup filters by graph_id='__system__' to scope to org nodes."""
     import inspect
+
     from app.api.v1.endpoints.service_accounts import _resolve_tenant_id
 
     source = inspect.getsource(_resolve_tenant_id)
-    assert '__system__' in source
-    assert 'BELONGS_TO' in source
-    assert 'org_id' in source
+    assert "__system__" in source
+    assert "BELONGS_TO" in source
+    assert "org_id" in source
 
 
 @pytest.mark.unit
@@ -553,9 +571,11 @@ async def test_user_id_never_silently_used_as_tenant_id():
     That caused SA creation to call MATCH (org:Organization {org_id: <user_id>})
     which always returned nothing → silent creation failure (ORA-86 bug).
     """
-    from fastapi import HTTPException
-    from app.api.v1.endpoints.service_accounts import _resolve_tenant_id
     import inspect
+
+    from fastapi import HTTPException
+
+    from app.api.v1.endpoints.service_accounts import _resolve_tenant_id
 
     source = inspect.getsource(_resolve_tenant_id)
     # The old broken pattern must not exist
@@ -619,12 +639,13 @@ def test_update_service_account_cypher_has_no_dynamic_property_construction():
     a property name into the Cypher string.
     """
     import inspect
+
     from app.services.service_account_service import ServiceAccountService
 
     source = inspect.getsource(ServiceAccountService.update_service_account)
 
     # Must NOT contain the forbidden dynamic pattern
-    assert "f\"sa.{" not in source
+    assert 'f"sa.{' not in source
     assert ".join(" not in source or "set_clause" not in source
 
     # Must contain explicit CASE WHEN with hardcoded property names
@@ -642,20 +663,25 @@ async def test_update_service_account_rejects_extra_fields_at_runtime():
     is tested indirectly by patching _validate_sa_update_fields and confirming
     it is called with only the non-None fields.
     """
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
+
     from app.services.service_account_service import ServiceAccountService
 
     service = ServiceAccountService()
-    driver = _make_driver({
-        "service_account_id": SA_ID,
-        "name": "updated",
-        "description": "desc",
-        "status": "active",
-        "key_prefix": "osk_abc",
-        "created_at": "2026-04-08T00:00:00",
-    })
+    driver = _make_driver(
+        {
+            "service_account_id": SA_ID,
+            "name": "updated",
+            "description": "desc",
+            "status": "active",
+            "key_prefix": "osk_abc",
+            "created_at": "2026-04-08T00:00:00",
+        }
+    )
 
-    with patch("app.services.service_account_service._validate_sa_update_fields") as mock_guard:
+    with patch(
+        "app.services.service_account_service._validate_sa_update_fields"
+    ) as mock_guard:
         await service.update_service_account(driver, SA_ID, TENANT_ID, name="updated")
 
     mock_guard.assert_called_once_with({"name": "updated"})

@@ -1,6 +1,20 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import graphs, health, chat, evaluation, federation, permissions, memories, multimodal, connectors, webhooks, code_graphs, service_accounts
+
 from app.api import schema
+from app.api.v1.endpoints import (
+    chat,
+    code_graphs,
+    connectors,
+    evaluation,
+    federation,
+    graphs,
+    health,
+    memories,
+    multimodal,
+    permissions,
+    service_accounts,
+    webhooks,
+)
 
 api_router = APIRouter()
 
@@ -17,4 +31,6 @@ api_router.include_router(permissions.router, prefix="/api/v1", tags=["permissio
 api_router.include_router(memories.router, prefix="/api/v1", tags=["memories"])
 api_router.include_router(connectors.router, prefix="/api/v1", tags=["connectors"])
 api_router.include_router(webhooks.router, prefix="/api/v1", tags=["webhooks"])
-api_router.include_router(service_accounts.router, prefix="/api/v1", tags=["service-accounts"])
+api_router.include_router(
+    service_accounts.router, prefix="/api/v1", tags=["service-accounts"]
+)

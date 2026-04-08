@@ -8,10 +8,11 @@ against a specific knowledge graph.
 RAGAS metrics require an LLM judge; the same OpenAI model used by
 ChatService is reused here to keep configuration consistent.
 """
+
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -61,7 +62,9 @@ def _build_ragas_embeddings():
     )
 
 
-def _build_metric_instances(metric_names: List[str], ragas_llm: Any, ragas_emb: Any) -> List[Any]:
+def _build_metric_instances(
+    metric_names: list[str], ragas_llm: Any, ragas_emb: Any
+) -> list[Any]:
     """Instantiate and configure RAGAS metric objects."""
     from ragas.metrics import (
         AnswerRelevancy,
@@ -113,19 +116,19 @@ class EvaluationService:
     async def evaluate(
         self,
         question: str,
-        answer: Optional[str],
-        ground_truth: Optional[str],
-        metrics: Optional[List[str]],
-    ) -> Dict[str, Any]:
+        answer: str | None,
+        ground_truth: str | None,
+        metrics: list[str] | None,
+    ) -> dict[str, Any]:
         """
         Run RAGAS evaluation and return a dict with:
           answer, retrieved_contexts, scores, overall,
           metrics_computed, is_grounded, warnings
         """
-        warnings: List[str] = []
+        warnings: list[str] = []
 
         # Resolve which metrics to compute.
-        requested = set(metrics) if metrics else SUPPORTED_METRICS.copy()
+        requested = set(metrics) if metrics else set(SUPPORTED_METRICS)
         unknown = requested - SUPPORTED_METRICS
         if unknown:
             warnings.append(f"Unknown metrics ignored: {sorted(unknown)}")
@@ -133,9 +136,7 @@ class EvaluationService:
 
         # Drop context_recall when ground_truth is absent.
         if not ground_truth and "context_recall" in requested:
-            warnings.append(
-                "context_recall skipped: ground_truth not provided."
-            )
+            warnings.append("context_recall skipped: ground_truth not provided.")
             requested.discard("context_recall")
 
         if not requested:
@@ -158,8 +159,8 @@ class EvaluationService:
         evaluated_answer = answer if answer is not None else result.answer
 
         # Build context strings from retrieved sources.
-        context_strings: List[str] = []
-        context_items: List[RetrievedContextItem] = []
+        context_strings: list[str] = []
+        context_items: list[RetrievedContextItem] = []
         for src in result.sources:
             text = src.get("content") or ""
             if text:
@@ -192,7 +193,11 @@ class EvaluationService:
 
         # Compute overall as mean of non-None scores.
         computed_values = [v for v in scores_dict.values() if v is not None]
-        overall = round(sum(computed_values) / len(computed_values), 4) if computed_values else None
+        overall = (
+            round(sum(computed_values) / len(computed_values), 4)
+            if computed_values
+            else None
+        )
 
         return {
             "answer": evaluated_answer,
@@ -212,10 +217,10 @@ class EvaluationService:
         self,
         question: str,
         answer: str,
-        contexts: List[str],
-        ground_truth: Optional[str],
-        metric_names: List[str],
-    ) -> Dict[str, Optional[float]]:
+        contexts: list[str],
+        ground_truth: str | None,
+        metric_names: list[str],
+    ) -> dict[str, float | None]:
         """
         Synchronous RAGAS execution (runs in thread pool executor).
         Returns a dict of {metric_name: score_or_None}.
@@ -223,17 +228,14 @@ class EvaluationService:
         try:
             from ragas import EvaluationDataset, SingleTurnSample, evaluate
         except ImportError:
-            logger.error(
-                "ragas package not installed. "
-                "Run: pip install ragas"
-            )
+            logger.error("ragas package not installed. " "Run: pip install ragas")
             return {name: None for name in metric_names}
 
         ragas_llm = _build_ragas_llm()
         ragas_emb = _build_ragas_embeddings()
         metric_instances = _build_metric_instances(metric_names, ragas_llm, ragas_emb)
 
-        sample_kwargs: Dict[str, Any] = {
+        sample_kwargs: dict[str, Any] = {
             "user_input": question,
             "response": answer,
             "retrieved_contexts": contexts,
@@ -257,9 +259,13 @@ class EvaluationService:
             "context_precision": "context_precision",
             "context_recall": "context_recall",
         }
-        scores: Dict[str, Optional[float]] = {name: None for name in SUPPORTED_METRICS}
+        scores: dict[str, float | None] = {name: None for name in SUPPORTED_METRICS}
 
-        result_dict = ragas_result.to_pandas().iloc[0].to_dict() if hasattr(ragas_result, "to_pandas") else {}
+        result_dict = (
+            ragas_result.to_pandas().iloc[0].to_dict()
+            if hasattr(ragas_result, "to_pandas")
+            else {}
+        )
         for ragas_key, our_key in ragas_key_map.items():
             if ragas_key in result_dict:
                 raw = result_dict[ragas_key]

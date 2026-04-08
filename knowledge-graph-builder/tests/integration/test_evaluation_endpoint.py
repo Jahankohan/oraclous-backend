@@ -8,10 +8,11 @@ URL: /api/v1/api/v1/graphs/{graph_id}/evaluate
      ^^^^^^^^ main app prefix
               ^^^^^^^^ router prefix in api_router
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.main import app
+import pytest
+
 from app.schemas.evaluation_schemas import EvaluationScores, RetrievedContextItem
 
 GRAPH_ID = "test-graph-eval-001"
@@ -22,6 +23,7 @@ BASE_URL = f"/api/v1/api/v1/graphs/{GRAPH_ID}/evaluate"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_eval_result(
     answer="Alice is the CEO.",
@@ -43,7 +45,11 @@ def _make_eval_result(
     if context_recall is not None:
         computed.append("context_recall")
 
-    non_none = [v for v in [faithfulness, answer_relevance, context_precision, context_recall] if v is not None]
+    non_none = [
+        v
+        for v in [faithfulness, answer_relevance, context_precision, context_recall]
+        if v is not None
+    ]
     overall = round(sum(non_none) / len(non_none), 4) if non_none else None
 
     return {
@@ -67,7 +73,9 @@ def _make_eval_result(
 class _AuthAndEvalPatch:
     """Context manager that patches auth, graph ownership, and EvaluationService."""
 
-    def __init__(self, eval_result=None, user_id=FAKE_USER_ID, graph_found=True, eval_raises=None):
+    def __init__(
+        self, eval_result=None, user_id=FAKE_USER_ID, graph_found=True, eval_raises=None
+    ):
         self._eval_result = eval_result or _make_eval_result()
         self._user_id = user_id
         self._graph_found = graph_found
@@ -107,6 +115,7 @@ class _AuthAndEvalPatch:
 # ---------------------------------------------------------------------------
 # Tests: happy path
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluationEndpointHappyPath:
 
@@ -188,7 +197,9 @@ class TestEvaluationEndpointHappyPath:
     @pytest.mark.integration
     @pytest.mark.api
     async def test_evaluate_warnings_propagated(self, async_client):
-        result = _make_eval_result(warnings=["context_recall skipped: ground_truth not provided."])
+        result = _make_eval_result(
+            warnings=["context_recall skipped: ground_truth not provided."]
+        )
         with _AuthAndEvalPatch(eval_result=result):
             response = await async_client.post(
                 BASE_URL,
@@ -218,6 +229,7 @@ class TestEvaluationEndpointHappyPath:
 # Tests: authentication and authorization
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluationEndpointAuth:
 
     @pytest.mark.integration
@@ -246,8 +258,10 @@ class TestEvaluationEndpointAuth:
     @pytest.mark.api
     async def test_cross_tenant_access_denied(self, async_client):
         """A user cannot evaluate another user's graph."""
-        with patch("app.api.v1.endpoints.evaluation.auth_service") as mock_auth, \
-             patch("app.api.v1.endpoints.evaluation.GraphNodeService") as mock_gs_cls:
+        with (
+            patch("app.api.v1.endpoints.evaluation.auth_service") as mock_auth,
+            patch("app.api.v1.endpoints.evaluation.GraphNodeService") as mock_gs_cls,
+        ):
             mock_auth.verify_token = AsyncMock(return_value={"id": "user-A"})
             # Graph belongs to user-B
             mock_gs_cls.return_value.get_graph.return_value = {"user_id": "user-B"}
@@ -264,6 +278,7 @@ class TestEvaluationEndpointAuth:
 # ---------------------------------------------------------------------------
 # Tests: validation
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluationEndpointValidation:
 
@@ -308,6 +323,7 @@ class TestEvaluationEndpointValidation:
 # ---------------------------------------------------------------------------
 # Tests: error handling
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluationEndpointErrors:
 

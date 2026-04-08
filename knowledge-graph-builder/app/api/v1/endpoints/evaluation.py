@@ -9,7 +9,8 @@ Scores a question/answer pair against a knowledge graph using RAGAS metrics:
   - context_precision
   - context_recall (requires ground_truth)
 """
-from fastapi import APIRouter, HTTPException, Depends
+
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.api.dependencies import security
@@ -74,7 +75,7 @@ async def evaluate_graph_response(
             metrics=request.metrics,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except Exception as exc:
         logger.error(f"Evaluation error for graph {graph_id}: {exc}")
         raise HTTPException(

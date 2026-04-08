@@ -36,7 +36,6 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -75,7 +74,7 @@ def _auth_headers() -> dict:
 # ---------------------------------------------------------------------------
 # Shared async HTTP client (lazy, one per process)
 # ---------------------------------------------------------------------------
-_http_client: Optional[httpx.AsyncClient] = None
+_http_client: httpx.AsyncClient | None = None
 
 
 def _client() -> httpx.AsyncClient:
@@ -629,7 +628,7 @@ async def get_neighbors(
         LIMIT 50
         """
 
-    anchor_name: Optional[str] = None
+    anchor_name: str | None = None
     neighbors: list = []
     with driver.session() as session:
         for record in session.run(cypher, params):

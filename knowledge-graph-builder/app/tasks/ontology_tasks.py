@@ -12,10 +12,8 @@ Architecture rules:
 from __future__ import annotations
 
 import difflib
-import logging
 
 from neo4j import GraphDatabase
-from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -84,9 +82,13 @@ def retroactive_apply_ontology_task(
                         continue
                     best_match = max(
                         allowed_list,
-                        key=lambda a: difflib.SequenceMatcher(None, label.lower(), a.lower()).ratio(),
+                        key=lambda a: difflib.SequenceMatcher(
+                            None, label.lower(), a.lower()
+                        ).ratio(),
                     )
-                    ratio = difflib.SequenceMatcher(None, label.lower(), best_match.lower()).ratio()
+                    ratio = difflib.SequenceMatcher(
+                        None, label.lower(), best_match.lower()
+                    ).ratio()
                     if ratio >= 0.7:
                         session.run(
                             "MATCH (e:__Entity__) WHERE elementId(e) = $eid SET e.label = $new_label",

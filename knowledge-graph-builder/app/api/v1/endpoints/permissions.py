@@ -13,9 +13,12 @@ Architecture rules enforced:
     #5  — AsyncDriver used throughout (FastAPI endpoint)
     #8  — validate at the boundary only (request models handle this)
 """
+
 from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi.responses import Response
 
 from app.api.dependencies import get_current_user_id, verify_graph_access
+from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.schemas.permission_schemas import (
     GraphMemberResponse,
@@ -26,7 +29,6 @@ from app.schemas.permission_schemas import (
     SubGraphResponse,
 )
 from app.services.rebac_service import rebac_service
-from app.core.logging import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -44,6 +46,7 @@ def _require_driver():
 
 
 # ── Members ────────────────────────────────────────────────────────────────
+
 
 @router.get(
     "/graphs/{graphId}/members",
@@ -114,6 +117,7 @@ async def grant_member_role(
 @router.delete(
     "/graphs/{graphId}/members/{targetUserId}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Revoke a user's role",
     description="Soft-revoke a user's role on this graph. Requires admin access.",
 )
@@ -149,6 +153,7 @@ async def revoke_member_role(
 
 
 # ── SubGraphs ──────────────────────────────────────────────────────────────
+
 
 @router.get(
     "/graphs/{graphId}/subgraphs",

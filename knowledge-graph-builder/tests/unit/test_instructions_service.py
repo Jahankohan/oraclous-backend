@@ -7,36 +7,38 @@ Tests:
 - InstructionsCompiler prompt block generation
 - IngestDataRequest.resolved_overrides() backwards compat
 """
-import pytest
-import warnings
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
 
+import warnings
+from unittest.mock import AsyncMock
+
+import pytest
 from pydantic import ValidationError
 
 from app.schemas.graph_schemas import (
-    ExtractionDensity,
     EntityTypeRule,
-    RelationshipRule,
+    ExtractionDensity,
     GraphInstructions,
-    IngestionOverrides,
     IngestDataRequest,
+    IngestionOverrides,
+    RelationshipRule,
 )
 from app.services.instructions_service import (
-    ResolvedInstructions,
-    InstructionsResolver,
     InstructionsCompiler,
+    InstructionsResolver,
+    ResolvedInstructions,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_resolver(instructions_json=None) -> InstructionsResolver:
     resolver = InstructionsResolver()
     resolver._load_from_neo4j = AsyncMock(
-        return_value=GraphInstructions(**instructions_json) if instructions_json else None
+        return_value=(
+            GraphInstructions(**instructions_json) if instructions_json else None
+        )
     )
     return resolver
 
@@ -44,6 +46,7 @@ def _make_resolver(instructions_json=None) -> InstructionsResolver:
 # ---------------------------------------------------------------------------
 # Tests: GraphInstructions model validation
 # ---------------------------------------------------------------------------
+
 
 class TestGraphInstructions:
     @pytest.mark.unit
@@ -68,7 +71,9 @@ class TestGraphInstructions:
     def test_entity_type_rule_structure(self):
         gi = GraphInstructions(
             entity_types=[
-                EntityTypeRule(name="Person", description="A human", examples=["Alice", "Bob"])
+                EntityTypeRule(
+                    name="Person", description="A human", examples=["Alice", "Bob"]
+                )
             ]
         )
         assert gi.entity_types[0].name == "Person"
@@ -89,6 +94,7 @@ class TestGraphInstructions:
 # Tests: IngestionOverrides model validation
 # ---------------------------------------------------------------------------
 
+
 class TestIngestionOverrides:
     @pytest.mark.unit
     def test_all_none_defaults(self):
@@ -105,15 +111,14 @@ class TestIngestionOverrides:
 
     @pytest.mark.unit
     def test_extra_entity_types_accepted(self):
-        ov = IngestionOverrides(
-            extra_entity_types=[EntityTypeRule(name="Drug")]
-        )
+        ov = IngestionOverrides(extra_entity_types=[EntityTypeRule(name="Drug")])
         assert ov.extra_entity_types[0].name == "Drug"
 
 
 # ---------------------------------------------------------------------------
 # Tests: IngestDataRequest.resolved_overrides() backwards compat
 # ---------------------------------------------------------------------------
+
 
 class TestIngestDataRequestResolvedOverrides:
     @pytest.mark.unit
@@ -161,6 +166,7 @@ class TestIngestDataRequestResolvedOverrides:
 # Tests: InstructionsResolver — merge rules
 # ---------------------------------------------------------------------------
 
+
 class TestInstructionsResolver:
     @pytest.mark.unit
     async def test_returns_defaults_when_no_instructions_stored(self):
@@ -171,7 +177,9 @@ class TestInstructionsResolver:
 
     @pytest.mark.unit
     async def test_loads_graph_instructions_when_present(self):
-        resolver = _make_resolver({"domain": "HR org chart", "extraction_density": "sparse"})
+        resolver = _make_resolver(
+            {"domain": "HR org chart", "extraction_density": "sparse"}
+        )
         resolved = await resolver.resolve("graph-1")
         assert resolved.domain == "HR org chart"
         assert resolved.extraction_density == ExtractionDensity.SPARSE
@@ -201,12 +209,8 @@ class TestInstructionsResolver:
 
     @pytest.mark.unit
     async def test_extra_entity_types_appended(self):
-        resolver = _make_resolver({
-            "entity_types": [{"name": "Person"}]
-        })
-        overrides = IngestionOverrides(
-            extra_entity_types=[EntityTypeRule(name="Drug")]
-        )
+        resolver = _make_resolver({"entity_types": [{"name": "Person"}]})
+        overrides = IngestionOverrides(extra_entity_types=[EntityTypeRule(name="Drug")])
         resolved = await resolver.resolve("graph-1", overrides)
         assert len(resolved.entity_types) == 2
         names = [et.name for et in resolved.entity_types]
@@ -239,6 +243,7 @@ class TestInstructionsResolver:
 # ---------------------------------------------------------------------------
 # Tests: InstructionsCompiler — prompt block generation
 # ---------------------------------------------------------------------------
+
 
 class TestInstructionsCompiler:
     def _compile(self, **kwargs) -> str:

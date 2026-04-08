@@ -14,14 +14,14 @@ Architecture rules enforced:
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.neo4j_client import neo4j_client
 from app.core.logging import get_logger
+from app.core.neo4j_client import neo4j_client
 
 logger = get_logger(__name__)
 
@@ -64,12 +64,12 @@ class VersioningService:
     async def create_version(
         self,
         graph_id: str,
-        label: Optional[str],
-        description: Optional[str],
+        label: str | None,
+        description: str | None,
         created_by: str,
         is_auto: bool = False,
-        parent_version_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        parent_version_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Create a GraphVersion node anchored to datetime().
 
@@ -97,7 +97,7 @@ class VersioningService:
         version_number = int(num_result[0]["next_num"]) if num_result else 1
 
         version_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         create_q = """
         MATCH (g:Graph {graph_id: $graph_id})
@@ -118,20 +118,23 @@ class VersioningService:
         CREATE (g)-[:HAS_VERSION]->(v)
         RETURN v
         """
-        result = await neo4j_client.execute_query(create_q, {
-            "graph_id": graph_id,
-            "version_id": version_id,
-            "version_number": version_number,
-            "label": label,
-            "description": description,
-            "captured_at": now.isoformat(),
-            "created_by": created_by,
-            "parent_version_id": parent_version_id,
-            "is_auto": is_auto,
-            "entity_count": entity_count,
-            "relationship_count": relationship_count,
-            "created_at": now.isoformat(),
-        })
+        result = await neo4j_client.execute_query(
+            create_q,
+            {
+                "graph_id": graph_id,
+                "version_id": version_id,
+                "version_number": version_number,
+                "label": label,
+                "description": description,
+                "captured_at": now.isoformat(),
+                "created_by": created_by,
+                "parent_version_id": parent_version_id,
+                "is_auto": is_auto,
+                "entity_count": entity_count,
+                "relationship_count": relationship_count,
+                "created_at": now.isoformat(),
+            },
+        )
 
         if not result:
             # Graph node may not exist — fallback without MATCH on Graph
@@ -152,29 +155,34 @@ class VersioningService:
             })
             RETURN v
             """
-            result = await neo4j_client.execute_query(create_no_graph_q, {
-                "graph_id": graph_id,
-                "version_id": version_id,
-                "version_number": version_number,
-                "label": label,
-                "description": description,
-                "captured_at": now.isoformat(),
-                "created_by": created_by,
-                "parent_version_id": parent_version_id,
-                "is_auto": is_auto,
-                "entity_count": entity_count,
-                "relationship_count": relationship_count,
-                "created_at": now.isoformat(),
-            })
+            result = await neo4j_client.execute_query(
+                create_no_graph_q,
+                {
+                    "graph_id": graph_id,
+                    "version_id": version_id,
+                    "version_number": version_number,
+                    "label": label,
+                    "description": description,
+                    "captured_at": now.isoformat(),
+                    "created_by": created_by,
+                    "parent_version_id": parent_version_id,
+                    "is_auto": is_auto,
+                    "entity_count": entity_count,
+                    "relationship_count": relationship_count,
+                    "created_at": now.isoformat(),
+                },
+            )
 
-        logger.info(f"Created version {version_id} (v{version_number}) for graph {graph_id}")
+        logger.info(
+            f"Created version {version_id} (v{version_number}) for graph {graph_id}"
+        )
         return self._node_to_dict(result[0]["v"])
 
     # ------------------------------------------------------------------
     # List versions
     # ------------------------------------------------------------------
 
-    async def list_versions(self, graph_id: str) -> List[Dict[str, Any]]:
+    async def list_versions(self, graph_id: str) -> list[dict[str, Any]]:
         """Return all versions for a graph, newest first."""
         q = """
         MATCH (v:GraphVersion {graph_id: $graph_id})
@@ -188,12 +196,16 @@ class VersioningService:
     # Get single version
     # ------------------------------------------------------------------
 
-    async def get_version(self, graph_id: str, version_id: str) -> Optional[Dict[str, Any]]:
+    async def get_version(
+        self, graph_id: str, version_id: str
+    ) -> dict[str, Any] | None:
         q = """
         MATCH (v:GraphVersion {graph_id: $graph_id, version_id: $version_id})
         RETURN v
         """
-        results = await neo4j_client.execute_query(q, {"graph_id": graph_id, "version_id": version_id})
+        results = await neo4j_client.execute_query(
+            q, {"graph_id": graph_id, "version_id": version_id}
+        )
         return self._node_to_dict(results[0]["v"]) if results else None
 
     # ------------------------------------------------------------------
@@ -207,7 +219,7 @@ class VersioningService:
         v2_id: str,
         offset: int = 0,
         limit: int = 100,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Compute added/deleted entities and relationships between v1 and v2.
         v1 must be older than v2.
@@ -266,10 +278,26 @@ class VersioningService:
         """
 
         count_params = {"graph_id": graph_id, "v1_ts": t1, "v2_ts": t2}
-        ea_cnt = int((await neo4j_client.execute_query(ea_q, count_params) or [{"cnt": 0}])[0]["cnt"])
-        ed_cnt = int((await neo4j_client.execute_query(ed_q, count_params) or [{"cnt": 0}])[0]["cnt"])
-        ra_cnt = int((await neo4j_client.execute_query(ra_q, count_params) or [{"cnt": 0}])[0]["cnt"])
-        rd_cnt = int((await neo4j_client.execute_query(rd_q, count_params) or [{"cnt": 0}])[0]["cnt"])
+        ea_cnt = int(
+            (await neo4j_client.execute_query(ea_q, count_params) or [{"cnt": 0}])[0][
+                "cnt"
+            ]
+        )
+        ed_cnt = int(
+            (await neo4j_client.execute_query(ed_q, count_params) or [{"cnt": 0}])[0][
+                "cnt"
+            ]
+        )
+        ra_cnt = int(
+            (await neo4j_client.execute_query(ra_q, count_params) or [{"cnt": 0}])[0][
+                "cnt"
+            ]
+        )
+        rd_cnt = int(
+            (await neo4j_client.execute_query(rd_q, count_params) or [{"cnt": 0}])[0][
+                "cnt"
+            ]
+        )
 
         # Paginated change list — added entities first, then deleted, then rels
         changes_q = """
@@ -337,8 +365,16 @@ class VersioningService:
 
         total_changes = ea_cnt + ed_cnt + ra_cnt + rd_cnt
         return {
-            "from_version": {"version_id": v1["version_id"], "label": v1.get("label"), "captured_at": v1.get("captured_at")},
-            "to_version": {"version_id": v2["version_id"], "label": v2.get("label"), "captured_at": v2.get("captured_at")},
+            "from_version": {
+                "version_id": v1["version_id"],
+                "label": v1.get("label"),
+                "captured_at": v1.get("captured_at"),
+            },
+            "to_version": {
+                "version_id": v2["version_id"],
+                "label": v2.get("label"),
+                "captured_at": v2.get("captured_at"),
+            },
             "summary": {
                 "entities_added": ea_cnt,
                 "entities_deleted": ed_cnt,
@@ -365,7 +401,9 @@ class VersioningService:
         MATCH (v:GraphVersion {graph_id: $graph_id, version_id: $version_id})
         DETACH DELETE v
         """
-        await neo4j_client.execute_query(q, {"graph_id": graph_id, "version_id": version_id})
+        await neo4j_client.execute_query(
+            q, {"graph_id": graph_id, "version_id": version_id}
+        )
         logger.info(f"Deleted version {version_id} for graph {graph_id}")
         return True
 
@@ -380,11 +418,12 @@ class VersioningService:
         version_id: str,
         mode: str,
         performed_by: str,
-        scope: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        scope: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Create a pending GraphRollbackJob record in PostgreSQL."""
-        from app.models.graph import GraphRollbackJob
         import uuid as _uuid
+
+        from app.models.graph import GraphRollbackJob
 
         job = GraphRollbackJob(
             id=_uuid.uuid4(),
@@ -402,10 +441,11 @@ class VersioningService:
 
     async def get_rollback_job(
         self, db: AsyncSession, graph_id: str, job_id: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Fetch a rollback job by id, scoped to graph_id for multi-tenancy."""
-        from app.models.graph import GraphRollbackJob
         import uuid as _uuid
+
+        from app.models.graph import GraphRollbackJob
 
         try:
             gid = _uuid.UUID(graph_id)
@@ -423,7 +463,7 @@ class VersioningService:
         return self._job_to_dict(job) if job else None
 
     @staticmethod
-    def _job_to_dict(job: Any) -> Dict[str, Any]:
+    def _job_to_dict(job: Any) -> dict[str, Any]:
         return {
             "rollback_job_id": str(job.id),
             "graph_id": str(job.graph_id),
@@ -456,8 +496,8 @@ class VersioningService:
         mode: str,
         performed_by: str,
         create_checkpoint: bool = True,
-        scope: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        scope: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Roll back a graph to the state at version_id.
 
@@ -474,13 +514,13 @@ class VersioningService:
             raise ValueError(f"Version {version_id} not found")
 
         captured_at = _version_ts(version)
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
 
-        checkpoint_vid: Optional[str] = None
+        checkpoint_vid: str | None = None
         if create_checkpoint:
             chk = await self.create_version(
                 graph_id=graph_id,
-                label=f"pre-rollback-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}",
+                label=f"pre-rollback-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}",
                 description=f"Auto-checkpoint before rollback to version {version_id}",
                 created_by=performed_by,
                 is_auto=True,
@@ -490,10 +530,17 @@ class VersioningService:
 
         if mode == "partial" and scope and scope.get("document_ids"):
             return await self._partial_rollback(
-                graph_id, captured_at, scope["document_ids"], performed_by, now_iso, checkpoint_vid
+                graph_id,
+                captured_at,
+                scope["document_ids"],
+                performed_by,
+                now_iso,
+                checkpoint_vid,
             )
 
-        return await self._full_rollback(graph_id, captured_at, performed_by, now_iso, checkpoint_vid)
+        return await self._full_rollback(
+            graph_id, captured_at, performed_by, now_iso, checkpoint_vid
+        )
 
     async def _full_rollback(
         self,
@@ -501,9 +548,14 @@ class VersioningService:
         captured_at: str,
         performed_by: str,
         now_iso: str,
-        checkpoint_vid: Optional[str],
-    ) -> Dict[str, Any]:
-        params = {"graph_id": graph_id, "captured_at": captured_at, "performed_by": performed_by, "now": now_iso}
+        checkpoint_vid: str | None,
+    ) -> dict[str, Any]:
+        params = {
+            "graph_id": graph_id,
+            "captured_at": captured_at,
+            "performed_by": performed_by,
+            "now": now_iso,
+        }
 
         # Step 2: soft-delete entities added after captured_at
         del_new_entities_q = """
@@ -571,11 +623,11 @@ class VersioningService:
         self,
         graph_id: str,
         captured_at: str,
-        document_ids: List[str],
+        document_ids: list[str],
         performed_by: str,
         now_iso: str,
-        checkpoint_vid: Optional[str],
-    ) -> Dict[str, Any]:
+        checkpoint_vid: str | None,
+    ) -> dict[str, Any]:
         """Rollback only entities traceable to specified documents."""
         params = {
             "graph_id": graph_id,
@@ -597,7 +649,9 @@ class VersioningService:
         r = await neo4j_client.execute_query(del_q, params)
         entities_soft_deleted = int((r or [{"cnt": 0}])[0]["cnt"])
 
-        logger.info(f"Partial rollback for graph {graph_id} docs {document_ids}: deleted {entities_soft_deleted}")
+        logger.info(
+            f"Partial rollback for graph {graph_id} docs {document_ids}: deleted {entities_soft_deleted}"
+        )
         return {
             "checkpoint_version_id": checkpoint_vid,
             "entities_restored": 0,
@@ -612,9 +666,9 @@ class VersioningService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _node_to_dict(node: Any) -> Dict[str, Any]:
+    def _node_to_dict(node: Any) -> dict[str, Any]:
         """Convert Neo4j node to plain dict, serialising datetime objects."""
-        d: Dict[str, Any] = {}
+        d: dict[str, Any] = {}
         for key, val in node.items():
             if hasattr(val, "iso_format"):
                 d[key] = val.iso_format()
@@ -623,7 +677,7 @@ class VersioningService:
         return d
 
 
-def _version_ts(version: Dict[str, Any]) -> str:
+def _version_ts(version: dict[str, Any]) -> str:
     """Return captured_at as an ISO-8601 string for Cypher datetime() parameter."""
     ts = version.get("captured_at")
     if ts is None:

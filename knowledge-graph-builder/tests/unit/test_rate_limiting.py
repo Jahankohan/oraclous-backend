@@ -8,7 +8,7 @@ Verifies:
 - Requests within the limit return the expected non-429 response
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,7 +23,6 @@ from slowapi.errors import RateLimitExceeded
 def _make_app():
     """Build a minimal FastAPI app with the rate limiter attached."""
     from fastapi import FastAPI
-    from slowapi import _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
 
     from app.core.rate_limiter import limiter
@@ -76,7 +75,6 @@ def test_rate_limit_exceeded_handler_registered():
 def test_rate_limit_exceeded_returns_429():
     """When the limiter raises RateLimitExceeded the response status is 429."""
     from fastapi import FastAPI, Request
-    from fastapi.testclient import TestClient
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
     from slowapi.util import get_remote_address
@@ -106,13 +104,19 @@ def test_rate_limit_exceeded_returns_429():
 def test_different_ips_have_independent_limits():
     """Rate limits are per-IP — different IPs do not share a bucket."""
     from fastapi import FastAPI, Request
-    from fastapi.testclient import TestClient
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
-    from slowapi.util import get_remote_address
+
+    # Use a custom key_func that reads X-IP-Test header — TestClient sets
+    # request.client.host to "testclient" for all requests, so X-Forwarded-For
+    # is not a reliable discriminator in the test environment.
+    def ip_from_test_header(request: Request) -> str:
+        return request.headers.get(
+            "X-IP-Test", request.client.host if request.client else "unknown"
+        )
 
     app = FastAPI()
-    test_limiter = Limiter(key_func=get_remote_address)
+    test_limiter = Limiter(key_func=ip_from_test_header)
     app.state.limiter = test_limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -124,12 +128,12 @@ def test_different_ips_have_independent_limits():
     client = TestClient(app, raise_server_exceptions=False)
 
     # IP A exhausts its limit
-    client.get("/limited", headers={"X-Forwarded-For": "10.0.0.1"})
-    r_a_blocked = client.get("/limited", headers={"X-Forwarded-For": "10.0.0.1"})
+    client.get("/limited", headers={"X-IP-Test": "10.0.0.1"})
+    r_a_blocked = client.get("/limited", headers={"X-IP-Test": "10.0.0.1"})
     assert r_a_blocked.status_code == 429
 
     # IP B still within its limit
-    r_b = client.get("/limited", headers={"X-Forwarded-For": "10.0.0.2"})
+    r_b = client.get("/limited", headers={"X-IP-Test": "10.0.0.2"})
     assert r_b.status_code == 200
 
 

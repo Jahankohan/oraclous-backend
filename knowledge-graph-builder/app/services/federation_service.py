@@ -9,7 +9,7 @@ Implements the federation model from ORA-41 spec:
 """
 
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from neo4j import AsyncDriver
 
@@ -54,11 +54,11 @@ class FederationService:
     async def federated_query(
         self,
         user_id: str,
-        graph_ids: List[str],
+        graph_ids: list[str],
         search_term: str,
-        options: Optional[FederatedQueryOptions] = None,
-        principal: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        options: FederatedQueryOptions | None = None,
+        principal: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Execute a cross-graph entity search and return merged results.
 
         Raises FederationError (400) if any graph_id is not owned/federatable.
@@ -102,7 +102,7 @@ class FederationService:
             for row in raw_entities[:MAX_TOTAL_RESULTS]
         ]
 
-        cross_links: List[CrossGraphLink] = []
+        cross_links: list[CrossGraphLink] = []
         deduplication_status = "not_requested"
         if options.deduplicate_entities and options.include_cross_graph_links:
             cross_links = await self._resolve_same_as(federated_entities)
@@ -126,12 +126,12 @@ class FederationService:
     async def federated_vector_search(
         self,
         user_id: str,
-        graph_ids: List[str],
+        graph_ids: list[str],
         query_text: str,
         top_k: int = 20,
         similarity_threshold: float = 0.75,
-        principal: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        principal: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Vector similarity search across multiple graphs using over-fetch pattern."""
         start_ms = _now_ms()
         allowed = await self._validate_and_filter(
@@ -182,9 +182,9 @@ class FederationService:
     async def _validate_and_filter(
         self,
         user_id: str,
-        graph_ids: List[str],
-        principal: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
+        graph_ids: list[str],
+        principal: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         """Fail-closed permission check.
 
         Raises FederationError if:
@@ -262,17 +262,17 @@ class FederationService:
 
     async def _execute_entity_union(
         self,
-        graph_ids: List[str],
+        graph_ids: list[str],
         search_term: str,
         max_per_graph: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Build a UNION ALL Cypher query across all graph_ids and execute async.
 
         Each CALL subquery is scoped to one graph_id, hitting the per-graph index.
         """
-        params: Dict[str, Any] = {"search_term": search_term, "limit": max_per_graph}
+        params: dict[str, Any] = {"search_term": search_term, "limit": max_per_graph}
 
-        subqueries: List[str] = []
+        subqueries: list[str] = []
         for i, gid in enumerate(graph_ids):
             param_key = f"gid_{i}"
             params[param_key] = gid
@@ -300,11 +300,11 @@ class FederationService:
 
     async def _execute_vector_search(
         self,
-        graph_ids: List[str],
+        graph_ids: list[str],
         query_text: str,
         candidate_count: int,
         similarity_threshold: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Vector search using the shared chunk-embedding index with graph_id post-filter."""
         # Use the shared vector index; post-filter by graph_ids (user-validated)
         query = """
@@ -345,8 +345,8 @@ class FederationService:
     # ── SAME_AS deduplication ─────────────────────────────────────────────────
 
     async def _resolve_same_as(
-        self, entities: List[FederatedEntity]
-    ) -> List[CrossGraphLink]:
+        self, entities: list[FederatedEntity]
+    ) -> list[CrossGraphLink]:
         """Post-query entity resolution: find SAME_AS candidates across graphs.
 
         Uses exact name+type matching (confidence 0.99) as the MVP strategy.
@@ -355,15 +355,15 @@ class FederationService:
         # Group by normalized (name, type) — candidates are same name+type in different graphs
         from collections import defaultdict
 
-        buckets: Dict[Tuple[str, str], List[FederatedEntity]] = defaultdict(list)
+        buckets: dict[tuple[str, str], list[FederatedEntity]] = defaultdict(list)
         for entity in entities:
             key = (entity.name.strip().lower(), (entity.type or "").strip().lower())
             buckets[key].append(entity)
 
-        links: List[CrossGraphLink] = []
+        links: list[CrossGraphLink] = []
         merge_tasks = []
 
-        for (name, etype), group in buckets.items():
+        for (_name, _etype), group in buckets.items():
             if len(group) < 2:
                 continue
             # Generate all pairs
@@ -391,7 +391,7 @@ class FederationService:
 
         return links
 
-    async def _store_same_as_links(self, pairs: List[Tuple[str, str, float]]) -> None:
+    async def _store_same_as_links(self, pairs: list[tuple[str, str, float]]) -> None:
         """Persist SAME_AS relationship pairs in Neo4j using MERGE (idempotent)."""
         query = """
         UNWIND $pairs AS pair

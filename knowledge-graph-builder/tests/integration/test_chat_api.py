@@ -8,16 +8,16 @@ Correct endpoint: POST /api/v1/api/v1/chat  (main prefix /api/v1 + router prefix
 Response schema fields: answer, query, graph_id, success, mode, retriever_type,
                         is_grounded, confidence, sources, context
 """
+
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.main import app
-
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_retriever_item(content="Graph node content", score=0.9, node_id="n-1"):
     item = MagicMock()
@@ -36,7 +36,9 @@ def _make_rag_result(answer, items=None):
     return result
 
 
-def _patch_chat_service(answer="TechNova Corp is a tech company.", items=None, init_raises=None):
+def _patch_chat_service(
+    answer="TechNova Corp is a tech company.", items=None, init_raises=None
+):
     """Context manager that patches ChatService.initialize and rag.search."""
     items = items if items is not None else [_make_retriever_item()]
 
@@ -48,8 +50,8 @@ def _patch_chat_service(answer="TechNova Corp is a tech company.", items=None, i
             self._p_fac = patch("app.services.chat_service.retriever_factory")
             self._p_rag = patch("app.services.chat_service.GraphRAG")
 
-            mock_emb = self._p_emb.start()
-            mock_llm = self._p_llm.start()
+            self._p_emb.start()
+            self._p_llm.start()
             mock_cfg = self._p_cfg.start()
             mock_fac = self._p_fac.start()
             mock_rag_cls = self._p_rag.start()
@@ -107,16 +109,24 @@ def _patch_auth_and_ownership(user_id=None):
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestChatAPIIntegration:
 
     @pytest.mark.integration
     @pytest.mark.api
     async def test_chat_returns_grounded_answer(self, async_client):
         """POST /chat with graph data → answer is grounded, sources returned."""
-        with _patch_chat_service(
-            answer="TechNova Corp is a leading tech firm.",
-            items=[_make_retriever_item(content="TechNova Corp node content", score=0.95)],
-        ), _patch_auth_and_ownership():
+        with (
+            _patch_chat_service(
+                answer="TechNova Corp is a leading tech firm.",
+                items=[
+                    _make_retriever_item(
+                        content="TechNova Corp node content", score=0.95
+                    )
+                ],
+            ),
+            _patch_auth_and_ownership(),
+        ):
             response = await async_client.post(
                 "/api/v1/api/v1/chat",
                 json={"query": "Tell me about TechNova", "graph_id": "test-graph-123"},
@@ -136,8 +146,7 @@ class TestChatAPIIntegration:
     @pytest.mark.api
     async def test_chat_returns_no_data_response_for_empty_graph(self, async_client):
         """POST /chat with empty graph → structured no-data response, not a hallucination."""
-        with _patch_chat_service(answer="", items=[]), \
-             _patch_auth_and_ownership():
+        with _patch_chat_service(answer="", items=[]), _patch_auth_and_ownership():
             response = await async_client.post(
                 "/api/v1/api/v1/chat",
                 json={"query": "Who is the CEO?", "graph_id": "empty-graph"},
@@ -154,11 +163,16 @@ class TestChatAPIIntegration:
 
     @pytest.mark.integration
     @pytest.mark.api
-    async def test_chat_sources_list_returned_when_include_sources_true(self, async_client):
+    async def test_chat_sources_list_returned_when_include_sources_true(
+        self, async_client
+    ):
         """Sources list is populated when include_sources=True (default)."""
-        with _patch_chat_service(
-            items=[_make_retriever_item(node_id="node-abc", score=0.85)],
-        ), _patch_auth_and_ownership():
+        with (
+            _patch_chat_service(
+                items=[_make_retriever_item(node_id="node-abc", score=0.85)],
+            ),
+            _patch_auth_and_ownership(),
+        ):
             response = await async_client.post(
                 "/api/v1/api/v1/chat",
                 json={
@@ -178,8 +192,7 @@ class TestChatAPIIntegration:
     @pytest.mark.integration
     @pytest.mark.api
     async def test_chat_sources_omitted_when_include_sources_false(self, async_client):
-        with _patch_chat_service(), \
-             _patch_auth_and_ownership():
+        with _patch_chat_service(), _patch_auth_and_ownership():
             response = await async_client.post(
                 "/api/v1/api/v1/chat",
                 json={
@@ -196,8 +209,7 @@ class TestChatAPIIntegration:
     @pytest.mark.integration
     @pytest.mark.api
     async def test_chat_context_returned_when_return_context_true(self, async_client):
-        with _patch_chat_service(), \
-             _patch_auth_and_ownership():
+        with _patch_chat_service(), _patch_auth_and_ownership():
             response = await async_client.post(
                 "/api/v1/api/v1/chat",
                 json={
@@ -219,8 +231,7 @@ class TestChatAPIIntegration:
         """All five chat modes must be accepted without 422."""
         modes = ["simple", "enhanced", "hybrid", "hybrid_plus", "natural"]
         for mode in modes:
-            with _patch_chat_service(), \
-                 _patch_auth_and_ownership():
+            with _patch_chat_service(), _patch_auth_and_ownership():
                 response = await async_client.post(
                     "/api/v1/api/v1/chat",
                     json={"query": "Q", "graph_id": "g1", "mode": mode},
@@ -261,8 +272,10 @@ class TestChatAPIIntegration:
     @pytest.mark.integration
     @pytest.mark.api
     async def test_chat_service_failure_returns_500(self, async_client):
-        with _patch_chat_service(init_raises=Exception("Neo4j down")), \
-             _patch_auth_and_ownership():
+        with (
+            _patch_chat_service(init_raises=Exception("Neo4j down")),
+            _patch_auth_and_ownership(),
+        ):
             response = await async_client.post(
                 "/api/v1/api/v1/chat",
                 json={"query": "Q", "graph_id": "g1"},
@@ -292,8 +305,7 @@ class TestChatAPIIntegration:
     @pytest.mark.api
     async def test_chat_response_contains_required_fields(self, async_client):
         """All required ChatResponse fields must be present."""
-        with _patch_chat_service(), \
-             _patch_auth_and_ownership():
+        with _patch_chat_service(), _patch_auth_and_ownership():
             response = await async_client.post(
                 "/api/v1/api/v1/chat",
                 json={"query": "Q", "graph_id": "g1"},
@@ -301,16 +313,23 @@ class TestChatAPIIntegration:
             )
 
         data = response.json()
-        for field in ["answer", "query", "graph_id", "success", "mode",
-                      "retriever_type", "is_grounded", "timestamp"]:
+        for field in [
+            "answer",
+            "query",
+            "graph_id",
+            "success",
+            "mode",
+            "retriever_type",
+            "is_grounded",
+            "timestamp",
+        ]:
             assert field in data, f"Missing required field: {field}"
 
     @pytest.mark.integration
     @pytest.mark.api
     async def test_chat_stream_endpoint_returns_event_stream(self, async_client):
         """POST /chat/stream must return text/event-stream content type."""
-        with _patch_chat_service(), \
-             _patch_auth_and_ownership():
+        with _patch_chat_service(), _patch_auth_and_ownership():
             response = await async_client.post(
                 "/api/v1/api/v1/chat/stream",
                 json={"query": "Q", "graph_id": "g1"},
@@ -324,10 +343,13 @@ class TestChatAPIIntegration:
     @pytest.mark.api
     async def test_chat_stream_events_are_valid_sse(self, async_client):
         """Each line from /chat/stream must be valid SSE data: JSON."""
-        with _patch_chat_service(
-            answer="TechNova is a tech firm.",
-            items=[_make_retriever_item()],
-        ), _patch_auth_and_ownership():
+        with (
+            _patch_chat_service(
+                answer="TechNova is a tech firm.",
+                items=[_make_retriever_item()],
+            ),
+            _patch_auth_and_ownership(),
+        ):
             response = await async_client.post(
                 "/api/v1/api/v1/chat/stream",
                 json={"query": "Tell me about TechNova", "graph_id": "g1"},
@@ -335,7 +357,7 @@ class TestChatAPIIntegration:
             )
 
         assert response.status_code == 200
-        lines = [l for l in response.text.strip().split("\n\n") if l.strip()]
+        lines = [ln for ln in response.text.strip().split("\n\n") if ln.strip()]
         event_types = set()
         for line in lines:
             line = line.strip()

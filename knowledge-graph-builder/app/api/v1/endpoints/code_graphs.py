@@ -8,10 +8,11 @@ POST /graphs/{graphId}/code/query     — run one of 7 code-intelligence query t
 Job status polling reuses the existing:
     GET /graphs/{graphId}/jobs/{jobId}
 """
+
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -25,7 +26,6 @@ from app.schemas.code_schemas import (
     CodeDepth,
     CodeIngestRequest,
     CodeIngestResponse,
-    CodeIngestMode,
     CodeQueryRequest,
     CodeQueryResult,
     SymbolItem,
@@ -41,6 +41,7 @@ logger = get_logger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /graphs/{graph_id}/code-ingest
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @router.post(
     "/graphs/{graph_id}/code-ingest",
@@ -87,20 +88,24 @@ async def code_ingest(
         {"graph_id": str(graph_id)},
     )
     if not result.records:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
+        )
 
     # Determine effective depth (None means auto; will be resolved by the worker)
     effective_depth = request.depth.value if request.depth else None
 
     # Serialise request parameters into the job row so the Celery worker can
     # reconstruct them without holding a reference to the HTTP request object.
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "repo_path": request.repo_path,
         "git_url": request.git_url,
         "branch": request.branch,
         "mode": request.mode.value,
         "depth": effective_depth,
-        "languages": [l.value for l in request.languages] if request.languages else None,
+        "languages": (
+            [lang.value for lang in request.languages] if request.languages else None
+        ),
         "exclude_patterns": request.exclude_patterns,
     }
 
@@ -138,6 +143,7 @@ async def code_ingest(
 # GET /graphs/{graph_id}/code/symbols
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @router.get(
     "/graphs/{graph_id}/code/symbols",
     response_model=SymbolListResponse,
@@ -149,10 +155,14 @@ async def code_ingest(
 )
 async def list_symbols(
     graph_id: UUID,
-    type: Optional[SymbolType] = Query(None, description="Filter by symbol type"),
-    language: Optional[str] = Query(None, description="Filter by language (e.g. python)"),
-    q: Optional[str] = Query(None, description="Full-text search across name, qualified_name, docstring"),
-    file_path: Optional[str] = Query(None, description="Filter by file path (substring match)"),
+    type: SymbolType | None = Query(None, description="Filter by symbol type"),
+    language: str | None = Query(None, description="Filter by language (e.g. python)"),
+    q: str | None = Query(
+        None, description="Full-text search across name, qualified_name, docstring"
+    ),
+    file_path: str | None = Query(
+        None, description="Filter by file path (substring match)"
+    ),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     user_id: str = Depends(get_current_user_id),
@@ -166,21 +176,30 @@ async def list_symbols(
     await verify_graph_access(str(graph_id), "read", user_id)
 
     if not neo4j_client.async_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     # Build a label filter. All code symbol labels share the same property set.
     label_filter = f":{type.value}" if type else ":Function|Class|Variable|Module|File"
 
     # Build WHERE clauses
-    where_parts: List[str] = ["n.graph_id = $graph_id"]
-    params: Dict[str, Any] = {"graph_id": str(graph_id), "limit": limit, "offset": offset}
+    where_parts: list[str] = ["n.graph_id = $graph_id"]
+    params: dict[str, Any] = {
+        "graph_id": str(graph_id),
+        "limit": limit,
+        "offset": offset,
+    }
 
     if language:
         where_parts.append("n.language = $language")
         params["language"] = language
 
     if file_path:
-        where_parts.append("n.file_path CONTAINS $file_path OR n.path CONTAINS $file_path")
+        where_parts.append(
+            "n.file_path CONTAINS $file_path OR n.path CONTAINS $file_path"
+        )
         params["file_path"] = file_path
 
     if q:
@@ -191,7 +210,9 @@ async def list_symbols(
 
     where_clause = " AND ".join(where_parts)
 
-    count_query = f"MATCH (n{label_filter}) WHERE {where_clause} RETURN count(n) AS total"
+    count_query = (
+        f"MATCH (n{label_filter}) WHERE {where_clause} RETURN count(n) AS total"
+    )
     data_query = f"""
         MATCH (n{label_filter})
         WHERE {where_clause}
@@ -219,7 +240,7 @@ async def list_symbols(
     total = count_result.records[0]["total"] if count_result.records else 0
 
     data_result = await neo4j_client.async_driver.execute_query(data_query, params)
-    symbols: List[SymbolItem] = []
+    symbols: list[SymbolItem] = []
     for record in data_result.records:
         sym_type_str = record.get("sym_type") or "Function"
         try:
@@ -250,6 +271,7 @@ async def list_symbols(
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /graphs/{graph_id}/code/query
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @router.post(
     "/graphs/{graph_id}/code/query",
@@ -284,7 +306,10 @@ async def code_query(
     await verify_graph_access(str(graph_id), "read", user_id)
 
     if not neo4j_client.async_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     gid = str(graph_id)
     p = request.params
@@ -294,14 +319,19 @@ async def code_query(
     try:
         records = await _run_code_query(gid, qt, p, limit, request.include_tests)
     except _QueryParamError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from None
 
-    return CodeQueryResult(query_type=request.query_type, results=records, total=len(records))
+    return CodeQueryResult(
+        query_type=request.query_type, results=records, total=len(records)
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal query dispatcher
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class _QueryParamError(ValueError):
     pass
@@ -310,10 +340,10 @@ class _QueryParamError(ValueError):
 async def _run_code_query(
     graph_id: str,
     query_type: str,
-    params: Dict[str, Any],
+    params: dict[str, Any],
     limit: int,
     include_tests: bool,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     driver = neo4j_client.async_driver
 
     if query_type == "callers":
@@ -352,7 +382,7 @@ async def _run_code_query(
 
     if query_type == "dead_code":
         lang_filter = ""
-        qp: Dict[str, Any] = {"graph_id": graph_id, "limit": limit}
+        qp: dict[str, Any] = {"graph_id": graph_id, "limit": limit}
         if params.get("language"):
             lang_filter = "AND f.language = $language"
             qp["language"] = params["language"]
@@ -390,7 +420,9 @@ async def _run_code_query(
     if query_type == "inheritance_chain":
         cls = params.get("class_name")
         if not cls:
-            raise _QueryParamError("'class_name' is required for query_type=inheritance_chain")
+            raise _QueryParamError(
+                "'class_name' is required for query_type=inheritance_chain"
+            )
         result = await driver.execute_query(
             """
             MATCH path = (child:Class {graph_id: $graph_id})-[:INHERITS*0..]->(ancestor:Class {graph_id: $graph_id})
@@ -402,7 +434,9 @@ async def _run_code_query(
             """,
             {"graph_id": graph_id, "cls": cls, "limit": limit},
         )
-        return [{"hierarchy": r["hierarchy"], "depth": r["depth"]} for r in result.records]
+        return [
+            {"hierarchy": r["hierarchy"], "depth": r["depth"]} for r in result.records
+        ]
 
     if query_type == "file_deps":
         fp = params.get("file_path")
@@ -432,11 +466,14 @@ async def _run_code_query(
     if query_type == "semantic_search":
         query_text = params.get("query_text")
         if not query_text:
-            raise _QueryParamError("'query_text' is required for query_type=semantic_search")
+            raise _QueryParamError(
+                "'query_text' is required for query_type=semantic_search"
+            )
         top_k = int(params.get("top_k", min(limit, 10)))
 
         # Generate embedding for the query text via the existing LLM service
         from app.services.llm_service import LLMService
+
         llm_service = LLMService()
         query_embedding = await llm_service.generate_embedding(query_text)
 

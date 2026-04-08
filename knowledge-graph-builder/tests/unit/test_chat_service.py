@@ -5,22 +5,25 @@ Tests graph-grounded chat with hallucination prevention, source citation,
 no-data handling, retriever selection, entity detection, and streaming —
 all external deps mocked.
 """
+
 import json
-import pytest
+from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from app.services.chat_service import (
+    _INSUFFICIENT_PREFIX,
+    STRICT_GROUNDING_PROMPT,
     ChatService,
     GroundedSearchResult,
-    STRICT_GROUNDING_PROMPT,
-    _INSUFFICIENT_PREFIX,
 )
 from app.services.retriever_factory import RetrieverType
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_retriever_item(content: str = "Test content", score: float = 0.9, **metadata):
     item = MagicMock()
@@ -43,13 +46,16 @@ def _make_rag_result(answer: str, items=None):
 # Tests: ChatService initialisation
 # ---------------------------------------------------------------------------
 
+
 class TestChatServiceInit:
     @pytest.mark.unit
     @pytest.mark.chat
     def test_init_vector_retriever_type(self):
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings:
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             svc = ChatService(graph_id="g1", retriever_type=RetrieverType.VECTOR)
             assert svc.graph_id == "g1"
@@ -60,9 +66,11 @@ class TestChatServiceInit:
     @pytest.mark.unit
     @pytest.mark.chat
     def test_init_default_retriever_is_vector_cypher(self):
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings:
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             svc = ChatService(graph_id="g1")
             assert svc.retriever_type == RetrieverType.VECTOR_CYPHER
@@ -70,9 +78,11 @@ class TestChatServiceInit:
     @pytest.mark.unit
     @pytest.mark.chat
     def test_init_unsupported_retriever_raises(self):
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings:
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             # get_default_retriever_config raises KeyError for unknown types
             # before the ValueError guard is reached
@@ -84,15 +94,18 @@ class TestChatServiceInit:
 # Tests: ChatService.initialize
 # ---------------------------------------------------------------------------
 
+
 class TestChatServiceInitialize:
     @pytest.mark.unit
     @pytest.mark.chat
     async def test_initialize_sets_rag(self):
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings, \
-             patch("app.services.chat_service.retriever_factory") as mock_factory, \
-             patch("app.services.chat_service.GraphRAG") as mock_rag_class:
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+            patch("app.services.chat_service.retriever_factory") as mock_factory,
+            patch("app.services.chat_service.GraphRAG") as mock_rag_class,
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_factory.create_retriever = AsyncMock(return_value=MagicMock())
             mock_rag_class.return_value = MagicMock()
@@ -107,13 +120,17 @@ class TestChatServiceInitialize:
     @pytest.mark.unit
     @pytest.mark.chat
     async def test_initialize_raises_when_retriever_creation_fails(self):
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings, \
-             patch("app.services.chat_service.retriever_factory") as mock_factory:
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+            patch("app.services.chat_service.retriever_factory") as mock_factory,
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             # Both primary and fallback fail
-            mock_factory.create_retriever = AsyncMock(side_effect=Exception("Neo4j down"))
+            mock_factory.create_retriever = AsyncMock(
+                side_effect=Exception("Neo4j down")
+            )
 
             svc = ChatService(graph_id="g1", retriever_type=RetrieverType.HYBRID)
             with pytest.raises(RuntimeError, match="Failed to create any retriever"):
@@ -131,11 +148,13 @@ class TestChatServiceInitialize:
                 raise Exception("hybrid failed")
             return MagicMock()
 
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings, \
-             patch("app.services.chat_service.retriever_factory") as mock_factory, \
-             patch("app.services.chat_service.GraphRAG"):
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+            patch("app.services.chat_service.retriever_factory") as mock_factory,
+            patch("app.services.chat_service.GraphRAG"),
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_factory.create_retriever = AsyncMock(side_effect=mock_create_retriever)
 
@@ -149,12 +168,14 @@ class TestChatServiceInitialize:
     @pytest.mark.unit
     @pytest.mark.chat
     async def test_initialize_sets_up_fulltext_index_for_hybrid(self):
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings, \
-             patch("app.services.chat_service.retriever_factory") as mock_factory, \
-             patch("app.services.chat_service.fulltext_index_manager") as mock_fti, \
-             patch("app.services.chat_service.GraphRAG"):
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+            patch("app.services.chat_service.retriever_factory") as mock_factory,
+            patch("app.services.chat_service.fulltext_index_manager") as mock_fti,
+            patch("app.services.chat_service.GraphRAG"),
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_factory.create_retriever = AsyncMock(return_value=MagicMock())
             mock_fti.setup_default_indexes = AsyncMock()
@@ -169,11 +190,14 @@ class TestChatServiceInitialize:
 # Tests: ChatService.search
 # ---------------------------------------------------------------------------
 
+
 class TestChatServiceSearch:
     def _build_service(self):
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings:
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             svc = ChatService(graph_id="g1", retriever_type=RetrieverType.VECTOR)
         return svc
@@ -182,7 +206,9 @@ class TestChatServiceSearch:
     @pytest.mark.chat
     async def test_search_returns_grounded_result(self):
         svc = self._build_service()
-        items = [_make_retriever_item(content="TechNova is a tech company.", score=0.95)]
+        items = [
+            _make_retriever_item(content="TechNova is a tech company.", score=0.95)
+        ]
         mock_rag_result = _make_rag_result("TechNova is a tech company.", items)
 
         mock_rag = MagicMock()
@@ -337,6 +363,7 @@ class TestChatServiceSearch:
 # Tests: ChatService._extract_sources
 # ---------------------------------------------------------------------------
 
+
 class TestExtractSources:
     @pytest.mark.unit
     @pytest.mark.chat
@@ -401,6 +428,7 @@ class TestExtractSources:
 # Tests: ChatService._calculate_confidence
 # ---------------------------------------------------------------------------
 
+
 class TestCalculateConfidence:
     @pytest.mark.unit
     @pytest.mark.chat
@@ -458,20 +486,25 @@ class TestCalculateConfidence:
 # Tests: Multi-tenant isolation
 # ---------------------------------------------------------------------------
 
+
 class TestChatServiceMultiTenantIsolation:
     @pytest.mark.unit
     @pytest.mark.chat
     async def test_graph_id_passed_to_retriever_factory(self):
         """Retriever factory must always receive the graph_id for tenant isolation."""
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings, \
-             patch("app.services.chat_service.retriever_factory") as mock_factory, \
-             patch("app.services.chat_service.GraphRAG"):
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+            patch("app.services.chat_service.retriever_factory") as mock_factory,
+            patch("app.services.chat_service.GraphRAG"),
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_factory.create_retriever = AsyncMock(return_value=MagicMock())
 
-            svc = ChatService(graph_id="tenant-xyz", retriever_type=RetrieverType.VECTOR)
+            svc = ChatService(
+                graph_id="tenant-xyz", retriever_type=RetrieverType.VECTOR
+            )
             await svc.initialize()
 
             call_kwargs = mock_factory.create_retriever.call_args[1]
@@ -481,9 +514,11 @@ class TestChatServiceMultiTenantIsolation:
     @pytest.mark.chat
     async def test_different_graph_ids_use_separate_services(self):
         """Two ChatService instances with different graph IDs are fully independent."""
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings:
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             svc1 = ChatService(graph_id="tenant-A", retriever_type=RetrieverType.VECTOR)
             svc2 = ChatService(graph_id="tenant-B", retriever_type=RetrieverType.VECTOR)
@@ -497,44 +532,80 @@ class TestChatServiceMultiTenantIsolation:
 # Tests: ChatService.auto_select_retriever_type
 # ---------------------------------------------------------------------------
 
+
 class TestAutoSelectRetrieverType:
     @pytest.mark.unit
     @pytest.mark.chat
     def test_cypher_keywords_return_text2cypher(self):
-        assert ChatService.auto_select_retriever_type("MATCH (n) RETURN n") == RetrieverType.TEXT2CYPHER
-        assert ChatService.auto_select_retriever_type("give me a cypher query") == RetrieverType.TEXT2CYPHER
-        assert ChatService.auto_select_retriever_type("path between A and B") == RetrieverType.TEXT2CYPHER
+        assert (
+            ChatService.auto_select_retriever_type("MATCH (n) RETURN n")
+            == RetrieverType.TEXT2CYPHER
+        )
+        assert (
+            ChatService.auto_select_retriever_type("give me a cypher query")
+            == RetrieverType.TEXT2CYPHER
+        )
+        assert (
+            ChatService.auto_select_retriever_type("path between A and B")
+            == RetrieverType.TEXT2CYPHER
+        )
 
     @pytest.mark.unit
     @pytest.mark.chat
     def test_analytic_keywords_return_hybrid(self):
-        assert ChatService.auto_select_retriever_type("list all companies") == RetrieverType.HYBRID
-        assert ChatService.auto_select_retriever_type("how many employees are there?") == RetrieverType.HYBRID
-        assert ChatService.auto_select_retriever_type("find all partnerships") == RetrieverType.HYBRID
+        assert (
+            ChatService.auto_select_retriever_type("list all companies")
+            == RetrieverType.HYBRID
+        )
+        assert (
+            ChatService.auto_select_retriever_type("how many employees are there?")
+            == RetrieverType.HYBRID
+        )
+        assert (
+            ChatService.auto_select_retriever_type("find all partnerships")
+            == RetrieverType.HYBRID
+        )
 
     @pytest.mark.unit
     @pytest.mark.chat
     def test_relationship_keywords_return_vector_cypher(self):
-        assert ChatService.auto_select_retriever_type("who is related to TechNova?") == RetrieverType.VECTOR_CYPHER
-        assert ChatService.auto_select_retriever_type("show partnerships between companies") == RetrieverType.VECTOR_CYPHER
+        assert (
+            ChatService.auto_select_retriever_type("who is related to TechNova?")
+            == RetrieverType.VECTOR_CYPHER
+        )
+        assert (
+            ChatService.auto_select_retriever_type(
+                "show partnerships between companies"
+            )
+            == RetrieverType.VECTOR_CYPHER
+        )
 
     @pytest.mark.unit
     @pytest.mark.chat
     def test_default_returns_vector_cypher(self):
-        assert ChatService.auto_select_retriever_type("Tell me about TechNova") == RetrieverType.VECTOR_CYPHER
-        assert ChatService.auto_select_retriever_type("What is the company strategy?") == RetrieverType.VECTOR_CYPHER
+        assert (
+            ChatService.auto_select_retriever_type("Tell me about TechNova")
+            == RetrieverType.VECTOR_CYPHER
+        )
+        assert (
+            ChatService.auto_select_retriever_type("What is the company strategy?")
+            == RetrieverType.VECTOR_CYPHER
+        )
 
     @pytest.mark.unit
     @pytest.mark.chat
     def test_cypher_takes_priority_over_analytic(self):
         # "list all" (analytic) + "cypher" keyword — cypher wins
-        result = ChatService.auto_select_retriever_type("list all nodes using cypher query")
+        result = ChatService.auto_select_retriever_type(
+            "list all nodes using cypher query"
+        )
         assert result == RetrieverType.TEXT2CYPHER
 
 
 # ---------------------------------------------------------------------------
 # Tests: ChatService.detect_entity_candidates
 # ---------------------------------------------------------------------------
+
 
 class TestDetectEntityCandidates:
     @pytest.mark.unit
@@ -566,7 +637,9 @@ class TestDetectEntityCandidates:
     @pytest.mark.unit
     @pytest.mark.chat
     def test_deduplicates_candidates(self):
-        candidates = ChatService.detect_entity_candidates("TechNova Corp and TechNova Corp again")
+        candidates = ChatService.detect_entity_candidates(
+            "TechNova Corp and TechNova Corp again"
+        )
         assert candidates.count("TechNova Corp") == 1
 
     @pytest.mark.unit
@@ -588,11 +661,14 @@ class TestDetectEntityCandidates:
 # Tests: ChatService.stream_search
 # ---------------------------------------------------------------------------
 
+
 class TestStreamSearch:
     def _build_service(self):
-        with patch("app.services.chat_service.OpenAIEmbeddings"), \
-             patch("app.services.chat_service.OpenAILLM"), \
-             patch("app.services.chat_service.settings") as mock_settings:
+        with (
+            patch("app.services.chat_service.OpenAIEmbeddings"),
+            patch("app.services.chat_service.OpenAILLM"),
+            patch("app.services.chat_service.settings") as mock_settings,
+        ):
             mock_settings.OPENAI_API_KEY = "test-key"
             svc = ChatService(graph_id="g1", retriever_type=RetrieverType.VECTOR)
         return svc
@@ -634,7 +710,9 @@ class TestStreamSearch:
             for c in chunks
             if '"answer_chunk"' in c
         ]
-        assert any("does not contain sufficient data" in ac["text"] for ac in answer_chunks)
+        assert any(
+            "does not contain sufficient data" in ac["text"] for ac in answer_chunks
+        )
 
         done_events = [
             json.loads(c.removeprefix("data: ").strip())
@@ -689,3 +767,101 @@ class TestStreamSearch:
         event = json.loads(chunks[0].removeprefix("data: ").strip())
         assert event["type"] == "error"
         assert "stream failure" in event["message"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: _multihop_enrich temporal parameter safety — ORA-138
+# ---------------------------------------------------------------------------
+
+
+class TestMultihopTemporalParams:
+    """
+    ORA-138: _multihop_enrich must pass temporal values as Cypher parameters,
+    not as f-string-interpolated datetime literals.
+    """
+
+    def _build_service(self):
+        return ChatService(graph_id="g-test")
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_point_in_time_uses_parameter_not_fstring(self):
+        """$tf_pit must appear as a query parameter, not baked into the Cypher string."""
+        from datetime import datetime
+
+        from app.schemas.graph_schemas import TemporalFilter
+
+        svc = self._build_service()
+        pit = datetime(2015, 6, 1, tzinfo=UTC)
+        tf = TemporalFilter(point_in_time=pit)
+
+        mock_result = MagicMock()
+        mock_result.records = []
+        mock_driver = AsyncMock()
+        mock_driver.execute_query = AsyncMock(return_value=mock_result)
+        mock_client = MagicMock()
+        mock_client.async_driver = mock_driver
+
+        with patch("app.services.chat_service.neo4j_client", mock_client):
+            await svc._multihop_enrich(["Alice"], temporal_filter=tf)
+
+        assert mock_driver.execute_query.called
+        call_kwargs = mock_driver.execute_query.call_args
+        query = call_kwargs[0][0]
+        params = call_kwargs[0][1] if len(call_kwargs[0]) > 1 else call_kwargs[1]
+
+        # The ISO string must NOT be hard-coded into the query
+        assert pit.isoformat() not in query, (
+            "point_in_time value must be passed as $tf_pit parameter, "
+            "not interpolated into the Cypher string"
+        )
+        # The parameter must be present in the params dict
+        assert "tf_pit" in params, "$tf_pit must be in the query parameters dict"
+        assert params["tf_pit"] == pit.isoformat()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_current_only_adds_valid_to_null_clause(self):
+        """current_only filter must add valid_to IS NULL to the Cypher."""
+        from app.schemas.graph_schemas import TemporalFilter
+
+        svc = self._build_service()
+        tf = TemporalFilter(current_only=True)
+
+        mock_result = MagicMock()
+        mock_result.records = []
+        mock_driver = AsyncMock()
+        mock_driver.execute_query = AsyncMock(return_value=mock_result)
+        mock_client = MagicMock()
+        mock_client.async_driver = mock_driver
+
+        with patch("app.services.chat_service.neo4j_client", mock_client):
+            await svc._multihop_enrich(["Alice"], temporal_filter=tf)
+
+        assert mock_driver.execute_query.called
+        call_kwargs = mock_driver.execute_query.call_args
+        query = call_kwargs[0][0]
+        assert "r1.valid_to IS NULL" in query
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_no_temporal_filter_uses_default_cypher(self):
+        """Without temporal_filter, the static _MULTIHOP_CYPHER must be used."""
+        from app.services.chat_service import _MULTIHOP_CYPHER
+
+        svc = self._build_service()
+
+        mock_result = MagicMock()
+        mock_result.records = []
+        mock_driver = AsyncMock()
+        mock_driver.execute_query = AsyncMock(return_value=mock_result)
+        mock_client = MagicMock()
+        mock_client.async_driver = mock_driver
+
+        with patch("app.services.chat_service.neo4j_client", mock_client):
+            await svc._multihop_enrich(["Alice"], temporal_filter=None)
+
+        assert mock_driver.execute_query.called
+        call_kwargs = mock_driver.execute_query.call_args
+        query = call_kwargs[0][0]
+        assert query == _MULTIHOP_CYPHER

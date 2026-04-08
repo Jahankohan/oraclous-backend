@@ -14,20 +14,15 @@ Covers (per ORA-69 spec test criteria):
   #10 — is_test tagging logic
   #12 — TypeScript: classes and functions extracted
 """
+
 from __future__ import annotations
 
 import hashlib
-import os
-import tempfile
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.services.code_parser_service import (
     FileMetadata,
-    IngestStats,
     RawSymbol,
     _is_test_path,
     _module_name_from_path,
@@ -37,16 +32,18 @@ from app.services.code_parser_service import (
     resolve_symbols,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _sha256(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
 
 
-def _make_file_meta(rel_path: str, content: str, language: str = "python") -> FileMetadata:
+def _make_file_meta(
+    rel_path: str, content: str, language: str = "python"
+) -> FileMetadata:
     return FileMetadata(
         path=rel_path,
         abs_path=f"/fake/repo/{rel_path}",
@@ -88,10 +85,20 @@ export function standalone(): void {}
 # Test #1 — Python parsing produces correct symbols with graph_id
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.unit
-def test_python_parsing_extracts_class_and_functions():
+def test_python_parsing_extracts_class_and_functions(tmp_path):
     """Criterion #1: 3 functions + 1 class → 4 symbols; graph_id set on all."""
-    meta = _make_file_meta("app/animals.py", PYTHON_MODULE)
+    src_file = tmp_path / "animals.py"
+    src_file.write_text(PYTHON_MODULE)
+    meta = FileMetadata(
+        path="app/animals.py",
+        abs_path=str(src_file),
+        language="python",
+        size_bytes=len(PYTHON_MODULE.encode()),
+        content_hash=_sha256(PYTHON_MODULE),
+        is_test=False,
+    )
     symbols = parse_file(meta)
 
     sym_types = {s.symbol_type for s in symbols}
@@ -106,9 +113,18 @@ def test_python_parsing_extracts_class_and_functions():
 
 
 @pytest.mark.unit
-def test_python_qualified_names_include_module():
+def test_python_qualified_names_include_module(tmp_path):
     """qualified_name must include module path prefix."""
-    meta = _make_file_meta("app/animals.py", PYTHON_MODULE)
+    src_file = tmp_path / "animals.py"
+    src_file.write_text(PYTHON_MODULE)
+    meta = FileMetadata(
+        path="app/animals.py",
+        abs_path=str(src_file),
+        language="python",
+        size_bytes=len(PYTHON_MODULE.encode()),
+        content_hash=_sha256(PYTHON_MODULE),
+        is_test=False,
+    )
     symbols = parse_file(meta)
 
     qnames = {s.qualified_name for s in symbols}
@@ -119,6 +135,7 @@ def test_python_qualified_names_include_module():
 # ─────────────────────────────────────────────────────────────────────────────
 # Test #2 — Delta: unchanged file is skipped (same content_hash)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.unit
 def test_delta_unchanged_file_skipped():
@@ -138,6 +155,7 @@ def test_delta_unchanged_file_skipped():
 # Test #3 — Delta: modified file appears in to-parse list
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.unit
 def test_delta_changed_file_queued():
     """Criterion #3: modified file (different hash) is included in to-parse list."""
@@ -148,7 +166,9 @@ def test_delta_changed_file_queued():
     meta_modified = _make_file_meta("app/foo.py", modified)
 
     existing_hashes = {meta_original.path: meta_original.content_hash}
-    to_parse = [m for m in [meta_modified] if existing_hashes.get(m.path) != m.content_hash]
+    to_parse = [
+        m for m in [meta_modified] if existing_hashes.get(m.path) != m.content_hash
+    ]
     assert len(to_parse) == 1
     assert to_parse[0].content_hash == meta_modified.content_hash
 
@@ -156,6 +176,7 @@ def test_delta_changed_file_queued():
 # ─────────────────────────────────────────────────────────────────────────────
 # Test #4 & #6 — IMPORTS and CALLS edges via resolve_symbols
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.unit
 def test_resolve_symbols_creates_calls_edge():
@@ -203,7 +224,9 @@ def test_resolve_symbols_creates_imports_edge():
         file_path="app/mod_a.py",
         start_line=1,
         end_line=1,
-        raw_imports=[{"target": "app.mod_b", "alias": None, "line": 1, "relative": False}],
+        raw_imports=[
+            {"target": "app.mod_b", "alias": None, "line": 1, "relative": False}
+        ],
     )
     module_b = RawSymbol(
         symbol_type="Module",
@@ -222,13 +245,14 @@ def test_resolve_symbols_creates_imports_edge():
     _, _, imports_edges, _ = resolve_symbols([importer, module_b], metas)
 
     # At least one import edge should reference mod_b as target
-    targets = {e.get("target_name") or e.get("target_module") or "" for e in imports_edges}
+    targets = {e.get("target") or e.get("target_name") or "" for e in imports_edges}
     assert any("mod_b" in t for t in targets)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test #7 — Dead code: is_test tagging + test_ exclusion
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.unit
 def test_is_test_path_test_directory():
@@ -272,6 +296,7 @@ def real_function():
 # Test #8 — INHERITS edge
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.unit
 def test_resolve_symbols_creates_inherits_edge():
     """Criterion #8: child class with known base → INHERITS edge with order=0."""
@@ -308,20 +333,22 @@ def test_resolve_symbols_creates_inherits_edge():
 # Test #9 — Multi-tenant isolation: graph_id on every symbol
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.unit
 def test_raw_symbol_carries_file_path_for_tenant_scoping():
     """Criterion #9: each RawSymbol carries file_path → graph_id is added at write time."""
     meta = _make_file_meta("app/service.py", "def hello(): pass")
     symbols = parse_file(meta)
     for sym in symbols:
-        assert sym.file_path == "app/service.py", (
-            f"Symbol {sym.name} missing file_path (needed for graph_id scoping)"
-        )
+        assert (
+            sym.file_path == "app/service.py"
+        ), f"Symbol {sym.name} missing file_path (needed for graph_id scoping)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test #12 — TypeScript parsing
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.unit
 def test_typescript_extracts_class_and_function():
@@ -343,9 +370,13 @@ def test_typescript_extracts_class_and_function():
 # Internal helper tests
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.unit
 def test_module_name_from_path():
-    assert _module_name_from_path("app/services/pipeline_service.py") == "app.services.pipeline_service"
+    assert (
+        _module_name_from_path("app/services/pipeline_service.py")
+        == "app.services.pipeline_service"
+    )
     assert _module_name_from_path("main.py") == "main"
 
 
@@ -357,13 +388,16 @@ def test_qualified_joins_parts():
 
 @pytest.mark.unit
 def test_is_test_path_tsx():
-    assert _is_test_path("src/__tests__/Greeter.test.tsx") is False  # __tests__ not matched
+    assert (
+        _is_test_path("src/__tests__/Greeter.test.tsx") is False
+    )  # __tests__ not matched
     assert _is_test_path("tests/Greeter.test.tsx") is True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # bootstrap_repository — filesystem walk (no git clone)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.unit
 def test_bootstrap_walks_local_repo(tmp_path):
@@ -416,7 +450,7 @@ def test_bootstrap_respects_exclude_patterns(tmp_path):
         git_url=None,
         branch="main",
         allowed_languages=None,
-        exclude_patterns=["**/test_*"],
+        exclude_patterns=["test_*"],
     )
 
     paths = {m.path for m in file_metas}

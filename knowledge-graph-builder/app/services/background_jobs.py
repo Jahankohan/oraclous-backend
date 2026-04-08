@@ -3,22 +3,23 @@ Refactored Background Jobs using Pipeline Service
 Clean implementation with Neo4j GraphRAG pipeline and multi-tenant support
 """
 
-from celery import Celery
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import select, update
-from sqlalchemy.pool import NullPool
-from typing import Dict, Any, Optional
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
+from celery import Celery
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.models.graph import IngestionJob  # Only IngestionJob, not KnowledgeGraph
-from app.services.task_executor import AsyncTaskExecutor
-from app.services.pipeline_service import pipeline_service
+from app.schemas.graph_schemas import IngestionOverrides, IngestMode, TemporalContext
 from app.services.document_processor import document_processor
 from app.services.graph_node_service import GraphNodeService
-from app.schemas.graph_schemas import IngestMode, IngestionOverrides, TemporalContext
-from app.core.logging import get_logger
+from app.services.pipeline_service import pipeline_service
+from app.services.task_executor import AsyncTaskExecutor
 
 logger = get_logger(__name__)
 
@@ -26,7 +27,7 @@ worker_engine = create_async_engine(
     settings.POSTGRES_URL,
     poolclass=NullPool,  # No connection pooling in workers
     echo=False,
-    future=True
+    future=True,
 )
 
 worker_session_maker = async_sessionmaker(
@@ -34,150 +35,155 @@ worker_session_maker = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
     autoflush=False,
-    autocommit=False
+    autocommit=False,
 )
 
 
 # ==================== WORKER NEO4J CONNECTION MANAGER ====================
 
+
 class WorkerNeo4jManager:
     """
     Neo4j connection manager for Celery workers using task-scoped connections.
-    
+
     Follows the PostgreSQL NullPool pattern to ensure each Celery task gets
     its own Neo4j connection, preventing connection pool conflicts between
     FastAPI and worker processes.
-    
+
     Features:
     - Task-scoped connections (no connection pooling between tasks)
     - Automatic cleanup after task completion
     - Support for both sync (GraphRAG) and async operations
     - Isolation from FastAPI connection pools
-    
+
     Usage:
         async with WorkerNeo4jManager() as neo4j:
             driver = neo4j.get_sync_driver()  # For GraphRAG components
             # Use driver for the task
             # Automatic cleanup when exiting context
     """
-    
+
     def __init__(self):
         """Initialize worker Neo4j manager."""
         self.sync_driver = None
         self.async_driver = None
         self._logger = get_logger(f"{__name__}.WorkerNeo4jManager")
-    
+
     async def __aenter__(self):
         """Async context manager entry - create fresh connections."""
         await self.connect()
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit - cleanup connections."""
         await self.cleanup()
-    
+
     def __enter__(self):
         """Sync context manager entry - create fresh connections."""
         self.connect_sync_only()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Sync context manager exit - cleanup connections."""
         self.cleanup_sync()
-    
+
     async def connect(self):
         """
         Create fresh Neo4j connections for this task.
-        
+
         Creates both async and sync drivers with minimal connection pools
         to ensure task isolation following the NullPool pattern.
         """
         try:
             # Import here to avoid circular imports
             from neo4j import AsyncGraphDatabase, GraphDatabase
-            
+
             # Create sync driver for GraphRAG components (1 connection max)
             if not self.sync_driver:
                 self.sync_driver = GraphDatabase.driver(
                     settings.NEO4J_URI,
                     auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
                     max_connection_pool_size=1,  # Minimal pool like NullPool
-                    connection_acquisition_timeout=30
+                    connection_acquisition_timeout=30,
                 )
                 # Test sync connection
                 self.sync_driver.verify_connectivity()
                 self._logger.debug("Worker sync driver connected")
-            
+
             # Create async driver for any async operations (1 connection max)
             if not self.async_driver:
                 self.async_driver = AsyncGraphDatabase.driver(
                     settings.NEO4J_URI,
                     auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
                     max_connection_pool_size=1,  # Minimal pool like NullPool
-                    connection_acquisition_timeout=30
+                    connection_acquisition_timeout=30,
                 )
                 # Test async connection
                 await self.async_driver.verify_connectivity()
                 self._logger.debug("Worker async driver connected")
-                
+
         except Exception as e:
             self._logger.error(f"Failed to create worker Neo4j connections: {e}")
             await self.cleanup()
             raise
-    
+
     def connect_sync_only(self):
         """
         Create only sync Neo4j connection for sync-only tasks.
-        
+
         Optimized for tasks that only need GraphRAG components.
         """
         try:
             from neo4j import GraphDatabase
-            
+
             if not self.sync_driver:
                 self.sync_driver = GraphDatabase.driver(
                     settings.NEO4J_URI,
                     auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
                     max_connection_pool_size=1,  # Minimal pool like NullPool
-                    connection_acquisition_timeout=30
+                    connection_acquisition_timeout=30,
                 )
                 # Test connection
                 self.sync_driver.verify_connectivity()
                 self._logger.debug("Worker sync-only driver connected")
-                
+
         except Exception as e:
             self._logger.error(f"Failed to create worker sync Neo4j connection: {e}")
             self.cleanup_sync()
             raise
-    
+
     def get_sync_driver(self):
         """
         Get sync driver for GraphRAG components.
-        
+
         Returns:
             Neo4j sync driver instance
-            
+
         Raises:
             RuntimeError: If sync driver is not available
         """
         if not self.sync_driver:
-            raise RuntimeError("Sync driver not available. Use context manager to connect.")
+            raise RuntimeError(
+                "Sync driver not available. Use context manager to connect."
+            )
         return self.sync_driver
-    
+
     def get_async_driver(self):
         """
         Get async driver for async operations.
-        
+
         Returns:
             Neo4j async driver instance
-            
+
         Raises:
             RuntimeError: If async driver is not available
         """
         if not self.async_driver:
-            raise RuntimeError("Async driver not available. Use async context manager to connect.")
+            raise RuntimeError(
+                "Async driver not available. Use async context manager to connect."
+            )
         return self.async_driver
-    
+
     async def cleanup(self):
         """Clean up both sync and async connections."""
         if self.async_driver:
@@ -188,9 +194,9 @@ class WorkerNeo4jManager:
                 self._logger.warning(f"Error closing worker async driver: {e}")
             finally:
                 self.async_driver = None
-        
+
         self.cleanup_sync()
-    
+
     def cleanup_sync(self):
         """Clean up only sync connections."""
         if self.sync_driver:
@@ -202,11 +208,12 @@ class WorkerNeo4jManager:
             finally:
                 self.sync_driver = None
 
+
 # Configure Celery
 celery_app = Celery(
     "knowledge_graph_builder",
     broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND
+    backend=settings.CELERY_RESULT_BACKEND,
 )
 
 celery_app.conf.update(
@@ -226,7 +233,7 @@ celery_app.conf.update(
         "cleanup-stale-chunks-daily": {
             "task": "app.services.background_jobs.cleanup_stale_chunks",
             "schedule": 86400,  # every 24 hours in seconds
-            "args": [7],        # stale_ttl_days
+            "args": [7],  # stale_ttl_days
         },
         # Consolidate near-duplicate memories across all graphs nightly at 02:00 UTC.
         "consolidate-memories-nightly": {
@@ -250,14 +257,16 @@ celery_app.conf.update(
 # Attach OpenTelemetry Celery instrumentation (no-op when OTEL_ENABLED=false)
 try:
     from app.core.telemetry import instrument_celery
+
     instrument_celery()
 except Exception as _otel_exc:
     logger.warning(f"Could not attach Celery OTel instrumentation: {_otel_exc}")
 
 # ==================== MAIN CELERY TASKS ====================
 
+
 @celery_app.task(bind=True)
-def cleanup_stale_chunks(self, stale_ttl_days: int = 7) -> Dict[str, Any]:
+def cleanup_stale_chunks(self, stale_ttl_days: int = 7) -> dict[str, Any]:
     """
     Celery beat task: hard-delete Chunk nodes whose staleAt has exceeded the TTL.
 
@@ -308,8 +317,14 @@ def cleanup_stale_chunks(self, stale_ttl_days: int = 7) -> Dict[str, Any]:
             record = result.single()
             entities_deleted = int(record["deleted"]) if record else 0
 
-        logger.info(f"Stale chunk cleanup complete: {chunks_deleted} chunks, {entities_deleted} orphan entities deleted")
-        return {"status": "done", "chunks_deleted": chunks_deleted, "entities_deleted": entities_deleted}
+        logger.info(
+            f"Stale chunk cleanup complete: {chunks_deleted} chunks, {entities_deleted} orphan entities deleted"
+        )
+        return {
+            "status": "done",
+            "chunks_deleted": chunks_deleted,
+            "entities_deleted": entities_deleted,
+        }
 
     except Exception as exc:
         logger.error(f"Stale chunk cleanup failed: {exc}")
@@ -324,13 +339,17 @@ def process_ingestion_job(self, job_id: str, user_id: str):
     Process ingestion job using clean pipeline service.
     Follows your established pattern: Celery task -> AsyncTaskExecutor -> async implementation
     """
-    return AsyncTaskExecutor.run_async_task(_process_pipeline_ingestion_async, self, job_id, user_id)
+    return AsyncTaskExecutor.run_async_task(
+        _process_pipeline_ingestion_async, self, job_id, user_id
+    )
 
 
-async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> Dict[str, Any]:
+async def _process_pipeline_ingestion_async(
+    task, job_id: str, user_id: str
+) -> dict[str, Any]:
     """
     CLEAN REFACTOR: End-to-end document processing using pipeline_service.
-    
+
     FLOW: Document -> Pipeline Service -> Neo4j Storage -> Job Completion
     - Uses your new pipeline_service.py (Neo4j GraphRAG foundation)
     - Maintains your excellent progress tracking patterns
@@ -338,16 +357,16 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
     - Delivers end-to-end results (no complex features for now)
     """
     job = None
-    
+
     try:
         logger.info(f"Starting clean pipeline ingestion for job {job_id}")
-        
+
         # STEP 1: Get job from database and verify graph exists in Neo4j
         async with worker_session_maker() as session:
             job_query = select(IngestionJob).where(IngestionJob.id == UUID(job_id))
             result = await session.execute(job_query)
             job = result.scalar_one_or_none()
-            
+
             if not job:
                 logger.error(f"Job {job_id} not found")
                 return {"error": f"Job {job_id} not found", "status": "failed"}
@@ -358,34 +377,46 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
                 try:
                     graph_service = GraphNodeService(neo4j.get_sync_driver())
                     graph = graph_service.get_graph(str(job.graph_id))
-                    
+
                     if not graph:
-                        logger.error(f"Graph {job.graph_id} not found in Neo4j for job {job_id}")
+                        logger.error(
+                            f"Graph {job.graph_id} not found in Neo4j for job {job_id}"
+                        )
                         return {"status": "error", "message": "Graph not found"}
-                        
+
                     # Verify user ownership
                     if graph["user_id"] != user_id:
-                        logger.error(f"User {user_id} does not own graph {job.graph_id}")
+                        logger.error(
+                            f"User {user_id} does not own graph {job.graph_id}"
+                        )
                         return {"status": "error", "message": "Access denied"}
-                        
-                    logger.info(f"Verified graph {job.graph_id} exists in Neo4j for user {user_id}")
-                    
+
+                    logger.info(
+                        f"Verified graph {job.graph_id} exists in Neo4j for user {user_id}"
+                    )
+
                 except Exception as e:
                     logger.error(f"Failed to verify graph {job.graph_id}: {e}")
-                    return {"status": "error", "message": f"Graph verification failed: {str(e)}"}
-            
+                    return {
+                        "status": "error",
+                        "message": f"Graph verification failed: {str(e)}",
+                    }
+
             # Update job status to processing
             await _update_job_status_async(session, job_id, "processing")
-            
+
         logger.info(f"Processing job {job_id} for graph {job.graph_id}")
-        
+
         # STEP 2: Progress tracking (keep your excellent pattern)
         if task:
             task.update_state(
-                state="PROGRESS", 
-                meta={"progress": 10, "status": "Starting Neo4j GraphRAG pipeline processing"}
+                state="PROGRESS",
+                meta={
+                    "progress": 10,
+                    "status": "Starting Neo4j GraphRAG pipeline processing",
+                },
             )
-        
+
         # STEP 3: Process document content based on source type
         try:
             processed_doc = document_processor.process_document(
@@ -394,54 +425,66 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
                 metadata={
                     "job_id": job_id,
                     "graph_id": str(job.graph_id),
-                    "user_id": user_id
-                }
+                    "user_id": user_id,
+                },
             )
-            
+
             # Enhanced document metadata from processor
             document_text = processed_doc["text"]
             base_metadata = processed_doc["metadata"]
-            
+
         except Exception as e:
             logger.error(f"Document processing failed for job {job_id}: {e}")
             async with worker_session_maker() as session:
-                await _update_job_status_async(session, job_id, "failed", error=f"Document processing failed: {str(e)}")
+                await _update_job_status_async(
+                    session,
+                    job_id,
+                    "failed",
+                    error=f"Document processing failed: {str(e)}",
+                )
             return {
                 "status": "failed",
                 "job_id": job_id,
-                "error": f"Document processing failed: {str(e)}"
+                "error": f"Document processing failed: {str(e)}",
             }
 
         # STEP 4: Convert processed document to GraphRAG format
-        documents = [{
-            "text": document_text,
-            "source": f"job_{job_id}",
-            "title": f"Document from job {job_id}",
-            "id": job_id,  # Add explicit document ID
-            "metadata": {
-                **base_metadata,  # Include processed metadata
-                "job_id": job_id,
-                "graph_id": str(job.graph_id),
-                "user_id": user_id,
-                "source_type": job.source_type or "text",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "document_title": f"Document from job {job_id}",
-                "document_source": f"job_{job_id}"
+        documents = [
+            {
+                "text": document_text,
+                "source": f"job_{job_id}",
+                "title": f"Document from job {job_id}",
+                "id": job_id,  # Add explicit document ID
+                "metadata": {
+                    **base_metadata,  # Include processed metadata
+                    "job_id": job_id,
+                    "graph_id": str(job.graph_id),
+                    "user_id": user_id,
+                    "source_type": job.source_type or "text",
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "document_title": f"Document from job {job_id}",
+                    "document_source": f"job_{job_id}",
+                },
             }
-        }]
-        
+        ]
+
         if task:
             task.update_state(
-                state="PROGRESS", 
-                meta={"progress": 30, "status": f"Processing {len(documents)} document(s) through pipeline"}
+                state="PROGRESS",
+                meta={
+                    "progress": 30,
+                    "status": f"Processing {len(documents)} document(s) through pipeline",
+                },
             )
-        
+
         # STEP 4: Process through clean pipeline service (END-TO-END)
-        logger.info(f"Processing documents through pipeline service for graph {job.graph_id}")
+        logger.info(
+            f"Processing documents through pipeline service for graph {job.graph_id}"
+        )
 
         # Reconstruct IngestionOverrides, TemporalContext, and IngestMode from stored effective_instructions
-        overrides: Optional[IngestionOverrides] = None
-        temporal_context: Optional[TemporalContext] = None
+        overrides: IngestionOverrides | None = None
+        temporal_context: TemporalContext | None = None
         ingest_mode: IngestMode = IngestMode.INCREMENTAL
         if job.effective_instructions and isinstance(job.effective_instructions, dict):
             raw_overrides = job.effective_instructions.get("overrides")
@@ -449,19 +492,25 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
                 try:
                     overrides = IngestionOverrides(**raw_overrides)
                 except Exception as e:
-                    logger.warning(f"Could not reconstruct IngestionOverrides for job {job_id}: {e}")
+                    logger.warning(
+                        f"Could not reconstruct IngestionOverrides for job {job_id}: {e}"
+                    )
             raw_temporal = job.effective_instructions.get("temporal_context")
             if raw_temporal:
                 try:
                     temporal_context = TemporalContext(**raw_temporal)
                 except Exception as e:
-                    logger.warning(f"Could not reconstruct TemporalContext for job {job_id}: {e}")
+                    logger.warning(
+                        f"Could not reconstruct TemporalContext for job {job_id}: {e}"
+                    )
             raw_mode = job.effective_instructions.get("ingest_mode")
             if raw_mode:
                 try:
                     ingest_mode = IngestMode(raw_mode)
                 except ValueError:
-                    logger.warning(f"Unknown ingest_mode '{raw_mode}' for job {job_id}, defaulting to incremental")
+                    logger.warning(
+                        f"Unknown ingest_mode '{raw_mode}' for job {job_id}, defaulting to incremental"
+                    )
 
         pipeline_result = await pipeline_service.process_documents(
             documents=documents,
@@ -472,31 +521,34 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
             mode=ingest_mode,
             job_id=job_id,
         )
-        
+
         logger.info(f"Pipeline processing result: {pipeline_result}")
-        
+
         # STEP 5: Extract results
         if pipeline_result["status"] == "completed":
             entities_created = pipeline_result.get("entities_created", 0)
             relationships_created = pipeline_result.get("relationships_created", 0)
             chunks_created = pipeline_result.get("chunks_created", 0)
-            
+
             if task:
                 task.update_state(
-                    state="PROGRESS", 
+                    state="PROGRESS",
                     meta={
-                        "progress": 80, 
-                        "status": f"Pipeline completed: {entities_created} entities, {relationships_created} relationships, {chunks_created} chunks"
-                    }
+                        "progress": 80,
+                        "status": f"Pipeline completed: {entities_created} entities, {relationships_created} relationships, {chunks_created} chunks",
+                    },
                 )
         elif pipeline_result["status"] == "processing":
             # Handle background processing case
             if task:
                 task.update_state(
-                    state="PROGRESS", 
-                    meta={"progress": 50, "status": "Documents processing in background - monitoring progress"}
+                    state="PROGRESS",
+                    meta={
+                        "progress": 50,
+                        "status": "Documents processing in background - monitoring progress",
+                    },
                 )
-            
+
             # For now, we'll consider this a success but note it's async
             entities_created = pipeline_result.get("documents_queued", 0)
             relationships_created = 0
@@ -505,24 +557,25 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
             # Failed processing
             error_msg = pipeline_result.get("error", "Pipeline processing failed")
             logger.error(f"Pipeline processing failed for job {job_id}: {error_msg}")
-            
+
             # Update job status to failed
             async with worker_session_maker() as session:
-                await _update_job_status_async(session, job_id, "failed", error=error_msg)
-            
-            return {
-                "status": "failed",
-                "job_id": job_id,
-                "error": error_msg
-            }
-        
+                await _update_job_status_async(
+                    session, job_id, "failed", error=error_msg
+                )
+
+            return {"status": "failed", "job_id": job_id, "error": error_msg}
+
         # STEP 6: Complete job (keep your existing pattern)
         if task:
             task.update_state(
-                state="PROGRESS", 
-                meta={"progress": 100, "status": "Completing job and updating database"}
+                state="PROGRESS",
+                meta={
+                    "progress": 100,
+                    "status": "Completing job and updating database",
+                },
             )
-        
+
         async with worker_session_maker() as session:
             await _update_job_status_async(
                 session,
@@ -530,11 +583,13 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
                 "completed",
                 entities=entities_created,
                 relationships=relationships_created,
-                chunks=chunks_created
+                chunks=chunks_created,
             )
 
-        logger.info(f"✅ Completed pipeline ingestion job {job_id}: "
-                   f"{entities_created} entities, {relationships_created} relationships, {chunks_created} chunks")
+        logger.info(
+            f"✅ Completed pipeline ingestion job {job_id}: "
+            f"{entities_created} entities, {relationships_created} relationships, {chunks_created} chunks"
+        )
 
         # STEP 7: Post-ingestion community detection trigger
         await _maybe_trigger_community_detection(str(job.graph_id))
@@ -549,53 +604,47 @@ async def _process_pipeline_ingestion_async(task, job_id: str, user_id: str) -> 
             "entities_created": entities_created,
             "relationships_created": relationships_created,
             "chunks_created": chunks_created,
-            "pipeline_version": "neo4j_graphrag_clean"
+            "pipeline_version": "neo4j_graphrag_clean",
         }
-        
+
     except Exception as e:
         logger.error(f"Pipeline ingestion job {job_id} failed: {e}")
-        
+
         # Update job status to failed
         try:
             async with worker_session_maker() as session:
                 await _update_job_status_async(session, job_id, "failed", error=str(e))
         except Exception as status_error:
             logger.error(f"Failed to update job status: {status_error}")
-        
-        return {
-            "status": "failed",
-            "job_id": job_id,
-            "error": str(e)
-        }
+
+        return {"status": "failed", "job_id": job_id, "error": str(e)}
 
 
 async def _update_job_status_async(
-    session: AsyncSession, 
-    job_id: str, 
-    status: str, 
-    entities: int = None, 
-    relationships: int = None, 
+    session: AsyncSession,
+    job_id: str,
+    status: str,
+    entities: int = None,
+    relationships: int = None,
     chunks: int = None,
-    error: str = None
+    error: str = None,
 ) -> None:
     """
     Update job status in database (keep your existing pattern).
-    
+
     Args:
         session: Database session
         job_id: Job identifier
         status: New status ('processing', 'completed', 'failed')
         entities: Number of entities created (optional)
-        relationships: Number of relationships created (optional) 
+        relationships: Number of relationships created (optional)
         chunks: Number of chunks created (optional)
         error: Error message if failed (optional)
     """
     try:
         # Prepare update data
-        update_data = {
-            "status": status
-        }
-        
+        update_data = {"status": status}
+
         # Add metrics if provided
         if entities is not None:
             update_data["extracted_entities"] = entities
@@ -605,19 +654,19 @@ async def _update_job_status_async(
             update_data["processed_chunks"] = chunks
         if error is not None:
             update_data["error_message"] = error
-        
+
         # Update job in database
         stmt = (
             update(IngestionJob)
             .where(IngestionJob.id == UUID(job_id))
             .values(**update_data)
         )
-        
+
         await session.execute(stmt)
         await session.commit()
-        
+
         logger.debug(f"Updated job {job_id} status to {status}")
-        
+
     except Exception as e:
         logger.error(f"Failed to update job {job_id} status: {e}")
         await session.rollback()
@@ -625,6 +674,7 @@ async def _update_job_status_async(
 
 
 # ==================== POST-INGESTION COMMUNITY TRIGGER ====================
+
 
 async def _maybe_trigger_community_detection(graph_id: str) -> None:
     """
@@ -640,14 +690,15 @@ async def _maybe_trigger_community_detection(graph_id: str) -> None:
     """
     try:
         from neo4j import GraphDatabase
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.pool import NullPool
+
         from app.tasks.community_tasks import (
-            detect_communities_task,
             COMMUNITY_DETECTION_MIN_ENTITIES,
             _get_communities_status_pg,
             _update_communities_status_pg,
+            detect_communities_task,
         )
-        from sqlalchemy import create_engine, text
-        from sqlalchemy.pool import NullPool
 
         # Count current entities via NullPool sync engine
         driver = GraphDatabase.driver(
@@ -679,7 +730,9 @@ async def _maybe_trigger_community_detection(graph_id: str) -> None:
         try:
             current_status = _get_communities_status_pg(pg_engine, graph_id)
             if current_status == "rebuilding":
-                logger.debug(f"Community detection already running for {graph_id}, skipping trigger")
+                logger.debug(
+                    f"Community detection already running for {graph_id}, skipping trigger"
+                )
                 return
 
             # Check staleness: if entity delta > 10% mark stale
@@ -717,7 +770,11 @@ async def _maybe_trigger_community_detection(graph_id: str) -> None:
             # Queue detection with 30s delay (batches rapid successive ingests)
             detect_communities_task.apply_async(
                 args=[graph_id],
-                kwargs={"levels": [0, 1, 2], "resolutions": [0.5, 1.0, 2.0], "force_rebuild": False},
+                kwargs={
+                    "levels": [0, 1, 2],
+                    "resolutions": [0.5, 1.0, 2.0],
+                    "force_rebuild": False,
+                },
                 countdown=30,
             )
             logger.info(f"Queued community detection for graph {graph_id} (delay=30s)")
@@ -732,25 +789,27 @@ async def _maybe_trigger_community_detection(graph_id: str) -> None:
 
 # ==================== VERSIONING TASKS ====================
 
+
 @celery_app.task(bind=True, name="create_graph_snapshot")
 def create_graph_snapshot(
     self,
     graph_id: str,
-    label: Optional[str] = None,
-    description: Optional[str] = None,
+    label: str | None = None,
+    description: str | None = None,
     created_by: str = "system",
     is_auto: bool = False,
-    parent_version_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    parent_version_id: str | None = None,
+) -> dict[str, Any]:
     """
     Celery task: create a GraphVersion snapshot for large graphs.
 
     Uses a task-scoped sync Neo4j driver (NullPool pattern — Architecture Rule #5).
     Returns version metadata dict.
     """
-    from neo4j import GraphDatabase
     import uuid as _uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
+
+    from neo4j import GraphDatabase
 
     driver = GraphDatabase.driver(
         settings.NEO4J_URI,
@@ -780,7 +839,7 @@ def create_graph_snapshot(
             version_number = int(num_r["next_num"]) if num_r else 1
 
             version_id = str(_uuid.uuid4())
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
 
             session.run(
                 """
@@ -815,7 +874,9 @@ def create_graph_snapshot(
                     "created_at": now_iso,
                 },
             )
-            logger.info(f"Snapshot task created version {version_id} (v{version_number}) for graph {graph_id}")
+            logger.info(
+                f"Snapshot task created version {version_id} (v{version_number}) for graph {graph_id}"
+            )
             return {
                 "version_id": version_id,
                 "version_number": version_number,
@@ -828,6 +889,7 @@ def create_graph_snapshot(
 
 # ==================== AUTO-SNAPSHOT HOOK ====================
 
+
 async def _maybe_auto_snapshot(graph_id: str) -> None:
     """
     Trigger a zero-copy snapshot after ingestion if:
@@ -836,24 +898,29 @@ async def _maybe_auto_snapshot(graph_id: str) -> None:
     """
     try:
         from datetime import timedelta
-        from app.models.graph import KnowledgeGraph
+
         from sqlalchemy import update as sa_update
+
+        from app.models.graph import KnowledgeGraph
 
         async with worker_session_maker() as session:
             import uuid as _uuid
+
             result = await session.execute(
-                select(KnowledgeGraph).where(
-                    KnowledgeGraph.id == _uuid.UUID(graph_id)
-                )
+                select(KnowledgeGraph).where(KnowledgeGraph.id == _uuid.UUID(graph_id))
             )
             kg = result.scalar_one_or_none()
 
             if not kg or not kg.auto_snapshot_on_ingestion:
                 return
 
-            now = datetime.now(timezone.utc)
-            if kg.auto_snapshot_last_at and (now - kg.auto_snapshot_last_at) < timedelta(hours=24):
-                logger.debug(f"Auto-snapshot cap: graph {graph_id} already snapshotted in last 24h, skipping")
+            now = datetime.now(UTC)
+            if kg.auto_snapshot_last_at and (
+                now - kg.auto_snapshot_last_at
+            ) < timedelta(hours=24):
+                logger.debug(
+                    f"Auto-snapshot cap: graph {graph_id} already snapshotted in last 24h, skipping"
+                )
                 return
 
             # Dispatch async snapshot task
@@ -880,6 +947,7 @@ async def _maybe_auto_snapshot(graph_id: str) -> None:
 
 # ==================== ASYNC ROLLBACK TASK (LARGE GRAPHS) ====================
 
+
 @celery_app.task(bind=True, name="async_rollback_graph")
 def async_rollback_graph(
     self,
@@ -889,22 +957,23 @@ def async_rollback_graph(
     mode: str = "full",
     performed_by: str = "system",
     create_checkpoint: bool = True,
-    scope: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    scope: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Celery task: roll back a large graph (>10K entities) asynchronously.
 
     Uses task-scoped sync Neo4j driver (NullPool — Architecture Rule #5).
     Tracks progress in PostgreSQL GraphRollbackJob table.
     """
+
     from neo4j import GraphDatabase
-    import uuid as _uuid
     from sqlalchemy import create_engine, text
-    from sqlalchemy.orm import Session as SyncSession
     from sqlalchemy.pool import NullPool as SyncNullPool
 
     # Sync PostgreSQL engine for Celery worker
-    sync_pg_url = settings.POSTGRES_URL.replace("postgresql+asyncpg://", "postgresql://")
+    sync_pg_url = settings.POSTGRES_URL.replace(
+        "postgresql+asyncpg://", "postgresql://"
+    )
     sync_engine = create_engine(sync_pg_url, poolclass=SyncNullPool)
 
     def _pg_update(updates: dict) -> None:
@@ -917,7 +986,7 @@ def async_rollback_graph(
             conn.commit()
 
     # Mark running
-    _pg_update({"status": "running", "started_at": datetime.now(timezone.utc).isoformat()})
+    _pg_update({"status": "running", "started_at": datetime.now(UTC).isoformat()})
 
     driver = GraphDatabase.driver(
         settings.NEO4J_URI,
@@ -938,12 +1007,13 @@ def async_rollback_graph(
             if hasattr(captured_at, "iso_format"):
                 captured_at = captured_at.iso_format()
 
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
 
             # Optional checkpoint before rollback
-            checkpoint_vid: Optional[str] = None
+            checkpoint_vid: str | None = None
             if create_checkpoint:
                 import uuid as _uuid2
+
                 chk_id = str(_uuid2.uuid4())
                 session.run(
                     """
@@ -957,15 +1027,22 @@ def async_rollback_graph(
                     })
                     """,
                     {
-                        "vid": chk_id, "gid": graph_id,
+                        "vid": chk_id,
+                        "gid": graph_id,
                         "label": f"pre-rollback-{now_iso[:19]}",
                         "desc": f"Auto-checkpoint before async rollback to {version_id}",
-                        "ts": now_iso, "by": performed_by,
+                        "ts": now_iso,
+                        "by": performed_by,
                     },
                 )
                 checkpoint_vid = chk_id
 
-            params = {"graph_id": graph_id, "captured_at": captured_at, "performed_by": performed_by, "now": now_iso}
+            params = {
+                "graph_id": graph_id,
+                "captured_at": captured_at,
+                "performed_by": performed_by,
+                "now": now_iso,
+            }
 
             # Soft-delete entities added after captured_at
             r = session.run(
@@ -1015,20 +1092,28 @@ def async_rollback_graph(
                 params,
             )
 
-        _pg_update({
-            "status": "done",
-            "entities_restored": entities_restored,
-            "entities_soft_deleted": entities_soft_deleted,
-            "relationships_restored": rels_restored,
-            "relationships_soft_deleted": rels_soft_deleted,
-            "checkpoint_version_id": checkpoint_vid,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        })
+        _pg_update(
+            {
+                "status": "done",
+                "entities_restored": entities_restored,
+                "entities_soft_deleted": entities_soft_deleted,
+                "relationships_restored": rels_restored,
+                "relationships_soft_deleted": rels_soft_deleted,
+                "checkpoint_version_id": checkpoint_vid,
+                "completed_at": datetime.now(UTC).isoformat(),
+            }
+        )
         logger.info(f"Async rollback job {job_id} completed for graph {graph_id}")
         return {"status": "done", "job_id": job_id}
 
     except Exception as exc:
-        _pg_update({"status": "failed", "error_message": str(exc), "completed_at": datetime.now(timezone.utc).isoformat()})
+        _pg_update(
+            {
+                "status": "failed",
+                "error_message": str(exc),
+                "completed_at": datetime.now(UTC).isoformat(),
+            }
+        )
         logger.error(f"Async rollback job {job_id} failed: {exc}")
         raise
     finally:
@@ -1038,8 +1123,11 @@ def async_rollback_graph(
 
 # ==================== MEMORY CONSOLIDATION TASK ====================
 
-@celery_app.task(bind=True, name="app.services.background_jobs.consolidate_memories_task")
-def consolidate_memories_task(self, graph_id: str) -> Dict[str, Any]:
+
+@celery_app.task(
+    bind=True, name="app.services.background_jobs.consolidate_memories_task"
+)
+def consolidate_memories_task(self, graph_id: str) -> dict[str, Any]:
     """
     Celery task: consolidate duplicate Memory nodes for a graph.
 
@@ -1062,17 +1150,19 @@ def consolidate_memories_task(self, graph_id: str) -> Dict[str, Any]:
         raise
 
 
-async def _consolidate_async(graph_id: str) -> Dict[str, Any]:
-    from app.services.memory_service import memory_service as _ms
+async def _consolidate_async(graph_id: str) -> dict[str, Any]:
     from app.core.neo4j_client import neo4j_client as _client
+    from app.services.memory_service import memory_service as _ms
 
     if not _client.async_driver:
         await _client.connect_async()
     return await _ms.consolidate(graph_id)
 
 
-@celery_app.task(bind=True, name="app.services.background_jobs.consolidate_all_memories")
-def consolidate_all_memories(self) -> Dict[str, Any]:
+@celery_app.task(
+    bind=True, name="app.services.background_jobs.consolidate_all_memories"
+)
+def consolidate_all_memories(self) -> dict[str, Any]:
     """
     Nightly beat task: fan out consolidation to all active graphs.
 
@@ -1083,6 +1173,7 @@ def consolidate_all_memories(self) -> Dict[str, Any]:
 
     async def _fetch_graphs() -> list:
         from app.core.neo4j_client import neo4j_client as _client
+
         if not _client.async_driver:
             await _client.connect_async()
         return await _client.execute_query(
@@ -1103,8 +1194,9 @@ def consolidate_all_memories(self) -> Dict[str, Any]:
 
 # ==================== MULTI-MODAL IMAGE INGESTION TASK ====================
 
+
 @celery_app.task(bind=True, name="app.services.background_jobs.ingest_image_task")
-def ingest_image_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
+def ingest_image_task(self, job_id: str, user_id: str) -> dict[str, Any]:
     """
     Celery task: process an image ingestion job.
 
@@ -1117,10 +1209,14 @@ def ingest_image_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
     Follows the dual-driver rule — bridges sync Celery context to async pipeline
     via AsyncTaskExecutor.
     """
-    return AsyncTaskExecutor.run_async_task(_process_image_ingestion_async, self, job_id, user_id)
+    return AsyncTaskExecutor.run_async_task(
+        _process_image_ingestion_async, self, job_id, user_id
+    )
 
 
-async def _process_image_ingestion_async(task, job_id: str, user_id: str) -> Dict[str, Any]:
+async def _process_image_ingestion_async(
+    task, job_id: str, user_id: str
+) -> dict[str, Any]:
     """Async implementation of the image ingestion task."""
     job = None
     try:
@@ -1150,7 +1246,10 @@ async def _process_image_ingestion_async(task, job_id: str, user_id: str) -> Dic
         if task:
             task.update_state(
                 state="PROGRESS",
-                meta={"progress": 10, "status": "Extracting entities from image via vision model"},
+                meta={
+                    "progress": 10,
+                    "status": "Extracting entities from image via vision model",
+                },
             )
 
         # STEP 2: Run vision extraction
@@ -1169,8 +1268,7 @@ async def _process_image_ingestion_async(task, job_id: str, user_id: str) -> Dic
             logger.error(f"Vision extraction failed for job {job_id}: {exc}")
             async with worker_session_maker() as session:
                 await _update_job_status_async(
-                    session, job_id, "failed",
-                    error=f"Vision extraction failed: {exc}"
+                    session, job_id, "failed", error=f"Vision extraction failed: {exc}"
                 )
             return {"status": "failed", "job_id": job_id, "error": str(exc)}
 
@@ -1196,8 +1294,7 @@ async def _process_image_ingestion_async(task, job_id: str, user_id: str) -> Dic
             # Nothing was extracted — mark complete with zero counts
             async with worker_session_maker() as session:
                 await _update_job_status_async(
-                    session, job_id, "completed",
-                    entities=0, relationships=0, chunks=0
+                    session, job_id, "completed", entities=0, relationships=0, chunks=0
                 )
             return {
                 "status": "completed",
@@ -1207,26 +1304,31 @@ async def _process_image_ingestion_async(task, job_id: str, user_id: str) -> Dic
                 "note": "No entities could be extracted from this image",
             }
 
-        documents = [{
-            "text": text,
-            "source": f"job_{job_id}",
-            "title": f"Image from job {job_id}",
-            "id": job_id,
-            "metadata": {
-                "job_id": job_id,
-                "graph_id": str(job.graph_id),
-                "user_id": user_id,
-                "source_type": "image",
-                "vision_model": vision_model,
-                "context": context,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        }]
+        documents = [
+            {
+                "text": text,
+                "source": f"job_{job_id}",
+                "title": f"Image from job {job_id}",
+                "id": job_id,
+                "metadata": {
+                    "job_id": job_id,
+                    "graph_id": str(job.graph_id),
+                    "user_id": user_id,
+                    "source_type": "image",
+                    "vision_model": vision_model,
+                    "context": context,
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+            }
+        ]
 
         if task:
             task.update_state(
                 state="PROGRESS",
-                meta={"progress": 60, "status": "Running knowledge graph pipeline on vision output"},
+                meta={
+                    "progress": 60,
+                    "status": "Running knowledge graph pipeline on vision output",
+                },
             )
 
         pipeline_result = await pipeline_service.process_documents(
@@ -1242,7 +1344,9 @@ async def _process_image_ingestion_async(task, job_id: str, user_id: str) -> Dic
         if pipeline_result["status"] not in ("completed", "processing"):
             error_msg = pipeline_result.get("error", "Pipeline failed")
             async with worker_session_maker() as session:
-                await _update_job_status_async(session, job_id, "failed", error=error_msg)
+                await _update_job_status_async(
+                    session, job_id, "failed", error=error_msg
+                )
             return {"status": "failed", "job_id": job_id, "error": error_msg}
 
         entities_created = pipeline_result.get("entities_created", entity_count)
@@ -1251,7 +1355,9 @@ async def _process_image_ingestion_async(task, job_id: str, user_id: str) -> Dic
 
         async with worker_session_maker() as session:
             await _update_job_status_async(
-                session, job_id, "completed",
+                session,
+                job_id,
+                "completed",
                 entities=entities_created,
                 relationships=relationships_created,
                 chunks=chunks_created,
@@ -1277,7 +1383,9 @@ async def _process_image_ingestion_async(task, job_id: str, user_id: str) -> Dic
         logger.error(f"Image ingestion job {job_id} failed: {exc}")
         try:
             async with worker_session_maker() as session:
-                await _update_job_status_async(session, job_id, "failed", error=str(exc))
+                await _update_job_status_async(
+                    session, job_id, "failed", error=str(exc)
+                )
         except Exception as status_error:
             logger.error(f"Failed to update image job status: {status_error}")
         return {"status": "failed", "job_id": job_id, "error": str(exc)}
@@ -1285,8 +1393,9 @@ async def _process_image_ingestion_async(task, job_id: str, user_id: str) -> Dic
 
 # ==================== CODE KNOWLEDGE GRAPH INGESTION TASK ====================
 
+
 @celery_app.task(bind=True, name="app.services.background_jobs.code_ingest_task")
-def code_ingest_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
+def code_ingest_task(self, job_id: str, user_id: str) -> dict[str, Any]:
     """
     Celery task: ingest a code repository into the Code Knowledge Graph.
 
@@ -1306,29 +1415,29 @@ def code_ingest_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
 
     logger.info(f"Starting code ingestion job {job_id}")
 
-    from neo4j import GraphDatabase
-    from sqlalchemy import select as sa_select, update as sa_update
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
     from sqlalchemy.pool import NullPool as _NullPool
-    from uuid import UUID as _UUID
+
     from app.services.code_parser_service import (
+        IngestStats,
         bootstrap_repository,
+        cleanup_stale_code_nodes_sync,
         detect_deltas_sync,
+        generate_embeddings,
         parse_files_parallel,
         resolve_symbols,
-        generate_embeddings,
         write_code_graph_sync,
-        cleanup_stale_code_nodes_sync,
-        IngestStats,
     )
-    from app.schemas.code_schemas import CodeIngestMode, CodeDepth
 
     # Sync PostgreSQL engine for this task
-    sync_pg_url = settings.POSTGRES_URL.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-    from sqlalchemy import create_engine as _create_engine, text as _text
+    sync_pg_url = settings.POSTGRES_URL.replace(
+        "postgresql+asyncpg://", "postgresql+psycopg2://"
+    )
+    from sqlalchemy import create_engine as _create_engine
+    from sqlalchemy import text as _text
+
     pg_engine = _create_engine(sync_pg_url, poolclass=_NullPool, echo=False)
 
-    def _pg_get_job(job_id_str: str) -> Optional[Any]:
+    def _pg_get_job(job_id_str: str) -> Any | None:
         with pg_engine.connect() as conn:
             row = conn.execute(
                 _text("SELECT * FROM ingestion_jobs WHERE id = :id"),
@@ -1336,7 +1445,9 @@ def code_ingest_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
             ).fetchone()
         return row
 
-    def _pg_update_job(job_id_str: str, status: str, progress: int, meta: Dict[str, Any]) -> None:
+    def _pg_update_job(
+        job_id_str: str, status: str, progress: int, meta: dict[str, Any]
+    ) -> None:
         with pg_engine.begin() as conn:
             conn.execute(
                 _text("""
@@ -1368,7 +1479,7 @@ def code_ingest_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
             return {"status": "failed", "error": f"Job {job_id} not found"}
 
         graph_id = str(job_row.graph_id)
-        params: Dict[str, Any] = _json.loads(job_row.source_content or "{}")
+        params: dict[str, Any] = _json.loads(job_row.source_content or "{}")
         _pg_update_job(job_id, "running", 5, {})
 
         # ── Stage 0: Bootstrap ─────────────────────────────────────────────
@@ -1376,7 +1487,9 @@ def code_ingest_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
             repo_path=params.get("repo_path"),
             git_url=params.get("git_url"),
             branch=params.get("branch", "main"),
-            allowed_languages=set(params["languages"]) if params.get("languages") else None,
+            allowed_languages=(
+                set(params["languages"]) if params.get("languages") else None
+            ),
             exclude_patterns=params.get("exclude_patterns", []),
         )
         stats.files_scanned = len(file_metas)
@@ -1407,7 +1520,9 @@ def code_ingest_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
             # ── Stage 1: Delta Detection ───────────────────────────────────
             if mode == "incremental":
                 with driver.session() as session:
-                    new_files, changed_files = detect_deltas_sync(graph_id, file_metas, session)
+                    new_files, changed_files = detect_deltas_sync(
+                        graph_id, file_metas, session
+                    )
             else:
                 # Full mode: treat all files as new
                 new_files, changed_files = file_metas, []
@@ -1421,10 +1536,18 @@ def code_ingest_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
                 # File-depth only: write File + dependency nodes, skip symbol extraction
                 with driver.session() as session:
                     from app.services.code_parser_service import write_code_graph_sync
+
                     write_code_graph_sync(
-                        graph_id, session,
-                        to_parse, [], dep_nodes,
-                        [], [], [], {}, stats,
+                        graph_id,
+                        session,
+                        to_parse,
+                        [],
+                        dep_nodes,
+                        [],
+                        [],
+                        [],
+                        {},
+                        stats,
                     )
                 _pg_update_job(job_id, "completed", 100, {"symbols_added": 0})
                 logger.info(f"[{job_id}] File-depth ingest complete")
@@ -1442,7 +1565,9 @@ def code_ingest_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
             # ── Stage 2: AST Parsing ───────────────────────────────────────
             symbols = parse_files_parallel(to_parse, max_workers=4)
             _pg_update_job(job_id, "running", 50, {"symbols_added": 0})
-            logger.info(f"[{job_id}] Stage 2 done: {len(symbols)} raw symbols extracted")
+            logger.info(
+                f"[{job_id}] Stage 2 done: {len(symbols)} raw symbols extracted"
+            )
 
             # ── Stage 3: Cross-File Resolution ────────────────────────────
             symbols, calls_edges, imports_edges, inherits_edges = resolve_symbols(
@@ -1458,18 +1583,30 @@ def code_ingest_task(self, job_id: str, user_id: str) -> Dict[str, Any]:
             # ── Stage 4: Embedding Generation ─────────────────────────────
             embeddings = generate_embeddings(symbols)
             _pg_update_job(job_id, "running", 80, {"symbols_added": 0})
-            logger.info(f"[{job_id}] Stage 4 done: {len(embeddings)} embeddings generated")
+            logger.info(
+                f"[{job_id}] Stage 4 done: {len(embeddings)} embeddings generated"
+            )
 
             # ── Stage 5: Neo4j Write ───────────────────────────────────────
             with driver.session() as session:
                 write_code_graph_sync(
-                    graph_id, session,
-                    to_parse, symbols, dep_nodes,
-                    calls_edges, imports_edges, inherits_edges,
-                    embeddings, stats,
+                    graph_id,
+                    session,
+                    to_parse,
+                    symbols,
+                    dep_nodes,
+                    calls_edges,
+                    imports_edges,
+                    inherits_edges,
+                    embeddings,
+                    stats,
                 )
-            _pg_update_job(job_id, "running", 95, {"symbols_added": stats.symbols_added})
-            logger.info(f"[{job_id}] Stage 5 done: {stats.symbols_added} symbols written")
+            _pg_update_job(
+                job_id, "running", 95, {"symbols_added": stats.symbols_added}
+            )
+            logger.info(
+                f"[{job_id}] Stage 5 done: {stats.symbols_added} symbols written"
+            )
 
             # ── Stage 6: Stale Cleanup ─────────────────────────────────────
             if mode == "full":

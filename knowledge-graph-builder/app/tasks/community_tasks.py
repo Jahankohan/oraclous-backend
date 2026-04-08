@@ -15,15 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
-import logging
 import time
-import uuid
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import redis
-from celery import Celery
 from neo4j import GraphDatabase
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
@@ -206,7 +201,11 @@ async def _detect_communities_async(
 
         if not entity_ids:
             _update_communities_status_pg(pg_engine, graph_id, "not_detected")
-            return {"status": "skipped", "reason": "No entities found", "graph_id": graph_id}
+            return {
+                "status": "skipped",
+                "reason": "No entities found",
+                "graph_id": graph_id,
+            }
 
         # -----------------------------------------------------------------------
         # Step 3 — Run Leiden per level
@@ -221,9 +220,7 @@ async def _detect_communities_async(
         # -----------------------------------------------------------------------
         # Step 5+6 — LLM summarisation + embeddings
         # -----------------------------------------------------------------------
-        communities_map = await _summarise_and_embed(
-            communities_map, graph_id, driver
-        )
+        communities_map = await _summarise_and_embed(communities_map, graph_id, driver)
 
         # -----------------------------------------------------------------------
         # Step 7 — Write to Neo4j
@@ -294,9 +291,7 @@ def _get_entity_ids(session, graph_id: str) -> list[str]:
     return [r["eid"] for r in result if r["eid"]]
 
 
-def _extract_adjacency_list(
-    session, graph_id: str
-) -> list[tuple[str, str, int]]:
+def _extract_adjacency_list(session, graph_id: str) -> list[tuple[str, str, int]]:
     """Return (src_id, tgt_id, weight) triples — both sides filtered by graph_id."""
     result = session.run(
         """
@@ -324,9 +319,7 @@ def _get_entity_names_and_types(
     return {
         r["eid"]: {
             "name": r["name"] or r["eid"],
-            "type": next(
-                (lbl for lbl in r["lbls"] if lbl != "__Entity__"), "Entity"
-            ),
+            "type": next((lbl for lbl in r["lbls"] if lbl != "__Entity__"), "Entity"),
         }
         for r in result
     }
@@ -348,9 +341,7 @@ def _get_relationships_between(
     return [{"src": r["src"], "rel": r["rel"], "tgt": r["tgt"]} for r in result]
 
 
-def _get_existing_summary_hashes(
-    session, graph_id: str
-) -> dict[str, str]:
+def _get_existing_summary_hashes(session, graph_id: str) -> dict[str, str]:
     """Return {community_id: summary_prompt_hash} for existing communities."""
     result = session.run(
         """
@@ -390,9 +381,7 @@ def _run_leiden(
         if src in id_to_idx and tgt in id_to_idx
     ]
     weights = [
-        float(w)
-        for src, tgt, w in edges
-        if src in id_to_idx and tgt in id_to_idx
+        float(w) for src, tgt, w in edges if src in id_to_idx and tgt in id_to_idx
     ]
 
     g = ig.Graph(n=n, edges=edge_list, directed=False)
@@ -400,7 +389,7 @@ def _run_leiden(
         g.es["weight"] = weights
 
     result: dict[int, dict[str, list[str]]] = {}
-    for level, resolution in zip(levels, resolutions):
+    for level, resolution in zip(levels, resolutions, strict=False):
         partition = leidenalg.find_partition(
             g,
             leidenalg.RBConfigurationVertexPartition,
@@ -420,7 +409,7 @@ def _run_leiden(
 
         # Replace tmp keys with deterministic IDs
         final_map: dict[str, list[str]] = {}
-        for tmp_key, members in level_map.items():
+        for _tmp_key, members in level_map.items():
             cid = make_community_id(
                 graph_id="__placeholder__",  # filled during upsert
                 level=level,
@@ -471,7 +460,7 @@ def _build_hierarchy(
         parent_level = levels[i - 1]
         parent_lookup = entity_to_community.get(parent_level, {})
 
-        for cid, data in enriched[level].items():
+        for _, data in enriched[level].items():
             # Majority vote
             vote: dict[str, int] = {}
             for eid in data["members"]:
@@ -528,7 +517,12 @@ async def _summarise_and_embed(
 
     # Fetch entity metadata for summarisation in one batch
     all_member_ids = list(
-        {eid for comms in communities_map.values() for data in comms.values() for eid in data["members"]}
+        {
+            eid
+            for comms in communities_map.values()
+            for data in comms.values()
+            for eid in data["members"]
+        }
     )
     with driver.session() as session:
         entity_meta = _get_entity_names_and_types(session, graph_id, all_member_ids)
@@ -545,9 +539,10 @@ async def _summarise_and_embed(
             )
             with driver.session() as session:
                 rels = _get_relationships_between(session, graph_id, member_ids[:20])
-            rel_list = "\n".join(
-                f"- {r['src']} --[{r['rel']}]--> {r['tgt']}" for r in rels
-            ) or "(no direct relationships found)"
+            rel_list = (
+                "\n".join(f"- {r['src']} --[{r['rel']}]--> {r['tgt']}" for r in rels)
+                or "(no direct relationships found)"
+            )
 
             prompt = SUMMARY_USER_TEMPLATE.format(
                 entity_count=len(member_ids),
@@ -570,7 +565,9 @@ async def _summarise_and_embed(
                 names = [
                     entity_meta.get(eid, {}).get("name", eid) for eid in member_ids[:5]
                 ]
-                data["summary"] = f"Community of {len(member_ids)} entities including: {', '.join(names)}"
+                data["summary"] = (
+                    f"Community of {len(member_ids)} entities including: {', '.join(names)}"
+                )
 
     await asyncio.gather(*(summarise_one(lv, cid, data) for lv, cid, data in tasks))
 
@@ -626,7 +623,7 @@ def _upsert_communities(
     total_entities = sum(len(d["members"]) for d in communities.values())
 
     with driver.session() as session:
-        for cid, data in communities.items():
+        for _cid, data in communities.items():
             members = data["members"]
             # Re-derive deterministic ID with real graph_id
             real_cid = make_community_id(graph_id, level, resolution, members)
@@ -665,7 +662,11 @@ def _upsert_communities(
                     MATCH (c:__Community__ {id: $id, graph_id: $graph_id})
                     SET c.embedding = $embedding
                     """,
-                    {"id": real_cid, "graph_id": graph_id, "embedding": data["embedding"]},
+                    {
+                        "id": real_cid,
+                        "graph_id": graph_id,
+                        "embedding": data["embedding"],
+                    },
                 )
 
             # MERGE IN_COMMUNITY relationships
@@ -686,11 +687,13 @@ def _upsert_communities(
 
         # MERGE PARENT_COMMUNITY relationships (level > 0)
         if level > 0:
-            for cid, data in communities.items():
+            for _cid, data in communities.items():
                 parent_id = data.get("parent_id")
                 if not parent_id:
                     continue
-                real_cid = make_community_id(graph_id, level, resolution, data["members"])
+                real_cid = make_community_id(
+                    graph_id, level, resolution, data["members"]
+                )
                 session.run(
                     """
                     MATCH (child:__Community__ {id: $child_id, graph_id: $graph_id})
@@ -715,9 +718,7 @@ def _get_communities_status_pg(engine, graph_id: str) -> str:
     try:
         with engine.connect() as conn:
             row = conn.execute(
-                text(
-                    "SELECT communities_status FROM knowledge_graphs WHERE id = :gid"
-                ),
+                text("SELECT communities_status FROM knowledge_graphs WHERE id = :gid"),
                 {"gid": graph_id},
             ).fetchone()
             return row[0] if row and row[0] else "not_detected"

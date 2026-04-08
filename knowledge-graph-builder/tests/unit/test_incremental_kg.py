@@ -10,17 +10,18 @@ All 7 test criteria from the spec are covered:
 6. Full mode: mode=full behaves identically to existing delete+re-extract
 7. Migration backfill: verify scripts produce required fields, no data loss
 """
+
 import hashlib
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from typing import Dict, Set
 
 from app.schemas.graph_schemas import IngestMode
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -32,6 +33,7 @@ def _sha1(text: str) -> str:
 
 def _make_chunk(uid: str, text: str):
     from neo4j_graphrag.experimental.components.types import TextChunk
+
     c = TextChunk(uid=uid, text=text, index=0)
     return c
 
@@ -43,7 +45,7 @@ def _make_pipeline(graph_id: str = "test-graph-123"):
     with patch("app.services.pipeline_service.neo4j_client") as mock_client:
         pipeline = MultiTenantGraphRAGPipeline(graph_id=graph_id, user_id="user-1")
         pipeline._initialized = True
-        pipeline.llm = None          # Skip LLM extraction in unit tests
+        pipeline.llm = None  # Skip LLM extraction in unit tests
         pipeline.embedder = None
         pipeline.driver = MagicMock()
         pipeline._neo4j_client = mock_client
@@ -54,12 +56,13 @@ def _make_pipeline(graph_id: str = "test-graph-123"):
 # Test 3: Hash guard — same bytes → status=skipped, no graph writes
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_hash_guard_skips_unchanged_document():
     """Same document bytes → processing_source returns status=skipped, zero writes."""
     content = "Alice founded Acme Corp in 2010."
-    content_hash = _sha256(content)
+    _sha256(content)
 
     pipeline = _make_pipeline()
 
@@ -85,6 +88,7 @@ async def test_hash_guard_skips_unchanged_document():
 # ---------------------------------------------------------------------------
 # Test 1: Idempotency — ingest twice → zero new nodes on second run
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -132,6 +136,7 @@ async def test_idempotency_second_ingest_produces_no_new_chunks():
 # Test 2: Delta — change one page → only new chunks processed
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_delta_only_new_chunks_sent_to_extractor():
@@ -142,12 +147,14 @@ async def test_delta_only_new_chunks_sent_to_extractor():
     unchanged_text = "Unchanged paragraph about Alice."
     new_text = "New paragraph about Bob joining in 2025."
     unchanged_sha1 = _sha1(unchanged_text)
-    new_sha1 = _sha1(new_text)
+    _sha1(new_text)
 
     pipeline = _make_pipeline()
     pipeline._check_document_hash_unchanged = AsyncMock(return_value=False)
     pipeline._set_document_provenance = AsyncMock()
-    pipeline._get_existing_chunk_content_hashes = AsyncMock(return_value={unchanged_sha1})
+    pipeline._get_existing_chunk_content_hashes = AsyncMock(
+        return_value={unchanged_sha1}
+    )
     pipeline._soft_delete_stale_chunks = AsyncMock()
     pipeline._set_chunk_provenance = AsyncMock()
 
@@ -181,9 +188,7 @@ async def test_delta_only_new_chunks_sent_to_extractor():
 
         # Pipeline needs an LLM to reach the extractor
         pipeline.llm = MagicMock()
-        pipeline._normalize_overlapping_entities = AsyncMock(
-            side_effect=lambda g: g
-        )
+        pipeline._normalize_overlapping_entities = AsyncMock(side_effect=lambda g: g)
         pipeline._detect_temporal_contradictions = AsyncMock(return_value=0)
 
         with patch("app.services.pipeline_service.neo4j_client") as mock_neo4j:
@@ -204,6 +209,7 @@ async def test_delta_only_new_chunks_sent_to_extractor():
 # ---------------------------------------------------------------------------
 # Test 5: Stale chunk — removed page → chunk gets staleAt set
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -237,7 +243,7 @@ async def test_stale_chunk_soft_deleted_when_page_removed():
     ) as MockSplitter:
         MockSplitter.return_value.run = AsyncMock(return_value=mock_chunks)
 
-        result = await pipeline._process_single_document_instrumented(
+        await pipeline._process_single_document_instrumented(
             text="kept paragraph only",
             source="doc_d",
             kg_writer=AsyncMock(),
@@ -257,13 +263,16 @@ async def test_stale_chunk_soft_deleted_when_page_removed():
 # Test 6: Full mode — behaves identically to existing delete+re-extract path
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_full_mode_bypasses_hash_guard():
     """mode=full must NOT call _check_document_hash_unchanged — always proceed."""
     pipeline = _make_pipeline()
 
-    pipeline._check_document_hash_unchanged = AsyncMock(return_value=True)  # would skip if checked
+    pipeline._check_document_hash_unchanged = AsyncMock(
+        return_value=True
+    )  # would skip if checked
     pipeline._set_document_provenance = AsyncMock()
     pipeline._get_existing_chunk_content_hashes = AsyncMock(return_value=set())
     pipeline._soft_delete_stale_chunks = AsyncMock()
@@ -296,6 +305,7 @@ async def test_full_mode_bypasses_hash_guard():
 # Test 4: Manual property preservation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_ingest_mode_schema_has_correct_values():
     """IngestMode enum must have exactly full / incremental / upsert values."""
@@ -308,6 +318,7 @@ def test_ingest_mode_schema_has_correct_values():
 def test_ingest_data_request_mode_defaults_to_incremental():
     """IngestDataRequest.mode must default to 'incremental' for backward compatibility."""
     from app.schemas.graph_schemas import IngestDataRequest
+
     req = IngestDataRequest(content="Some text content here that is long enough.")
     assert req.mode == IngestMode.INCREMENTAL
 
@@ -329,13 +340,17 @@ async def test_manual_property_preservation_via_no_new_chunks_path():
     chunk_sha1 = _sha1(chunk_text)
 
     pipeline = _make_pipeline()
-    pipeline._check_document_hash_unchanged = AsyncMock(return_value=False)  # doc hash changed slightly
+    pipeline._check_document_hash_unchanged = AsyncMock(
+        return_value=False
+    )  # doc hash changed slightly
     pipeline._set_document_provenance = AsyncMock()
     # Simulate entity already exists with all chunk hashes present
     pipeline._get_existing_chunk_content_hashes = AsyncMock(return_value={chunk_sha1})
     pipeline._soft_delete_stale_chunks = AsyncMock()
     pipeline._set_chunk_provenance = AsyncMock()
-    pipeline._set_entity_provenance = AsyncMock()  # must NOT be called when no new chunks
+    pipeline._set_entity_provenance = (
+        AsyncMock()
+    )  # must NOT be called when no new chunks
 
     mock_chunk = _make_chunk("uid-1", chunk_text)
     mock_chunks = MagicMock()
@@ -396,17 +411,21 @@ async def test_set_entity_provenance_uses_ingestedat_preservation():
 # Test 7: Migration backfill — script sets required fields, no data loss
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_backfill_script_queries_are_correct():
     """Verify the backfill script uses safe MERGE-based queries without destructive ops."""
-    import ast
     import pathlib
 
-    script_path = pathlib.Path(__file__).parents[2] / "scripts" / "backfill_incremental_kg.py"
+    script_path = (
+        pathlib.Path(__file__).parents[2] / "scripts" / "backfill_incremental_kg.py"
+    )
     source_code = script_path.read_text()
 
     # Must set contentHash to LEGACY_UNKNOWN (not delete or overwrite with real data)
-    assert "LEGACY_UNKNOWN" in source_code, "Backfill must mark legacy docs with LEGACY_UNKNOWN"
+    assert (
+        "LEGACY_UNKNOWN" in source_code
+    ), "Backfill must mark legacy docs with LEGACY_UNKNOWN"
 
     # Must never use DELETE
     assert "DETACH DELETE" not in source_code, "Backfill must not delete nodes"

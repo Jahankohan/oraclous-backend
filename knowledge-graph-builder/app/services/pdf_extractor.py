@@ -10,7 +10,7 @@ Libraries used:
 """
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from app.core.logging import get_logger
 
@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 _MIN_IMAGE_PX = 50
 
 
-def extract_pdf(file_path: str) -> Dict[str, Any]:
+def extract_pdf(file_path: str) -> dict[str, Any]:
     """
     Extract text and embedded images from a PDF file.
 
@@ -46,8 +46,8 @@ def extract_pdf(file_path: str) -> Dict[str, Any]:
 
     doc = fitz.open(file_path)
     page_count = doc.page_count
-    text_parts: List[str] = []
-    image_paths: List[str] = []
+    text_parts: list[str] = []
+    image_paths: list[str] = []
     has_tables = False
 
     img_dir = Path(file_path).parent / "extracted_images"
@@ -111,7 +111,7 @@ def extract_pdf(file_path: str) -> Dict[str, Any]:
     }
 
 
-def extract_docx(file_path: str) -> Dict[str, Any]:
+def extract_docx(file_path: str) -> dict[str, Any]:
     """
     Extract text and tables from a DOCX file using python-docx.
 
@@ -133,7 +133,7 @@ def extract_docx(file_path: str) -> Dict[str, Any]:
         )
 
     doc = docx.Document(file_path)
-    text_parts: List[str] = []
+    text_parts: list[str] = []
 
     for para in doc.paragraphs:
         stripped = para.text.strip()
@@ -142,8 +142,7 @@ def extract_docx(file_path: str) -> Dict[str, Any]:
 
     for table in doc.tables:
         rows = [
-            "\t".join(cell.text.strip() for cell in row.cells)
-            for row in table.rows
+            "\t".join(cell.text.strip() for cell in row.cells) for row in table.rows
         ]
         non_empty = [r for r in rows if r.strip()]
         if non_empty:

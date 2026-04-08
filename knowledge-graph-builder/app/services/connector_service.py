@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-import hashlib
 import hmac as hmac_lib
-import json
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select, update, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.graph import Connector, ConnectorSyncLog, WebhookEvent
 from app.schemas.connector_schemas import (
-    ConnectorConfig,
     ConnectorResponse,
     RegisterConnectorRequest,
     SyncLogResponse,
@@ -53,7 +50,9 @@ class ConnectorService:
         db.add(connector)
         await db.commit()
         await db.refresh(connector)
-        logger.info(f"Registered connector {connector.id} ({request.connector_type}) for graph {graph_id}")
+        logger.info(
+            f"Registered connector {connector.id} ({request.connector_type}) for graph {graph_id}"
+        )
         return self._to_response(connector)
 
     async def list_connectors(
@@ -61,7 +60,7 @@ class ConnectorService:
         db: AsyncSession,
         graph_id: str,
         user_id: str,
-    ) -> List[ConnectorResponse]:
+    ) -> list[ConnectorResponse]:
         result = await db.execute(
             select(Connector).where(
                 Connector.graph_id == graph_id,
@@ -98,7 +97,7 @@ class ConnectorService:
             connector.schedule = request.schedule
         if request.status is not None:
             connector.status = request.status
-        connector.updated_at = datetime.now(timezone.utc)
+        connector.updated_at = datetime.now(UTC)
         await db.commit()
         await db.refresh(connector)
         return self._to_response(connector)
@@ -125,7 +124,7 @@ class ConnectorService:
         graph_id: str,
         user_id: str,
         connector_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Enqueue a Celery sync task for the connector."""
         connector = await self._get_or_404(db, graph_id, user_id, connector_id)
         if connector.connector_type == "webhook_receiver":
@@ -134,6 +133,7 @@ class ConnectorService:
                 detail="webhook_receiver connectors are push-only — use the webhook URL instead",
             )
         from app.services.connector_jobs import sync_connector
+
         task = sync_connector.delay(str(connector.id))
         logger.info(f"Queued sync for connector {connector_id}, task_id={task.id}")
         return {"connector_id": connector_id, "task_id": task.id, "status": "queued"}
@@ -150,7 +150,7 @@ class ConnectorService:
         connector_id: str,
         limit: int = 20,
         offset: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         # Verify ownership
         await self._get_or_404(db, graph_id, user_id, connector_id)
 
@@ -163,7 +163,9 @@ class ConnectorService:
         )
         logs = result.scalars().all()
         count_result = await db.execute(
-            select(func.count()).where(ConnectorSyncLog.connector_id == UUID(connector_id))
+            select(func.count()).where(
+                ConnectorSyncLog.connector_id == UUID(connector_id)
+            )
         )
         total = count_result.scalar() or 0
         return {
@@ -179,9 +181,9 @@ class ConnectorService:
         self,
         db: AsyncSession,
         connector_id: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         payload_hash: str,
-        event_type: Optional[str] = None,
+        event_type: str | None = None,
     ) -> str:
         """Persist a webhook event and return its UUID."""
         event = WebhookEvent(
@@ -226,7 +228,9 @@ class ConnectorService:
         connector = result.scalars().first()
         if not connector:
             # Return 404 — never 403 — to prevent graph/connector enumeration (spec §9)
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found"
+            )
         return connector
 
     # ------------------------------------------------------------------
@@ -236,9 +240,9 @@ class ConnectorService:
     @staticmethod
     def verify_hmac(
         raw_body: bytes,
-        auth_config: Dict[str, Any],
-        headers: Dict[str, str],
-        credential_value: Optional[str] = None,
+        auth_config: dict[str, Any],
+        headers: dict[str, str],
+        credential_value: str | None = None,
     ) -> bool:
         """
         Verify HMAC-SHA256 webhook signature.
@@ -284,7 +288,9 @@ class ConnectorService:
         try:
             uid = UUID(connector_id)
         except ValueError:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found"
+            ) from None
 
         result = await db.execute(
             select(Connector).where(
@@ -295,15 +301,15 @@ class ConnectorService:
         )
         connector = result.scalars().first()
         if not connector:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found"
+            )
         return connector
 
     def _to_response(self, connector: Connector) -> ConnectorResponse:
-        webhook_url: Optional[str] = None
+        webhook_url: str | None = None
         if connector.connector_type == "webhook_receiver":
-            webhook_url = (
-                f"{settings.SERVICE_URL}/api/v1/webhooks/{connector.graph_id}/{connector.id}"
-            )
+            webhook_url = f"{settings.SERVICE_URL}/api/v1/webhooks/{connector.graph_id}/{connector.id}"
         return ConnectorResponse(
             id=str(connector.id),
             graph_id=connector.graph_id,

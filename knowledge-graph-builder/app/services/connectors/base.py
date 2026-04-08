@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterator, List, Optional
+from collections.abc import Iterator
+from typing import Any
 
 
 class ConnectorFetcher(ABC):
@@ -20,10 +19,10 @@ class ConnectorFetcher(ABC):
     - Conversion of raw API items to text for pipeline ingestion
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
-        self.last_cursor: Optional[Any] = None
-        self._rate_limit_rps: Optional[float] = config.get("rate_limit_rps")
+        self.last_cursor: Any | None = None
+        self._rate_limit_rps: float | None = config.get("rate_limit_rps")
         self._last_request_time: float = 0.0
 
     # ------------------------------------------------------------------
@@ -31,7 +30,7 @@ class ConnectorFetcher(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def fetch_since(self, cursor: Optional[Any]) -> List[Dict[str, Any]]:
+    def fetch_since(self, cursor: Any | None) -> list[dict[str, Any]]:
         """
         Fetch items since the given cursor position.
 
@@ -42,7 +41,7 @@ class ConnectorFetcher(ABC):
         ...
 
     @abstractmethod
-    def to_text(self, items: List[Dict[str, Any]]) -> str:
+    def to_text(self, items: list[dict[str, Any]]) -> str:
         """
         Convert a batch of raw API items to a text string for pipeline ingestion.
 
@@ -55,12 +54,12 @@ class ConnectorFetcher(ABC):
     # ------------------------------------------------------------------
 
     @classmethod
-    def for_type(cls, connector_type: str, config: Dict[str, Any]) -> "ConnectorFetcher":
+    def for_type(cls, connector_type: str, config: dict[str, Any]) -> ConnectorFetcher:
         """Return the appropriate fetcher subclass for the given connector_type."""
         from app.services.connectors.github_fetcher import GitHubFetcher
         from app.services.connectors.rest_api_fetcher import RestApiFetcher
 
-        registry: Dict[str, type] = {
+        registry: dict[str, type] = {
             "github": GitHubFetcher,
             "rest_api": RestApiFetcher,
             # Additional built-in fetchers can be registered here as implemented.
@@ -78,11 +77,11 @@ class ConnectorFetcher(ABC):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _auth_headers(self) -> Dict[str, str]:
+    def _auth_headers(self) -> dict[str, str]:
         """Build auth headers from connector config."""
         auth = self.config.get("auth", {})
         auth_type = auth.get("auth_type", "")
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
 
         if auth_type in ("bearer_token", "api_key"):
             credential_value = auth.get("_resolved_credential", "")
@@ -93,6 +92,7 @@ class ConnectorFetcher(ABC):
                 headers[header_name] = credential_value
         elif auth_type == "basic":
             import base64
+
             username = auth.get("_resolved_username", "")
             password = auth.get("_resolved_password", "")
             encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
@@ -110,7 +110,7 @@ class ConnectorFetcher(ABC):
             time.sleep(min_interval - elapsed)
         self._last_request_time = time.monotonic()
 
-    def _chunked(self, items: List[Any], size: int) -> Iterator[List[Any]]:
+    def _chunked(self, items: list[Any], size: int) -> Iterator[list[Any]]:
         """Yield successive chunks from items."""
         for i in range(0, len(items), size):
             yield items[i : i + size]
