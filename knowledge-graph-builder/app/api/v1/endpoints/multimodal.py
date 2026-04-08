@@ -19,7 +19,11 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id, get_database, verify_graph_write_access
+from app.api.dependencies import (
+    get_current_user_id,
+    get_database,
+    verify_graph_write_access,
+)
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.models.graph import IngestionJob
