@@ -757,9 +757,9 @@ async def resource_graph_nodes(graph_id: str) -> str:
 def main() -> None:
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
     if transport == "sse":
-        host = os.environ.get("MCP_HOST", "0.0.0.0")
-        port = int(os.environ.get("MCP_PORT", "8004"))
-        mcp.run(transport="sse", host=host, port=port)
+        mcp.settings.host = os.environ.get("MCP_HOST", "0.0.0.0")
+        mcp.settings.port = int(os.environ.get("MCP_PORT", "8004"))
+        mcp.run(transport="sse")
     else:
         mcp.run(transport="stdio")
 
