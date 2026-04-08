@@ -203,10 +203,10 @@ class FederationService:
 
         # Fetch ownership + federatable status for all requested graph_ids
         query = """
-        MATCH (g:Graph)
+        MATCH (g:Graph {namespace: "__system__"})
         WHERE g.graph_id IN $graph_ids
         RETURN g.graph_id AS graph_id,
-               g.user_id AS user_id,
+               g.owner_user_id AS user_id,
                g.name AS name,
                coalesce(g.federatable, false) AS federatable
         """
