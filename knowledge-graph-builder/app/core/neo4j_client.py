@@ -1,10 +1,13 @@
 from neo4j import AsyncGraphDatabase, GraphDatabase, AsyncDriver, Driver
 from typing import Optional, Dict, Any, List
 import asyncio
+from opentelemetry import trace as otel_trace
 from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+_tracer = otel_trace.get_tracer("oraclous.neo4j")
 
 class Neo4jClient:
     """
@@ -227,17 +230,29 @@ class Neo4jClient:
         """
         if not self.async_driver:
             await self.connect_async()
-        
-        try:
-            async with self.async_driver.session(database=settings.NEO4J_DATABASE) as session:
-                result = await session.run(query, parameters or {})
-                records = await result.data()
-                return records
-        except Exception as e:
-            logger.error(f"Query execution failed: {e}")
-            logger.error(f"Query: {query}")
-            logger.error(f"Parameters: {parameters}")
-            raise
+
+        # Sanitize query for span attribute (first 200 chars, no parameter values)
+        query_summary = query.strip()[:200]
+        with _tracer.start_as_current_span(
+            "neo4j.query",
+            kind=otel_trace.SpanKind.CLIENT,
+        ) as span:
+            span.set_attribute("db.system", "neo4j")
+            span.set_attribute("db.operation", "read")
+            span.set_attribute("db.statement", query_summary)
+            try:
+                async with self.async_driver.session(database=settings.NEO4J_DATABASE) as session:
+                    result = await session.run(query, parameters or {})
+                    records = await result.data()
+                    span.set_attribute("db.neo4j.row_count", len(records))
+                    return records
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(otel_trace.StatusCode.ERROR, str(e))
+                logger.error(f"Query execution failed: {e}")
+                logger.error(f"Query: {query}")
+                logger.error(f"Parameters: {parameters}")
+                raise
     
     async def execute_write_query(
         self,
@@ -265,18 +280,29 @@ class Neo4jClient:
         """
         if not self.async_driver:
             await self.connect_async()
-        
-        try:
-            async with self.async_driver.session(database=settings.NEO4J_DATABASE) as session:
-                async def tx_func(tx):
-                    result = await tx.run(query, parameters or {})
-                    return await result.data()
-                
-                result = await session.execute_write(tx_func)
-                return result
-        except Exception as e:
-            logger.error(f"Write query execution failed: {e}")
-            raise
+
+        query_summary = query.strip()[:200]
+        with _tracer.start_as_current_span(
+            "neo4j.write_query",
+            kind=otel_trace.SpanKind.CLIENT,
+        ) as span:
+            span.set_attribute("db.system", "neo4j")
+            span.set_attribute("db.operation", "write")
+            span.set_attribute("db.statement", query_summary)
+            try:
+                async with self.async_driver.session(database=settings.NEO4J_DATABASE) as session:
+                    async def tx_func(tx):
+                        result = await tx.run(query, parameters or {})
+                        return await result.data()
+
+                    result = await session.execute_write(tx_func)
+                    span.set_attribute("db.neo4j.row_count", len(result))
+                    return result
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(otel_trace.StatusCode.ERROR, str(e))
+                logger.error(f"Write query execution failed: {e}")
+                raise
 
     async def health_check(self) -> Dict[str, Any]:
         """

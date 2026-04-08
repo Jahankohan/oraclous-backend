@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     MAX_ENTITY_TYPES_PER_GRAPH: int = 20
     ENABLE_SCHEMA_EVOLUTION: bool = True
 
+    # Community Detection Settings
+    COMMUNITY_DETECTION_MIN_ENTITIES: int = 50
+    COMMUNITY_DETECTION_CONCURRENCY: int = 3
+    LLM_SUMMARY_CONCURRENCY: int = 5
+
     # Legacy flags (disabled for modern approach)
     ENABLE_SIMILARITY_PROCESSING: bool = True
     ENABLE_COMMUNITY_DETECTION: bool = True
@@ -72,6 +77,10 @@ class Settings(BaseSettings):
     
     # Optimization Settings
     OPTIMIZATION_INTERVAL: timedelta = timedelta(hours=2)  # Run optimization every 2 hours
+
+    # Code Knowledge Graph Settings
+    CODE_LARGE_REPO_DEPTH_THRESHOLD: int = 5000  # Auto-switch to depth:file above this file count
+    CODE_EMBEDDING_BATCH_SIZE: int = 50           # Symbols per embedding batch
     
     # Embedding Processing
     DOCUMENT_EMBEDDING_BATCH_SIZE: int = 10
@@ -81,8 +90,17 @@ class Settings(BaseSettings):
     # Monitoring
     ENABLE_METRICS: bool = True
     LOG_LEVEL: str = "INFO"
-    
+
+    # OpenTelemetry
+    OTEL_ENABLED: bool = False
+    OTEL_SERVICE_NAME: str = "knowledge-graph-builder"
+    OTEL_SERVICE_VERSION: str = "1.0.0"
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://jaeger:4317"
+    OTEL_EXPORTER_OTLP_PROTOCOL: str = "grpc"  # "grpc" or "http/protobuf"
+    LOG_FORMAT: str = "text"  # "json" for structured JSON logs, "text" for human-readable
+
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 settings = Settings()

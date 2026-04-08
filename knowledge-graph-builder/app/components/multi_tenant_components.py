@@ -4,6 +4,7 @@ Multi-tenant wrapper components following Neo4j GraphRAG factory patterns.
 Simple, maintainable wrappers that inject graph_id for tenant isolation.
 """
 
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from neo4j_graphrag.retrievers.base import Retriever
@@ -15,6 +16,7 @@ from neo4j_graphrag.embeddings.base import Embedder
 from neo4j import Driver
 
 from app.core.logging import get_logger
+from app.schemas.graph_schemas import BANNED_NODE_PROPERTIES
 
 logger = get_logger(__name__)
 
@@ -42,12 +44,17 @@ class MultiTenantRetriever(Retriever):
     
     def get_search_results(self, query_vector=None, query_text=None, **kwargs) -> RetrieverResult:
         """Add graph_id filter and delegate to base retriever"""
-        
-        # Add multi-tenant filtering
+
+        # Add multi-tenant filtering via index filters (for VectorRetriever/HybridRetriever)
         filters = kwargs.get('filters', {})
         filters['graph_id'] = self.graph_id
         kwargs['filters'] = filters
-        
+
+        # Inject graph_id as a Cypher query parameter (for VectorCypherRetriever retrieval_query)
+        query_params = kwargs.get('query_params', {})
+        query_params['graph_id'] = self.graph_id
+        kwargs['query_params'] = query_params
+
         logger.debug(f"Multi-tenant search for graph {self.graph_id}")
         
         # Delegate to base retriever
@@ -146,8 +153,8 @@ class MultiTenantVectorCypherRetriever(MultiTenantRetriever):
         # Create tenant-specific index name
         tenant_index_name = f"{index_name}_{graph_id}"
         
-        # Inject graph_id filter into Cypher query
-        safe_query = cls._inject_graph_id_filter(retrieval_query, graph_id)
+        # Inject parameterized graph_id filter into Cypher query
+        safe_query = cls._inject_graph_id_filter(retrieval_query)
         
         # Create base Neo4j GraphRAG retriever
         base_retriever = VectorCypherRetriever(
@@ -161,28 +168,26 @@ class MultiTenantVectorCypherRetriever(MultiTenantRetriever):
         return cls(base_retriever, graph_id)
     
     @staticmethod
-    def _inject_graph_id_filter(query: str, graph_id: str) -> str:
+    def _inject_graph_id_filter(query: str) -> str:
         """
-        Simple and safe graph_id injection into Cypher queries.
-        
-        Strategy: Add WHERE clause with graph_id filter after first MATCH.
-        This is a simple approach - for production, consider using parameterized queries.
+        Inject parameterized graph_id filter into Cypher queries.
+
+        Uses $graph_id parameter — never interpolates values directly into Cypher.
+        The caller must pass {"graph_id": graph_id_value} as query_params.
         """
-        if "MATCH" not in query:
+        if "MATCH" not in query or "$graph_id" in query:
             return query
-        
+
         lines = query.split('\n')
         modified_lines = []
         filter_added = False
-        
+
         for line in lines:
             modified_lines.append(line)
-            # Add filter after first MATCH statement
             if line.strip().startswith("MATCH") and not filter_added:
-                # Simple heuristic: add WHERE clause for tenant isolation
-                modified_lines.append(f"WHERE node.graph_id = '{graph_id}'")
+                modified_lines.append("WHERE node.graph_id = $graph_id")
                 filter_added = True
-        
+
         return '\n'.join(modified_lines)
 
 
@@ -253,29 +258,32 @@ class MultiTenantKGWriter:
         
     async def run(self, graph: Neo4jGraph) -> None:
         """Write graph with automatic tenant metadata injection"""
-        
-        # Inject graph_id into all nodes
+        now = datetime.now(timezone.utc)
+
+        # Inject graph_id and transaction_time into all nodes
         for node in graph.nodes:
             if not node.properties:
                 node.properties = {}
             node.properties.update({
                 'graph_id': self.graph_id,
-                'created_by': 'multi_tenant_pipeline'
+                'created_by': 'multi_tenant_pipeline',
+                'transaction_time': now,
             })
-            
+
             # Add user_id if provided
             if self.user_id:
                 node.properties['user_id'] = self.user_id
-        
-        # Inject graph_id into all relationships
+
+        # Inject graph_id and transaction_time into all relationships
         for rel in graph.relationships:
             if not rel.properties:
                 rel.properties = {}
             rel.properties.update({
                 'graph_id': self.graph_id,
-                'created_by': 'multi_tenant_pipeline'
+                'created_by': 'multi_tenant_pipeline',
+                'transaction_time': now,
             })
-            
+
             # Add user_id if provided
             if self.user_id:
                 rel.properties['user_id'] = self.user_id

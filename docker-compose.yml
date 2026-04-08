@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   oraclous-core-service:
     build: ./oraclous-core-service
@@ -11,9 +9,9 @@ services:
       - ./oraclous-core-service:/app
     networks:
       - app-network
-  
+
   auth-service:
-    build: 
+    build:
       context: ./auth-service
       dockerfile: Dockerfile.dev
     ports:
@@ -24,15 +22,18 @@ services:
       - ./auth-service:/app
     networks:
       - app-network
-  
+
   credential-broker-service:
-    build: 
+    build:
       context: ./credential-broker-service
       dockerfile: Dockerfile
     ports:
       - "8002:8000"
     env_file:
       - ./credential-broker-service/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./credential-broker-service:/app
     networks:
@@ -52,6 +53,15 @@ services:
       - NEO4J_server_default__listen__address=0.0.0.0
       - NEO4J_server_default__advertised__address=localhost
       - NEO4J_dbms_databases_default__to__read__only=false
+      - NEO4J_server_memory_heap_initial__size=256m
+      - NEO4J_server_memory_heap_max__size=512m
+      - NEO4J_server_config_strict__validation_enabled=false
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7474"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -60,23 +70,21 @@ services:
       - app-network
 
   knowledge-graph-worker:
-    build: 
+    build:
       context: ./knowledge-graph-builder
       dockerfile: Dockerfile
     container_name: knowledge-graph-worker
     restart: unless-stopped
     command: celery -A app.services.background_jobs.celery_app worker --loglevel=info
-    environment:
-      - NEO4J_URI=neo4j://neo4j:7687
-      - NEO4J_USERNAME=neo4j
-      - NEO4J_PASSWORD=password
-      - POSTGRES_URL=postgresql+asyncpg://testuser:testpass@postgres:5432/testdatabase
     env_file:
       - ./knowledge-graph-builder/.env
     depends_on:
-      - neo4j
-      - postgres
-      - redis
+      neo4j:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./knowledge-graph-builder/app:/app/app
       - ./knowledge-graph-builder/logs:/app/logs
@@ -84,7 +92,7 @@ services:
       - app-network
 
   knowledge-graph-builder:
-    build: 
+    build:
       context: ./knowledge-graph-builder
       dockerfile: Dockerfile
     container_name: knowledge-graph-builder
@@ -93,15 +101,71 @@ services:
       - "8003:8000"
     env_file:
       - ./knowledge-graph-builder/.env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
-      - neo4j
-      - postgres
-      - redis
-      - auth-service
-      - credential-broker-service
+      neo4j:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+      credential-broker-service:
+        condition: service_started
     volumes:
       - ./knowledge-graph-builder/app:/app/app
       - ./knowledge-graph-builder/logs:/app/logs
+    networks:
+      - app-network
+
+  knowledge-graph-mcp:
+    build:
+      context: ./knowledge-graph-builder
+      dockerfile: Dockerfile
+    container_name: knowledge-graph-mcp
+    restart: unless-stopped
+    command: python -m app.mcp.server
+    ports:
+      - "8004:8004"
+    env_file:
+      - ./knowledge-graph-builder/.env
+    environment:
+      - MCP_TRANSPORT=sse
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8004
+      - ORACLOUS_BASE_URL=http://knowledge-graph-builder:8000
+    depends_on:
+      knowledge-graph-builder:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ./knowledge-graph-builder/app:/app/app
+    networks:
+      - app-network
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.58
+    container_name: jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC receiver
+      - "4318:4318"     # OTLP HTTP receiver
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:16686"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - app-network
 
@@ -111,6 +175,11 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     networks:
       - app-network
 
@@ -122,6 +191,11 @@ services:
       POSTGRES_DB: testdatabase
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdatabase"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:

@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.database import create_tables
+from app.core.telemetry import setup_telemetry, shutdown_telemetry, instrument_fastapi, current_trace_context
 from app.api.v1.router import api_router
 
 # Setup logging
@@ -19,21 +20,49 @@ async def lifespan(app: FastAPI):
     """Manage application lifespan"""
     # Startup
     logger.info(f"Starting {settings.SERVICE_NAME} v{settings.SERVICE_VERSION}")
-    
+
+    # Initialise OpenTelemetry (no-op when OTEL_ENABLED=false)
+    setup_telemetry()
+
     try:
         # Initialize databases
         await create_tables()
         await neo4j_client.connect()
+
+        # Initialize ReBAC schema (Phase A + Phase B) + sync existing data
+        from app.services.rebac_service import rebac_service
+        from app.core.database import async_session_maker
+        await rebac_service.initialize_schema(neo4j_client.async_driver)
+        await rebac_service.initialize_schema_full(neo4j_client.async_driver)
+        await rebac_service.seed_system_permissions(neo4j_client.async_driver)
+        async with async_session_maker() as db:
+            await rebac_service.sync_existing_data(neo4j_client.async_driver, db)
+
+        # Ensure versioning + fingerprint indexes (idempotent)
+        from app.services.snapshot_service import snapshot_service
+        await snapshot_service.ensure_indexes()
+        from app.services.pipeline_service import ensure_fingerprint_indexes
+        await ensure_fingerprint_indexes()
+
+        # Apply Code KG constraints and indexes (idempotent, IF NOT EXISTS)
+        from app.services.code_parser_service import ensure_code_schema
+        await ensure_code_schema(neo4j_client.async_driver)
+
+        # Initialize AgentServiceAccount Neo4j schema (constraints + indexes)
+        from app.services.service_account_service import service_account_service
+        await service_account_service.initialize_schema(neo4j_client.async_driver)
+
         logger.info("All services initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")
         raise
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down application")
     await neo4j_client.disconnect()
+    shutdown_telemetry()
 
 # Create FastAPI app
 app = FastAPI(
@@ -45,6 +74,9 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Attach FastAPI OTel instrumentation (no-op when OTEL_ENABLED=false)
+instrument_fastapi(app)
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -54,13 +86,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request timing middleware
+# Request timing + trace ID middleware
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = str(process_time)
+    trace_ctx = current_trace_context()
+    if trace_ctx.get("trace_id"):
+        response.headers["X-Trace-Id"] = trace_ctx["trace_id"]
     return response
 
 # Global exception handler

@@ -4,10 +4,11 @@ FROM python:3.12-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (libigraph-dev required by leidenalg)
 RUN apt-get update && apt-get install -y \
     curl \
     gcc \
+    libigraph-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching

@@ -11,7 +11,7 @@ from .llm_service import llm_service
 
 # NEW: Refactored services with Neo4j GraphRAG foundation
 from .pipeline_service import pipeline_service, get_pipeline_service
-from .retriever_service import retrieval_service, get_retrieval_service
+from .retriever_service import get_retrieval_service
 
 # Background job services
 from .background_job_service import background_job_service
@@ -25,7 +25,6 @@ __all__ = [
     # New Neo4j GraphRAG services
     'pipeline_service',
     'get_pipeline_service',
-    'retrieval_service',
     'get_retrieval_service',
     
     # Background job infrastructure

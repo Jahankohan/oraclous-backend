@@ -22,6 +22,12 @@ neo4j-graphrag[openai]==1.9.1
 
 python-docx==1.2.0
 
+# Multi-modal extraction
+pymupdf>=1.24.0          # PDF parsing — text, image, table extraction
+pdfplumber>=0.11.0       # Table extraction (used alongside PyMuPDF)
+pillow>=10.0.0           # Image handling (dependency of PyMuPDF image export)
+python-magic>=0.4.27     # MIME type detection for uploaded files
+
 # LLM required configurations
 langchain-anthropic==0.3.19
 langchain-google-genai==2.1.9
@@ -30,6 +36,35 @@ langchain-experimental==0.3.4
 tiktoken==0.11.0
 celery[redis]==5.5.3
 redis==5.2.1
+
+# Evaluation
+ragas==0.2.15
+datasets==3.6.0
+
+# MCP Server
+mcp[cli]>=1.0.0
+
+# Community Detection
+leidenalg>=0.10
+python-igraph>=0.10
+
+# Code Knowledge Graphs — Tree-sitter parsing
+tree-sitter>=0.22.0
+tree-sitter-python>=0.23.0
+tree-sitter-javascript>=0.23.0
+tree-sitter-typescript>=0.23.0
+tree-sitter-go>=0.23.0
+tree-sitter-java>=0.23.0
+
+# OpenTelemetry
+opentelemetry-sdk==1.27.0
+opentelemetry-api==1.27.0
+opentelemetry-exporter-otlp-proto-grpc==1.27.0
+opentelemetry-exporter-otlp-proto-http==1.27.0
+opentelemetry-instrumentation-fastapi==0.48b0
+opentelemetry-instrumentation-celery==0.48b0
+opentelemetry-instrumentation-httpx==0.48b0
+opentelemetry-instrumentation-logging==0.48b0
 
 # Development
 black==25.1.0
