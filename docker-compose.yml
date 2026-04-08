@@ -78,6 +78,12 @@ services:
     command: celery -A app.services.background_jobs.celery_app worker --loglevel=info
     env_file:
       - ./knowledge-graph-builder/.env
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.services.background_jobs.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       neo4j:
         condition: service_healthy
