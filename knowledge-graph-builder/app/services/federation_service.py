@@ -7,20 +7,21 @@ Implements the federation model from ORA-41 spec:
 - Post-query SAME_AS entity deduplication
 - Vector search federation with over-fetch pattern
 """
-import asyncio
+
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from neo4j import AsyncDriver
+
 from app.core.logging import get_logger
 from app.schemas.federation_schemas import (
+    MAX_GRAPH_IDS,
+    MAX_RESULTS_PER_GRAPH,
+    MAX_TOTAL_RESULTS,
     CrossGraphLink,
     FederatedEntity,
     FederatedQueryOptions,
     FederatedVectorResult,
-    MAX_GRAPH_IDS,
-    MAX_RESULTS_PER_GRAPH,
-    MAX_TOTAL_RESULTS,
 )
 
 logger = get_logger(__name__)
@@ -70,7 +71,9 @@ class FederationService:
             options = FederatedQueryOptions()
 
         start_ms = _now_ms()
-        allowed = await self._validate_and_filter(user_id, graph_ids, principal=principal)
+        allowed = await self._validate_and_filter(
+            user_id, graph_ids, principal=principal
+        )
         # allowed is guaranteed == graph_ids (fail-closed: raises on mismatch)
 
         graph_meta = {g["graph_id"]: g["name"] for g in allowed}
@@ -92,7 +95,9 @@ class FederationService:
                     if k not in {"entity_id", "name", "type", "source_graph_id"}
                 },
                 source_graph_id=row["source_graph_id"],
-                source_graph_name=graph_meta.get(row["source_graph_id"], row["source_graph_id"]),
+                source_graph_name=graph_meta.get(
+                    row["source_graph_id"], row["source_graph_id"]
+                ),
             )
             for row in raw_entities[:MAX_TOTAL_RESULTS]
         ]
@@ -101,9 +106,7 @@ class FederationService:
         deduplication_status = "not_requested"
         if options.deduplicate_entities and options.include_cross_graph_links:
             cross_links = await self._resolve_same_as(federated_entities)
-            # Storage of new SAME_AS links is fire-and-forget (async); resolution is synchronous.
-            # "pending" signals to clients that Neo4j SAME_AS edges may still be persisting.
-            deduplication_status = "pending" if cross_links else "complete"
+            deduplication_status = "complete"
 
         elapsed_ms = _now_ms() - start_ms
         return {
@@ -131,7 +134,9 @@ class FederationService:
     ) -> Dict[str, Any]:
         """Vector similarity search across multiple graphs using over-fetch pattern."""
         start_ms = _now_ms()
-        allowed = await self._validate_and_filter(user_id, graph_ids, principal=principal)
+        allowed = await self._validate_and_filter(
+            user_id, graph_ids, principal=principal
+        )
         graph_meta = {g["graph_id"]: g["name"] for g in allowed}
 
         # Over-fetch to compensate for post-filter recall loss (ORA-41 §4.1)
@@ -150,7 +155,9 @@ class FederationService:
                 text=row.get("text", ""),
                 score=row["score"],
                 source_graph_id=row["source_graph_id"],
-                source_graph_name=graph_meta.get(row["source_graph_id"], row["source_graph_id"]),
+                source_graph_name=graph_meta.get(
+                    row["source_graph_id"], row["source_graph_id"]
+                ),
                 entity_name=row.get("entity_name"),
                 entity_type=row.get("entity_type"),
             )
@@ -218,6 +225,7 @@ class FederationService:
             # SA path: check CAN_ACCESS edges + federatable flag
             tenant_id = (principal or {}).get("tenant_id", "")
             from app.services.service_account_service import service_account_service
+
             accessible = await service_account_service.get_sa_accessible_graphs(
                 self._driver, user_id, tenant_id, graph_ids
             )
@@ -281,7 +289,10 @@ class FederationService:
                 f"}}"
             )
 
-        cypher = "\nUNION ALL\n".join(subqueries) + "\nRETURN entity_id, name, type, source_graph_id"
+        cypher = (
+            "\nUNION ALL\n".join(subqueries)
+            + "\nRETURN entity_id, name, type, source_graph_id"
+        )
 
         async with self._driver.session(database=self._database) as session:
             result = await session.run(cypher, params)
@@ -376,14 +387,11 @@ class FederationService:
                         merge_tasks.append((a.entity_id, b.entity_id, confidence))
 
         if merge_tasks:
-            # Store SAME_AS links asynchronously (fire-and-forget; result not awaited)
-            asyncio.create_task(self._store_same_as_links(merge_tasks))
+            await self._store_same_as_links(merge_tasks)
 
         return links
 
-    async def _store_same_as_links(
-        self, pairs: List[Tuple[str, str, float]]
-    ) -> None:
+    async def _store_same_as_links(self, pairs: List[Tuple[str, str, float]]) -> None:
         """Persist SAME_AS relationship pairs in Neo4j using MERGE (idempotent)."""
         query = """
         UNWIND $pairs AS pair
@@ -401,9 +409,11 @@ class FederationService:
         ]
         try:
             async with self._driver.session(database=self._database) as session:
-                await session.execute_write(
-                    lambda tx: tx.run(query, {"pairs": pair_params})
-                )
+
+                async def _write(tx) -> None:
+                    await tx.run(query, {"pairs": pair_params})
+
+                await session.execute_write(_write)
         except Exception as exc:
             logger.warning("Failed to store SAME_AS links: %s", exc)
 

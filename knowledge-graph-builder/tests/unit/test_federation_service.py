@@ -8,14 +8,16 @@ Verifies:
 - SAME_AS deduplication produces CrossGraphLink for matching entities
 - Schema validation: too few graph_ids, duplicates
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.federation_service import FederationError, FederationService
-from app.schemas.federation_schemas import FederatedQueryOptions, FederatedEntity
+import pytest
 
+from app.schemas.federation_schemas import FederatedEntity, FederatedQueryOptions
+from app.services.federation_service import FederationError, FederationService
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def _make_async_driver(rows: list):
     """Return a mock AsyncDriver whose session().run().data() yields *rows*.
@@ -38,14 +40,25 @@ def _make_async_driver(rows: list):
 
 
 def _owned_federatable(graph_id: str, user_id: str) -> dict:
-    return {"graph_id": graph_id, "user_id": user_id, "name": f"Graph {graph_id}", "federatable": True}
+    return {
+        "graph_id": graph_id,
+        "user_id": user_id,
+        "name": f"Graph {graph_id}",
+        "federatable": True,
+    }
 
 
 def _owned_non_federatable(graph_id: str, user_id: str) -> dict:
-    return {"graph_id": graph_id, "user_id": user_id, "name": f"Graph {graph_id}", "federatable": False}
+    return {
+        "graph_id": graph_id,
+        "user_id": user_id,
+        "name": f"Graph {graph_id}",
+        "federatable": False,
+    }
 
 
 # ─── Validation tests ─────────────────────────────────────────────────────────
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -54,8 +67,18 @@ async def test_validate_rejects_cross_tenant_graph():
     attacker_id = "user-2"
     # Both graphs exist but owned by user-1, not the attacker
     rows = [
-        {"graph_id": "graph-a", "user_id": "user-1", "name": "Graph A", "federatable": True},
-        {"graph_id": "graph-b", "user_id": "user-1", "name": "Graph B", "federatable": True},
+        {
+            "graph_id": "graph-a",
+            "user_id": "user-1",
+            "name": "Graph A",
+            "federatable": True,
+        },
+        {
+            "graph_id": "graph-b",
+            "user_id": "user-1",
+            "name": "Graph B",
+            "federatable": True,
+        },
     ]
     driver, _ = _make_async_driver(rows)
     svc = FederationService(async_driver=driver)
@@ -96,9 +119,7 @@ async def test_validate_rejects_non_federatable_graph():
 async def test_validate_rejects_missing_graph():
     """FederationError 400 when a requested graph_id doesn't exist."""
     user_id = "user-1"
-    driver, _ = _make_async_driver(
-        [_owned_federatable("graph-a", user_id)]
-    )
+    driver, _ = _make_async_driver([_owned_federatable("graph-a", user_id)])
     svc = FederationService(async_driver=driver)
 
     with pytest.raises(FederationError) as exc_info:
@@ -140,6 +161,7 @@ async def test_validate_passes_for_all_owned_and_federatable():
 
 # ─── Query builder tests ──────────────────────────────────────────────────────
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_entity_union_passes_graph_ids_as_params():
@@ -147,8 +169,18 @@ async def test_entity_union_passes_graph_ids_as_params():
     user_id = "user-1"
     graph_ids = ["graph-x", "graph-y"]
     entity_rows = [
-        {"entity_id": "e1", "name": "Alice", "type": "Person", "source_graph_id": "graph-x"},
-        {"entity_id": "e2", "name": "Bob", "type": "Person", "source_graph_id": "graph-y"},
+        {
+            "entity_id": "e1",
+            "name": "Alice",
+            "type": "Person",
+            "source_graph_id": "graph-x",
+        },
+        {
+            "entity_id": "e2",
+            "name": "Bob",
+            "type": "Person",
+            "source_graph_id": "graph-y",
+        },
     ]
     validation_rows = [_owned_federatable(gid, user_id) for gid in graph_ids]
 
@@ -202,8 +234,18 @@ async def test_federated_query_returns_source_attribution():
     graph_ids = ["graph-a", "graph-b"]
     validation_rows = [_owned_federatable(gid, user_id) for gid in graph_ids]
     entity_rows = [
-        {"entity_id": "e1", "name": "Alice", "type": "Person", "source_graph_id": "graph-a"},
-        {"entity_id": "e2", "name": "Bob", "type": "Person", "source_graph_id": "graph-b"},
+        {
+            "entity_id": "e1",
+            "name": "Alice",
+            "type": "Person",
+            "source_graph_id": "graph-a",
+        },
+        {
+            "entity_id": "e2",
+            "name": "Bob",
+            "type": "Person",
+            "source_graph_id": "graph-b",
+        },
     ]
 
     call_count = 0
@@ -241,18 +283,25 @@ async def test_federated_query_returns_source_attribution():
 
 # ─── SAME_AS deduplication tests ──────────────────────────────────────────────
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_same_as_deduplication_produces_link_for_matching_entities():
     """Two entities with same name+type from different graphs → SAME_AS link."""
     entities = [
         FederatedEntity(
-            entity_id="e1", name="Alice Chen", type="Person",
-            source_graph_id="graph-a", source_graph_name="HR"
+            entity_id="e1",
+            name="Alice Chen",
+            type="Person",
+            source_graph_id="graph-a",
+            source_graph_name="HR",
         ),
         FederatedEntity(
-            entity_id="e2", name="Alice Chen", type="Person",
-            source_graph_id="graph-b", source_graph_name="Projects"
+            entity_id="e2",
+            name="Alice Chen",
+            type="Person",
+            source_graph_id="graph-b",
+            source_graph_name="Projects",
         ),
     ]
 
@@ -264,17 +313,35 @@ async def test_same_as_deduplication_produces_link_for_matching_entities():
     driver.session.return_value = mock_session
 
     svc = FederationService(async_driver=driver)
-
-    with patch("asyncio.create_task") as mock_create_task:
-        links = await svc._resolve_same_as(entities)
+    links = await svc._resolve_same_as(entities)
 
     assert len(links) == 1
     link = links[0]
     assert link.link_type == "SAME_AS"
     assert link.confidence >= 0.85
     assert {link.graph_a, link.graph_b} == {"graph-a", "graph-b"}
-    # create_task must have been called to store the link
-    mock_create_task.assert_called_once()
+    # execute_write must have been called to persist the SAME_AS link (ORA-142)
+    mock_session.execute_write.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_store_same_as_links_is_awaited():
+    """Regression for ORA-142: _store_same_as_links must be awaited, not fire-and-forget.
+
+    Verifies execute_write is called with an async callable and the result is awaited.
+    """
+    driver = MagicMock()
+    mock_session = MagicMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute_write = AsyncMock(return_value=None)
+    driver.session.return_value = mock_session
+
+    svc = FederationService(async_driver=driver)
+    await svc._store_same_as_links([("id_a", "id_b", 0.99)])
+
+    mock_session.execute_write.assert_awaited_once()
 
 
 @pytest.mark.unit
@@ -283,12 +350,18 @@ async def test_same_as_no_link_for_same_graph():
     """Two entities with same name+type in the SAME graph must NOT produce SAME_AS."""
     entities = [
         FederatedEntity(
-            entity_id="e1", name="Alice Chen", type="Person",
-            source_graph_id="graph-a", source_graph_name="HR"
+            entity_id="e1",
+            name="Alice Chen",
+            type="Person",
+            source_graph_id="graph-a",
+            source_graph_name="HR",
         ),
         FederatedEntity(
-            entity_id="e2", name="Alice Chen", type="Person",
-            source_graph_id="graph-a", source_graph_name="HR"
+            entity_id="e2",
+            name="Alice Chen",
+            type="Person",
+            source_graph_id="graph-a",
+            source_graph_name="HR",
         ),
     ]
 
@@ -305,12 +378,18 @@ async def test_same_as_no_link_for_different_types():
     """Same name but different types → no SAME_AS link."""
     entities = [
         FederatedEntity(
-            entity_id="e1", name="Apollo", type="Project",
-            source_graph_id="graph-a", source_graph_name="HR"
+            entity_id="e1",
+            name="Apollo",
+            type="Project",
+            source_graph_id="graph-a",
+            source_graph_name="HR",
         ),
         FederatedEntity(
-            entity_id="e2", name="Apollo", type="SpaceMission",
-            source_graph_id="graph-b", source_graph_name="Projects"
+            entity_id="e2",
+            name="Apollo",
+            type="SpaceMission",
+            source_graph_id="graph-b",
+            source_graph_name="Projects",
         ),
     ]
 
@@ -323,9 +402,11 @@ async def test_same_as_no_link_for_different_types():
 
 # ─── Pydantic schema validation tests ────────────────────────────────────────
 
+
 @pytest.mark.unit
 def test_federated_query_request_rejects_duplicate_graph_ids():
     from pydantic import ValidationError
+
     from app.schemas.federation_schemas import FederatedQueryRequest
 
     with pytest.raises(ValidationError) as exc_info:
@@ -337,6 +418,7 @@ def test_federated_query_request_rejects_duplicate_graph_ids():
 @pytest.mark.unit
 def test_federated_query_request_rejects_single_graph():
     from pydantic import ValidationError
+
     from app.schemas.federation_schemas import FederatedQueryRequest
 
     with pytest.raises(ValidationError):
@@ -346,7 +428,8 @@ def test_federated_query_request_rejects_single_graph():
 @pytest.mark.unit
 def test_federated_query_request_rejects_too_many_graphs():
     from pydantic import ValidationError
-    from app.schemas.federation_schemas import FederatedQueryRequest, MAX_GRAPH_IDS
+
+    from app.schemas.federation_schemas import MAX_GRAPH_IDS, FederatedQueryRequest
 
     too_many = [f"g{i}" for i in range(MAX_GRAPH_IDS + 1)]
     with pytest.raises(ValidationError):
