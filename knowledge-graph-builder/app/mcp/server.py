@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -52,7 +51,6 @@ if str(_repo_root) not in sys.path:
 # ---------------------------------------------------------------------------
 # Runtime config helpers
 # ---------------------------------------------------------------------------
-
 
 def _base_url() -> str:
     return os.environ.get("ORACLOUS_BASE_URL", "http://localhost:8003").rstrip("/")
@@ -89,12 +87,11 @@ def _client() -> httpx.AsyncClient:
 # Neo4j sync driver (lazy, used only by node-inspection tools)
 # ---------------------------------------------------------------------------
 _neo4j_driver = None
-_neo4j_driver_owned = False  # True only when MCP created the driver itself
 
 
 def _neo4j_sync_driver():
     """Return the shared sync Neo4j driver, initialising it on first call."""
-    global _neo4j_driver, _neo4j_driver_owned
+    global _neo4j_driver
     if _neo4j_driver is not None:
         return _neo4j_driver
 
@@ -105,7 +102,6 @@ def _neo4j_sync_driver():
         if _app_client.sync_driver is None:
             _app_client.connect_sync()
         _neo4j_driver = _app_client.sync_driver
-        _neo4j_driver_owned = False  # borrowed — app manages lifecycle
         return _neo4j_driver
     except Exception:
         pass  # Fall back to standalone driver below
@@ -118,27 +114,7 @@ def _neo4j_sync_driver():
     password = os.environ.get("NEO4J_PASSWORD", "password")
     _neo4j_driver = GraphDatabase.driver(uri, auth=(user, password))
     _neo4j_driver.verify_connectivity()
-    _neo4j_driver_owned = True  # we created it — we must close it
     return _neo4j_driver
-
-
-# ---------------------------------------------------------------------------
-# Lifespan — clean up owned resources on server shutdown
-# ---------------------------------------------------------------------------
-
-
-@asynccontextmanager
-async def _lifespan(server: FastMCP):
-    """Async context manager that closes owned resources on MCP server shutdown."""
-    yield
-    global _neo4j_driver, _neo4j_driver_owned, _http_client
-    if _neo4j_driver is not None and _neo4j_driver_owned:
-        _neo4j_driver.close()
-        _neo4j_driver = None
-        _neo4j_driver_owned = False
-    if _http_client is not None and not _http_client.is_closed:
-        await _http_client.aclose()
-        _http_client = None
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +129,6 @@ mcp = FastMCP(
         "documents or notes, then call chat to ask natural language questions "
         "grounded in the extracted entities and relationships."
     ),
-    lifespan=_lifespan,
 )
 
 # ===========================================================================
@@ -529,14 +504,12 @@ async def search_nodes(
     results = []
     with driver.session() as session:
         for record in session.run(cypher, params):
-            results.append(
-                {
-                    "entity_id": record["entity_id"],
-                    "name": record["name"],
-                    "type": record.get("type") or "",
-                    "description": record.get("description") or "",
-                }
-            )
+            results.append({
+                "entity_id": record["entity_id"],
+                "name": record["name"],
+                "type": record.get("type") or "",
+                "description": record.get("description") or "",
+            })
     return results
 
 
@@ -569,7 +542,11 @@ async def get_node(graph_id: str, entity_name: str) -> dict:
         ).single()
 
     if not record:
-        return {"error": (f"Entity {entity_name!r} not found in graph {graph_id!r}.")}
+        return {
+            "error": (
+                f"Entity {entity_name!r} not found in graph {graph_id!r}."
+            )
+        }
 
     node = dict(record["e"])
     node.pop("embedding", None)  # strip large vector field
@@ -637,36 +614,34 @@ async def get_neighbors(
                 anchor_name = record["anchor"]
             if hops == 1:
                 if record["neighbor"]:
-                    neighbors.append(
-                        {
-                            "relationship": record["rel_type"],
-                            "name": record["neighbor"],
-                            "type": record.get("neighbor_type") or "",
-                            "hop": 1,
-                        }
-                    )
+                    neighbors.append({
+                        "relationship": record["rel_type"],
+                        "name": record["neighbor"],
+                        "type": record.get("neighbor_type") or "",
+                        "hop": 1,
+                    })
             else:
                 if record["hop1_name"]:
-                    neighbors.append(
-                        {
-                            "relationship": record["rel1"],
-                            "name": record["hop1_name"],
-                            "type": record.get("hop1_type") or "",
-                            "hop": 1,
-                        }
-                    )
+                    neighbors.append({
+                        "relationship": record["rel1"],
+                        "name": record["hop1_name"],
+                        "type": record.get("hop1_type") or "",
+                        "hop": 1,
+                    })
                 if record["hop2_name"]:
-                    neighbors.append(
-                        {
-                            "relationship": record["rel2"],
-                            "name": record["hop2_name"],
-                            "type": record.get("hop2_type") or "",
-                            "hop": 2,
-                        }
-                    )
+                    neighbors.append({
+                        "relationship": record["rel2"],
+                        "name": record["hop2_name"],
+                        "type": record.get("hop2_type") or "",
+                        "hop": 2,
+                    })
 
     if anchor_name is None:
-        return {"error": (f"Entity {entity_name!r} not found in graph {graph_id!r}.")}
+        return {
+            "error": (
+                f"Entity {entity_name!r} not found in graph {graph_id!r}."
+            )
+        }
 
     return {
         "entity": anchor_name,
