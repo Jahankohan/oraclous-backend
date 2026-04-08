@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import Dict, Any
 import json
 import asyncio
 
 from app.core.neo4j_client import Neo4jClient, get_neo4j_client
+from app.core.limiter import limiter
 from app.models.requests import Neo4jConnectionRequest
 from app.models.responses import ConnectionResponse, BaseResponse, SchemaResponse
 from app.config.settings import get_settings
@@ -14,7 +15,9 @@ from app.services.enhanced_graph_service import EnhancedGraphService
 router = APIRouter()
 
 @router.post("/connect", response_model=ConnectionResponse)
+@limiter.limit("10/minute")
 async def connect_database(
+    request_obj: Request,
     request: Neo4jConnectionRequest,
     neo4j: Neo4jClient = Depends(get_neo4j_client)
 ) -> ConnectionResponse:

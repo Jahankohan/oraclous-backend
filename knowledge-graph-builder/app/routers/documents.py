@@ -1,5 +1,5 @@
 # File: app/routers/documents.py
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 from typing import List, Optional
 import json
@@ -7,6 +7,7 @@ import asyncio
 from datetime import datetime
 
 from app.core.neo4j_client import Neo4jClient, get_neo4j_client
+from app.core.limiter import limiter
 from app.models.requests import DocumentUploadRequest, ExtractionRequest, ProcessingMode
 from app.models.responses import BaseResponse, DocumentInfo, ProcessingProgress
 from app.services.advanced_graph_integration_service import AdvancedGraphIntegrationService
@@ -17,7 +18,9 @@ from app.services.document_service import DocumentService
 router = APIRouter()
 
 @router.post("/upload", response_model=BaseResponse)
+@limiter.limit("10/minute")
 async def upload_files(
+    request_obj: Request,
     files: List[UploadFile] = File(...),
     neo4j: Neo4jClient = Depends(get_neo4j_client)
 ) -> BaseResponse:
@@ -46,7 +49,9 @@ async def upload_files(
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @router.post("/url/scan", response_model=BaseResponse)
+@limiter.limit("10/minute")
 async def scan_url_sources(
+    request_obj: Request,
     request: DocumentUploadRequest,
     neo4j: Neo4jClient = Depends(get_neo4j_client)
 ) -> BaseResponse:
@@ -81,7 +86,9 @@ async def scan_url_sources(
         raise HTTPException(status_code=500, detail=f"Source scan failed: {str(e)}")
 
 @router.post("/extract")
+@limiter.limit("10/minute")
 async def extract_graph_from_documents(
+    request_obj: Request,
     request: ExtractionRequest,
     background_tasks: BackgroundTasks,
     neo4j: Neo4jClient = Depends(get_neo4j_client)

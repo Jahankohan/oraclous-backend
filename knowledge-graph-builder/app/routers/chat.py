@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import List, Optional
 
 from app.core.neo4j_client import Neo4jClient, get_neo4j_client
+from app.core.limiter import limiter
 from app.models.requests import ChatRequest
 from app.models.responses import ChatResponse, BaseResponse
 from app.services.enhanced_chat_service import EnhancedChatService
@@ -9,7 +10,9 @@ from app.services.enhanced_chat_service import EnhancedChatService
 router = APIRouter()
 
 @router.post("/chat_bot", response_model=ChatResponse)
+@limiter.limit("30/minute")
 async def chat_with_bot(
+    request_obj: Request,
     request: ChatRequest,
     neo4j: Neo4jClient = Depends(get_neo4j_client)
 ) -> ChatResponse:
