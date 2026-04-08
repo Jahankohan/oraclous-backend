@@ -47,6 +47,10 @@ def _build_proxy_rate_limit_app(trusted_hosts: list[str]) -> TestClient:
 
     Simulates the production middleware stack: proxy middleware rewrites
     request.client, then slowapi reads the rewritten value.
+
+    Note: Starlette TestClient presents as host "testclient" (not 127.0.0.1).
+    Tests that want ProxyHeadersMiddleware to trust the direct connection must
+    pass "testclient" in trusted_hosts to match the TestClient source IP.
     """
     test_limiter = Limiter(key_func=get_remote_address, storage_uri="memory://")
     app = FastAPI()
@@ -61,6 +65,10 @@ def _build_proxy_rate_limit_app(trusted_hosts: list[str]) -> TestClient:
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_hosts)
 
     return TestClient(app, raise_server_exceptions=False)
+
+
+# TestClient source IP as seen by ASGI scope["client"][0]
+_TESTCLIENT_HOST = "testclient"
 
 
 # ---------------------------------------------------------------------------
@@ -135,9 +143,9 @@ def test_proxy_trusted_uses_forwarded_for_ip():
 
     Rate-limit bucket is keyed on the real client IP, not the proxy IP.
     """
-    # TestClient connects from 127.0.0.1, which is the "proxy IP" here.
-    # We declare 127.0.0.1 as a trusted proxy so XFF is respected.
-    client = _build_proxy_rate_limit_app(trusted_hosts=["127.0.0.1"])
+    # Starlette TestClient presents as "testclient" in scope["client"][0].
+    # Declare that host as trusted so ProxyHeadersMiddleware honours XFF headers.
+    client = _build_proxy_rate_limit_app(trusted_hosts=[_TESTCLIENT_HOST])
 
     r = client.post("/test", headers={"X-Forwarded-For": "1.2.3.4"})
 
@@ -158,14 +166,14 @@ def test_proxy_untrusted_ignores_forwarded_for():
     r = client.post("/test", headers={"X-Forwarded-For": "9.9.9.9"})
 
     assert r.status_code == 200
-    # Real client IP (testclient loopback), NOT the spoofed XFF value
+    # Real client IP (TestClient host), NOT the spoofed XFF value
     assert r.json()["client"] != "9.9.9.9"
 
 
 @pytest.mark.unit
 def test_proxy_rate_limit_buckets_by_real_ip():
     """Two clients behind the same proxy have independent rate-limit buckets."""
-    client = _build_proxy_rate_limit_app(trusted_hosts=["127.0.0.1"])
+    client = _build_proxy_rate_limit_app(trusted_hosts=[_TESTCLIENT_HOST])
 
     # Client A: exhaust 2/minute limit
     client.post("/test", headers={"X-Forwarded-For": "10.0.0.1"})
