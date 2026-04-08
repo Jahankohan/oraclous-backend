@@ -5,6 +5,8 @@ This module provides common test fixtures, utilities, and configuration
 for testing the knowledge graph builder service in Docker environment.
 """
 
+from __future__ import annotations
+
 import asyncio
 import os
 from collections.abc import AsyncGenerator

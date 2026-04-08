@@ -11,6 +11,7 @@ Create Neo4j indexes for the Agent Memory API.
 Run once during deployment or after a Neo4j upgrade:
     python -m app.scripts.create_memory_indexes
 """
+
 import asyncio
 import os
 import sys

@@ -2,6 +2,7 @@
 """
 Create missing vector indexes for Neo4j GraphRAG chat functionality
 """
+
 import asyncio
 import os
 import sys
