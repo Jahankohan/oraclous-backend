@@ -85,36 +85,74 @@ class DocumentProcessor:
     @staticmethod
     def _process_pdf(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Process PDF content (base64 encoded).
-        
-        TODO: Implement PDF text extraction using libraries like:
-        - PyPDF2, pdfplumber, or pymupdf
-        - OCR for scanned PDFs (tesseract)
+        Process a PDF file.
+
+        Args:
+            content: Absolute path to the PDF file on disk (stored in source_content).
+            metadata: Additional metadata dict.
         """
-        logger.warning("PDF processing not yet implemented")
-        
-        # For now, return error
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="PDF processing is not yet implemented. Coming soon!"
-        )
-    
+        from app.services.pdf_extractor import extract_pdf
+
+        try:
+            result = extract_pdf(content)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"PDF extraction failed: {exc}",
+            )
+
+        if not result["text"].strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="No text could be extracted from this PDF.",
+            )
+
+        processed_metadata = metadata or {}
+        processed_metadata.update(result["metadata"])
+        processed_metadata["content_length"] = len(result["text"])
+
+        return {
+            "text": result["text"],
+            "metadata": processed_metadata,
+            "image_paths": result.get("image_paths", []),
+            "success": True,
+        }
+
     @staticmethod
     def _process_word(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Process Word document content (base64 encoded).
-        
-        TODO: Implement Word document text extraction using:
-        - python-docx for DOCX files
-        - python-doc for older DOC files
+        Process a DOCX file.
+
+        Args:
+            content: Absolute path to the DOCX file on disk.
+            metadata: Additional metadata dict.
         """
-        logger.warning("Word document processing not yet implemented")
-        
-        # For now, return error
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Word document processing is not yet implemented. Coming soon!"
-        )
+        from app.services.pdf_extractor import extract_docx
+
+        try:
+            result = extract_docx(content)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"DOCX extraction failed: {exc}",
+            )
+
+        if not result["text"].strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="No text could be extracted from this DOCX file.",
+            )
+
+        processed_metadata = metadata or {}
+        processed_metadata.update(result["metadata"])
+        processed_metadata["content_length"] = len(result["text"])
+
+        return {
+            "text": result["text"],
+            "metadata": processed_metadata,
+            "image_paths": [],
+            "success": True,
+        }
     
     @staticmethod
     def _process_url(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -137,7 +175,7 @@ class DocumentProcessor:
     @staticmethod
     def get_supported_types() -> List[str]:
         """Return list of supported document types."""
-        return ["text"]  # Will expand as we implement more types
+        return ["text", "pdf", "doc", "docx"]
     
     @staticmethod
     def validate_source_type(source_type: str) -> bool:

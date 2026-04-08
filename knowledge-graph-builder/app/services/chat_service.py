@@ -1,139 +1,698 @@
 """
 Chat Service using Neo4j GraphRAG
-Simple, clean implementation following Neo4j GraphRAG patterns
+Enhanced implementation supporting all retriever types with factory pattern,
+strict graph-grounded responses, hallucination prevention, entity anchor
+detection, multi-hop reasoning, and auto retriever selection.
 """
-from typing import Dict, Any, Optional
+import re
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, List, AsyncIterator, cast
 from neo4j_graphrag.generation import GraphRAG
-from neo4j_graphrag.retrievers import VectorCypherRetriever 
 from neo4j_graphrag.llm import OpenAILLM
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
 from neo4j_graphrag.generation.types import RagResultModel
 
+from opentelemetry import trace as otel_trace
+
 from app.core.neo4j_client import neo4j_client
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.telemetry import get_tracer
+from app.services.retriever_factory import retriever_factory, RetrieverType
+from app.services.fulltext_index_service import fulltext_index_manager
+from app.schemas.graph_schemas import TemporalFilter
+from app.schemas.retriever_schemas import (
+    RetrieverConfig,
+    get_default_retriever_config,
+    VectorRetrieverConfig, VectorCypherRetrieverConfig,
+    HybridRetrieverConfig, HybridCypherRetrieverConfig,
+    Text2CypherRetrieverConfig
+)
 
 logger = get_logger(__name__)
+_chat_tracer = get_tracer("oraclous.chat")
+
+# ---------------------------------------------------------------------------
+# Prompt template that strictly grounds responses to retrieved graph context.
+# Uses {context} and {query_text} placeholders consumed by neo4j-graphrag.
+# ---------------------------------------------------------------------------
+STRICT_GROUNDING_PROMPT = """\
+You are a knowledge graph assistant. Your ONLY job is to answer questions \
+using information explicitly present in the Context section below.
+
+RULES (non-negotiable):
+1. Answer SOLELY from the Context. Do NOT use external knowledge or training data.
+2. For every factual claim, reference the specific graph node or relationship \
+that supports it (e.g. "[Entity: TechNova Corp]").
+3. If the Context does not contain enough information to answer the question, \
+respond EXACTLY with the following prefix and nothing else:
+   INSUFFICIENT_DATA: <brief reason why context is inadequate>
+4. Never guess, speculate, or extrapolate beyond what is in the Context.
+
+Context:
+{context}
+
+Question: {query_text}
+
+Answer (cite graph nodes/relationships for each fact):"""
+
+# Prefix used to detect insufficient-context responses from the LLM.
+_INSUFFICIENT_PREFIX = "INSUFFICIENT_DATA:"
+
+# Minimum number of retriever items required to attempt an answer.
+_MIN_CONTEXT_ITEMS = 1
+
+# --------------------------------------------------------------------------
+# Query heuristics for auto retriever selection
+# --------------------------------------------------------------------------
+_ANALYTIC_PATTERNS = re.compile(
+    r"\b(list all|find all|show all|count|how many|enumerate|which .* are)\b",
+    re.IGNORECASE,
+)
+_RELATIONSHIP_PATTERNS = re.compile(
+    r"\b(relationship|connected|related|partner|between|link|associat|collaborat)\b",
+    re.IGNORECASE,
+)
+_CYPHER_PATTERNS = re.compile(
+    r"\b(query|cypher|match|return|where clause|subgraph|path between)\b",
+    re.IGNORECASE,
+)
+
+# Multi-hop 2-hop expansion query — always filters by graph_id (multi-tenancy).
+_MULTIHOP_CYPHER = """\
+MATCH (anchor:__Entity__ {graph_id: $graph_id})
+WHERE toLower(anchor.name) CONTAINS toLower($entity_name)
+MATCH (anchor)-[r1]->(hop1:__Entity__ {graph_id: $graph_id})
+OPTIONAL MATCH (hop1)-[r2]->(hop2:__Entity__ {graph_id: $graph_id})
+RETURN
+    anchor.name        AS anchor_name,
+    anchor.description AS anchor_desc,
+    type(r1)           AS rel1,
+    hop1.name          AS hop1_name,
+    hop1.description   AS hop1_desc,
+    type(r2)           AS rel2,
+    hop2.name          AS hop2_name,
+    hop2.description   AS hop2_desc
+LIMIT 20
+"""
+
+# Words that must not be treated as entity candidates.
+_STOPWORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+    "should", "may", "might", "must", "can", "could", "about", "what",
+    "who", "which", "when", "where", "why", "how", "tell", "me", "give",
+    "show", "find", "list", "explain", "describe", "in", "on", "at", "to",
+    "for", "of", "and", "or", "but", "not", "with", "from", "by", "its",
+    "their", "this", "that", "these", "those", "any", "all", "some",
+})
+
+
+@dataclass
+class GroundedSearchResult:
+    """Structured result from a grounded GraphRAG search."""
+    answer: str
+    sources: List[Dict[str, Any]]
+    confidence: float
+    is_grounded: bool
+    retriever_used: str
+    retriever_result: Optional[Any] = None
 
 
 class ChatService:
     """
-    Chat service using Neo4j GraphRAG
-    
-    Simple wrapper around Neo4j GraphRAG components for multi-tenant usage
+    Chat service using Neo4j GraphRAG with hallucination prevention.
+
+    Features:
+    - Support for all 5 Neo4j GraphRAG retriever types
+    - Strict graph-grounded prompt — LLM only uses retrieved context
+    - Structured source citation extracted from retriever results
+    - Insufficient-context detection with no-data response
+    - Confidence scoring based on retrieval relevance scores
+    - Multi-tenant isolation with graph_id
+    - Automatic full-text index management
     """
-    
-    def __init__(self, graph_id: str):
-        """
-        Initialize chat service for specific graph
-        
-        Args:
-            graph_id: Target graph identifier for multi-tenant isolation
-        """
+
+    def __init__(
+        self,
+        graph_id: str,
+        retriever_type: RetrieverType = RetrieverType.VECTOR_CYPHER,
+        retriever_config: Optional[Dict[str, Any]] = None
+    ):
         self.graph_id = graph_id
-        
-        # Initialize embedder
+        self.retriever_type = retriever_type
+        self.retriever_config_dict = retriever_config or {}
+
+        default_config = get_default_retriever_config(retriever_type, graph_id)
+
+        if retriever_type == RetrieverType.VECTOR:
+            typed_config = cast(VectorRetrieverConfig, default_config)
+        elif retriever_type == RetrieverType.VECTOR_CYPHER:
+            typed_config = cast(VectorCypherRetrieverConfig, default_config)
+        elif retriever_type == RetrieverType.HYBRID:
+            typed_config = cast(HybridRetrieverConfig, default_config)
+        elif retriever_type == RetrieverType.HYBRID_CYPHER:
+            typed_config = cast(HybridCypherRetrieverConfig, default_config)
+        elif retriever_type == RetrieverType.TEXT2CYPHER:
+            typed_config = cast(Text2CypherRetrieverConfig, default_config)
+        else:
+            raise ValueError(f"Unsupported retriever type: {retriever_type}")
+
+        self.retriever_config = RetrieverConfig(
+            type=retriever_type,
+            config=typed_config
+        )
+
         self.embedder = OpenAIEmbeddings(
             api_key=settings.OPENAI_API_KEY,
             model="text-embedding-3-large"
         )
-        
-        # Initialize LLM
+
         self.llm = OpenAILLM(
             model_name="gpt-4o",
             api_key=settings.OPENAI_API_KEY,
             model_params={"temperature": 0.1}
         )
-        
-        # Initialize retriever with graph traversal
-        self.retriever = self._create_retriever()
-        
-        # Initialize GraphRAG
-        self.rag = GraphRAG(
-            retriever=self.retriever,
-            llm=self.llm
+
+        self.retriever = None
+        self.rag = None
+
+        logger.info(
+            f"ChatService initialized for graph {graph_id} "
+            f"with {retriever_type.value} retriever"
         )
-        
-        logger.info(f"ChatService initialized for graph {graph_id}")
-    
-    def _create_retriever(self) -> VectorCypherRetriever:
-        """Create VectorCypherRetriever with multi-tenant support"""
-        
-        # Retrieval query that leverages your graph structure
-        retrieval_query = f"""
-        // Multi-tenant filter for graph_id
-        WHERE node.graph_id = '{self.graph_id}'
-        
-        // Get entities that are connected to this chunk
-        MATCH (entity {{graph_id: '{self.graph_id}'}})-[:FROM_CHUNK]->(node)
-        OPTIONAL MATCH (node)-[:FROM_DOCUMENT]->(document {{graph_id: '{self.graph_id}'}})
-        
-        // Traverse entity relationships for context
-        OPTIONAL MATCH (entity)-[r]-(related_entity {{graph_id: '{self.graph_id}'}})
-        
-        RETURN node.text as text,
-               document.path as document_path,
-               collect(DISTINCT entity.name) as entities,
-               collect(DISTINCT {{
-                   entity: related_entity.name,
-                   relationship: type(r)
-               }}) as relationships,
-               score
-        ORDER BY score DESC
-        """
-        
-        # Ensure sync driver is connected
-        if neo4j_client.sync_driver is None:
-            neo4j_client.connect_sync()
-            
-        if neo4j_client.sync_driver is None:
-            raise ConnectionError("Failed to establish Neo4j sync driver connection")
-            
-        return VectorCypherRetriever(
-            driver=neo4j_client.sync_driver,
-            index_name="text_embeddings_primary",  # Use the correct index name for chunks
-            retrieval_query=retrieval_query,
-            embedder=self.embedder,
-            neo4j_database=settings.NEO4J_DATABASE
-        )
-    
+
+    async def initialize(self):
+        """Async initialization of retriever and GraphRAG components."""
+        await self._setup_retriever()
+
+        if self.retriever:
+            self.rag = GraphRAG(
+                retriever=self.retriever,
+                llm=self.llm
+            )
+            logger.info(f"GraphRAG initialized successfully for graph {self.graph_id}")
+        else:
+            raise RuntimeError("Failed to initialize retriever and GraphRAG")
+
+    async def _setup_retriever(self):
+        """Set up retriever using factory pattern with full-text index management."""
+        try:
+            if self.retriever_type in [RetrieverType.HYBRID, RetrieverType.HYBRID_CYPHER]:
+                await fulltext_index_manager.setup_default_indexes(self.graph_id)
+
+            self.retriever = await retriever_factory.create_retriever(
+                retriever_config=self.retriever_config,
+                graph_id=self.graph_id
+            )
+
+            if not self.retriever:
+                raise RuntimeError(
+                    f"Factory failed to create {self.retriever_type.value} retriever"
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to setup retriever: {e}")
+            try:
+                fallback_config = get_default_retriever_config(RetrieverType.VECTOR, self.graph_id)
+                typed_fallback = cast(VectorRetrieverConfig, fallback_config)
+                fallback_retriever_config = RetrieverConfig(
+                    type=RetrieverType.VECTOR,
+                    config=typed_fallback
+                )
+                self.retriever = await retriever_factory.create_retriever(
+                    retriever_config=fallback_retriever_config,
+                    graph_id=self.graph_id
+                )
+                self.retriever_config = fallback_retriever_config
+                self.retriever_type = RetrieverType.VECTOR
+                logger.warning(f"Using fallback vector retriever for graph {self.graph_id}")
+            except Exception as fallback_error:
+                logger.error(f"Fallback retriever creation failed: {fallback_error}")
+                raise RuntimeError("Failed to create any retriever") from fallback_error
+
     async def search(
         self,
         query_text: str,
         retriever_config: Optional[Dict[str, Any]] = None,
         return_context: bool = False,
-        examples: str = ""
-    ) -> RagResultModel:
+        examples: str = "",
+        temporal_filter: Optional[TemporalFilter] = None,
+    ) -> GroundedSearchResult:
         """
-        Perform GraphRAG search
-        
+        Perform a graph-grounded GraphRAG search with hallucination prevention.
+
+        Always retrieves context internally to:
+        - Detect insufficient data before passing to the LLM
+        - Extract source citations from retrieved graph nodes
+        - Calculate confidence from retrieval scores
+        - Use the strict grounding prompt to prevent external knowledge leakage
+
         Args:
             query_text: User's question
             retriever_config: Configuration for retriever (e.g., top_k)
-            return_context: Whether to return retrieval context
+            return_context: Whether to include retriever_result in the returned object
             examples: Examples for few-shot learning
-            
+
         Returns:
-            GraphRAG result with answer and optional context
+            GroundedSearchResult with answer, sources, confidence, and grounding flag
         """
+        with _chat_tracer.start_as_current_span(
+            "chat.query",
+            kind=otel_trace.SpanKind.INTERNAL,
+        ) as span:
+            span.set_attribute("graph_id", self.graph_id)
+            span.set_attribute("chat.retriever_type", self.retriever_type.value)
+            span.set_attribute("chat.query.length", len(query_text))
+            return await self._search_inner(
+                span, query_text, retriever_config, return_context, examples, temporal_filter
+            )
+
+    async def _search_inner(
+        self,
+        span,
+        query_text: str,
+        retriever_config: Optional[Dict[str, Any]],
+        return_context: bool,
+        examples: str,
+        temporal_filter: Optional[TemporalFilter],
+    ) -> "GroundedSearchResult":
         try:
-            logger.info(f"Processing search query for graph {self.graph_id}")
-            
-            # Use Neo4j GraphRAG search
-            result = self.rag.search(
+            if not self.rag:
+                await self.initialize()
+
+            if not self.rag:
+                raise RuntimeError("GraphRAG not properly initialized")
+
+            logger.info(f"Processing grounded search for graph {self.graph_id}")
+
+            # Always request context so we can inspect retrieved items.
+            raw_result: RagResultModel = self.rag.search(
                 query_text=query_text,
                 retriever_config=retriever_config or {"top_k": 5},
-                return_context=return_context,
-                examples=examples
+                return_context=True,
+                examples=examples,
+                prompt_template=STRICT_GROUNDING_PROMPT
             )
-            
-            logger.info(f"GraphRAG search completed successfully")
-            return result
-            
+
+            # Collect and sort retriever items by relevance score (desc).
+            retriever_items = []
+            if raw_result.retriever_result:
+                retriever_items = list(
+                    getattr(raw_result.retriever_result, "items", []) or []
+                )
+            retriever_items.sort(
+                key=lambda item: getattr(item, "score", None) or 0.0,
+                reverse=True
+            )
+
+            # If retrieval is sparse, attempt 2-hop entity-anchor enrichment.
+            if len(retriever_items) < 3:
+                entity_candidates = self.detect_entity_candidates(query_text)
+                if entity_candidates:
+                    multihop_rows = await self._multihop_enrich(entity_candidates, temporal_filter=temporal_filter)
+                    if multihop_rows:
+                        logger.info(
+                            f"Multi-hop enrichment added {len(multihop_rows)} rows "
+                            f"for graph {self.graph_id}"
+                        )
+                        # Re-run GraphRAG with enriched context hint in retriever_config.
+                        # We append the hop data as additional context in a second pass
+                        # only when the original retrieval returned nothing useful.
+                        if len(retriever_items) < _MIN_CONTEXT_ITEMS:
+                            hop_context = "; ".join(
+                                f"{r['anchor']} -[{r['rel1']}]-> {r['hop1_name']}"
+                                for r in multihop_rows
+                                if r.get("anchor") and r.get("hop1_name")
+                            )
+                            augmented_query = (
+                                f"{query_text}\n\n"
+                                f"[Graph context: {hop_context}]"
+                            )
+                            raw_result = self.rag.search(
+                                query_text=augmented_query,
+                                retriever_config=retriever_config or {"top_k": 5},
+                                return_context=True,
+                                examples=examples,
+                                prompt_template=STRICT_GROUNDING_PROMPT,
+                            )
+                            if raw_result.retriever_result:
+                                retriever_items = list(
+                                    getattr(raw_result.retriever_result, "items", []) or []
+                                )
+                                retriever_items.sort(
+                                    key=lambda item: getattr(item, "score", None) or 0.0,
+                                    reverse=True,
+                                )
+
+            # No context retrieved — return structured no-data response.
+            if len(retriever_items) < _MIN_CONTEXT_ITEMS:
+                logger.warning(
+                    f"No graph context retrieved for graph {self.graph_id}. "
+                    "Returning insufficient-data response."
+                )
+                return GroundedSearchResult(
+                    answer=(
+                        "The knowledge graph does not contain sufficient data "
+                        "to answer this question."
+                    ),
+                    sources=[],
+                    confidence=0.0,
+                    is_grounded=False,
+                    retriever_used=self.retriever_type.value,
+                    retriever_result=raw_result.retriever_result if return_context else None,
+                )
+
+            sources = self._extract_sources(retriever_items)
+            confidence = self._calculate_confidence(retriever_items)
+
+            # Detect if the LLM itself signalled insufficient data.
+            answer = raw_result.answer or ""
+            is_grounded = not answer.strip().startswith(_INSUFFICIENT_PREFIX)
+
+            if not is_grounded:
+                answer = (
+                    "The knowledge graph does not contain sufficient data "
+                    "to answer this question."
+                )
+                confidence = max(confidence * 0.3, 0.0)
+
+            logger.info(
+                f"Grounded search complete — grounded={is_grounded}, "
+                f"confidence={confidence:.2f}, sources={len(sources)}"
+            )
+
+            span.set_attribute("chat.is_grounded", is_grounded)
+            span.set_attribute("chat.confidence", round(confidence, 4))
+            span.set_attribute("chat.sources_count", len(sources))
+            span.set_attribute("chat.hallucination_flag", not is_grounded)
+
+            return GroundedSearchResult(
+                answer=answer,
+                sources=sources,
+                confidence=confidence,
+                is_grounded=is_grounded,
+                retriever_used=self.retriever_type.value,
+                retriever_result=raw_result.retriever_result if return_context else None,
+            )
+
         except Exception as e:
-            logger.error(f"GraphRAG search failed: {e}")
-            # Return fallback response
-            return RagResultModel(
-                answer=f"I encountered an error while searching the knowledge graph: {str(e)}",
-                retriever_result=None
+            logger.error(f"GraphRAG search failed for graph {self.graph_id}: {e}")
+            span.record_exception(e)
+            span.set_status(otel_trace.StatusCode.ERROR, str(e))
+            return GroundedSearchResult(
+                answer=f"An error occurred while searching the knowledge graph: {str(e)}",
+                sources=[],
+                confidence=0.0,
+                is_grounded=False,
+                retriever_used=self.retriever_type.value,
             )
+
+    # ------------------------------------------------------------------
+    # Auto retriever selection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def auto_select_retriever_type(query: str) -> RetrieverType:
+        """
+        Choose the most appropriate retriever type based on query characteristics.
+
+        Rules (evaluated in priority order):
+        1. Cypher/graph-query keywords → TEXT2CYPHER for precise traversal
+        2. Analytic / enumeration keywords → HYBRID for broader coverage
+        3. Relationship / connectivity keywords → VECTOR_CYPHER for graph traversal
+        4. Default → VECTOR_CYPHER (balanced precision + context)
+        """
+        if _CYPHER_PATTERNS.search(query):
+            return RetrieverType.TEXT2CYPHER
+        if _ANALYTIC_PATTERNS.search(query):
+            return RetrieverType.HYBRID
+        if _RELATIONSHIP_PATTERNS.search(query):
+            return RetrieverType.VECTOR_CYPHER
+        return RetrieverType.VECTOR_CYPHER
+
+    # ------------------------------------------------------------------
+    # Entity anchor detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def detect_entity_candidates(query: str) -> List[str]:
+        """
+        Extract likely named-entity tokens from a query string.
+
+        Heuristic: consecutive capitalised words (e.g. "TechNova Corp")
+        that do not appear in the stopword list and have length > 2.
+        Returns de-duplicated candidates preserving order.
+        """
+        # Split on whitespace/punctuation but keep original case.
+        tokens = re.split(r"[\s,;:!?.()\[\]\"']+", query)
+        candidates: List[str] = []
+        seen: set = set()
+
+        # Merge consecutive capital-starting tokens into multi-word names.
+        buffer: List[str] = []
+        for tok in tokens:
+            if len(tok) > 2 and tok[0].isupper() and tok.lower() not in _STOPWORDS:
+                buffer.append(tok)
+            else:
+                if buffer:
+                    phrase = " ".join(buffer)
+                    if phrase not in seen:
+                        candidates.append(phrase)
+                        seen.add(phrase)
+                    buffer = []
+        if buffer:
+            phrase = " ".join(buffer)
+            if phrase not in seen:
+                candidates.append(phrase)
+
+        return candidates
+
+    # ------------------------------------------------------------------
+    # Multi-hop enrichment
+    # ------------------------------------------------------------------
+
+    async def _multihop_enrich(
+        self,
+        entity_candidates: List[str],
+        top_k: int = 3,
+        temporal_filter: Optional[TemporalFilter] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Run 2-hop Cypher traversal anchored on detected entity candidates.
+
+        Uses the AsyncDriver (FastAPI-safe). Returns a list of context dicts
+        that can be injected alongside retriever results.
+        Always filters by self.graph_id — multi-tenancy enforced.
+        When temporal_filter is set, restricts r1 to facts valid at the given time.
+        """
+        enriched: List[Dict[str, Any]] = []
+        driver = neo4j_client.async_driver
+        if driver is None:
+            logger.warning("Async driver unavailable — skipping multi-hop enrichment")
+            return enriched
+
+        # Build optional temporal WHERE clause for the first-hop relationship
+        temporal_clause = ""
+        if temporal_filter:
+            if temporal_filter.current_only:
+                temporal_clause = "AND r1.valid_to IS NULL"
+            elif temporal_filter.point_in_time:
+                pit = temporal_filter.point_in_time.isoformat()
+                temporal_clause = (
+                    f"AND (r1.valid_from IS NULL OR r1.valid_from <= datetime('{pit}'))"
+                    f" AND (r1.valid_to IS NULL OR r1.valid_to > datetime('{pit}'))"
+                )
+
+        cypher = f"""
+MATCH (anchor:__Entity__ {{graph_id: $graph_id}})
+WHERE toLower(anchor.name) CONTAINS toLower($entity_name)
+MATCH (anchor)-[r1]->(hop1:__Entity__ {{graph_id: $graph_id}})
+WHERE true {temporal_clause}
+OPTIONAL MATCH (hop1)-[r2]->(hop2:__Entity__ {{graph_id: $graph_id}})
+RETURN
+    anchor.name        AS anchor_name,
+    anchor.description AS anchor_desc,
+    type(r1)           AS rel1,
+    hop1.name          AS hop1_name,
+    hop1.description   AS hop1_desc,
+    type(r2)           AS rel2,
+    hop2.name          AS hop2_name,
+    hop2.description   AS hop2_desc
+LIMIT 20
+""" if temporal_clause else _MULTIHOP_CYPHER
+
+        for entity_name in entity_candidates[:top_k]:
+            try:
+                result = await driver.execute_query(
+                    cypher,
+                    {"graph_id": self.graph_id, "entity_name": entity_name},
+                )
+                records = result.records if hasattr(result, "records") else result[0]
+                for rec in records:
+                    entry: Dict[str, Any] = {
+                        "anchor": rec.get("anchor_name"),
+                        "anchor_desc": rec.get("anchor_desc"),
+                        "hop1_name": rec.get("hop1_name"),
+                        "hop1_desc": rec.get("hop1_desc"),
+                        "rel1": rec.get("rel1"),
+                        "hop2_name": rec.get("hop2_name"),
+                        "hop2_desc": rec.get("hop2_desc"),
+                        "rel2": rec.get("rel2"),
+                        "graph_id": self.graph_id,
+                        "_source": "multihop",
+                    }
+                    enriched.append(entry)
+            except Exception as exc:
+                logger.warning(
+                    f"Multi-hop traversal failed for entity '{entity_name}' "
+                    f"in graph {self.graph_id}: {exc}"
+                )
+
+        return enriched
+
+    # ------------------------------------------------------------------
+    # Streaming search
+    # ------------------------------------------------------------------
+
+    async def stream_search(
+        self,
+        query_text: str,
+        retriever_config: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator[str]:
+        """
+        Streaming variant of search().
+
+        Yields Server-Sent Events (SSE) formatted strings:
+          - data: {"type": "source", ...}  — one per retrieved source
+          - data: {"type": "answer_chunk", "text": "..."}  — answer text chunks
+          - data: {"type": "done", "confidence": 0.9, "is_grounded": true}
+
+        Falls back to a single chunk if the underlying GraphRAG doesn't
+        support token-level streaming.
+        """
+        try:
+            if not self.rag:
+                await self.initialize()
+
+            if not self.rag:
+                raise RuntimeError("GraphRAG not properly initialized")
+
+            raw_result: RagResultModel = self.rag.search(
+                query_text=query_text,
+                retriever_config=retriever_config or {"top_k": 5},
+                return_context=True,
+                prompt_template=STRICT_GROUNDING_PROMPT,
+            )
+
+            retriever_items = []
+            if raw_result.retriever_result:
+                retriever_items = list(
+                    getattr(raw_result.retriever_result, "items", []) or []
+                )
+            retriever_items.sort(
+                key=lambda item: getattr(item, "score", None) or 0.0,
+                reverse=True,
+            )
+
+            import json
+
+            # Emit each source first.
+            sources = self._extract_sources(retriever_items)
+            for src in sources:
+                yield f"data: {json.dumps({'type': 'source', **src})}\n\n"
+
+            if len(retriever_items) < _MIN_CONTEXT_ITEMS:
+                answer = (
+                    "The knowledge graph does not contain sufficient data "
+                    "to answer this question."
+                )
+                yield f"data: {json.dumps({'type': 'answer_chunk', 'text': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'confidence': 0.0, 'is_grounded': False})}\n\n"
+                return
+
+            answer = raw_result.answer or ""
+            is_grounded = not answer.strip().startswith(_INSUFFICIENT_PREFIX)
+            if not is_grounded:
+                answer = (
+                    "The knowledge graph does not contain sufficient data "
+                    "to answer this question."
+                )
+
+            confidence = self._calculate_confidence(retriever_items)
+            if not is_grounded:
+                confidence = max(confidence * 0.3, 0.0)
+
+            # Emit answer in word-level chunks to simulate streaming.
+            words = answer.split(" ")
+            for i in range(0, len(words), 10):
+                chunk = " ".join(words[i : i + 10])
+                if i + 10 < len(words):
+                    chunk += " "
+                yield f"data: {json.dumps({'type': 'answer_chunk', 'text': chunk})}\n\n"
+
+            yield (
+                f"data: {json.dumps({'type': 'done', 'confidence': confidence, 'is_grounded': is_grounded, 'retriever_used': self.retriever_type.value})}\n\n"
+            )
+
+        except Exception as exc:
+            import json
+            logger.error(f"Streaming search failed for graph {self.graph_id}: {exc}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_sources(retriever_items: List[Any]) -> List[Dict[str, Any]]:
+        """
+        Extract structured source citations from retriever result items.
+
+        Each item's `metadata` dict typically contains node properties
+        (id, labels, name, text, score) depending on the retriever type
+        and the configured return_properties / retrieval_query.
+        """
+        sources: List[Dict[str, Any]] = []
+        for item in retriever_items:
+            metadata: Dict[str, Any] = getattr(item, "metadata", {}) or {}
+            content: str = getattr(item, "content", "") or ""
+
+            source: Dict[str, Any] = {
+                "node_id": metadata.get("id") or metadata.get("elementId"),
+                "node_labels": metadata.get("labels"),
+                "content": content[:500] if content else None,
+                "relevance_score": (
+                    getattr(item, "score", None)
+                    or metadata.get("score")
+                ),
+                "properties": {
+                    k: v for k, v in metadata.items()
+                    if k not in {"id", "elementId", "labels", "score", "embedding"}
+                },
+            }
+            sources.append(source)
+        return sources
+
+    @staticmethod
+    def _calculate_confidence(retriever_items: List[Any]) -> float:
+        """
+        Compute a confidence score [0, 1] from retriever relevance scores.
+
+        Uses the mean of the top-3 scores (or fewer if less are available),
+        clamped to [0, 1].  Falls back to a low baseline if no scores exist.
+        """
+        scores: List[float] = []
+        for item in retriever_items[:3]:
+            score = getattr(item, "score", None)
+            if score is not None:
+                try:
+                    scores.append(float(score))
+                except (TypeError, ValueError):
+                    pass
+
+        if not scores:
+            # Context exists but scores are unavailable — moderate confidence.
+            return 0.5
+
+        return min(max(sum(scores) / len(scores), 0.0), 1.0)

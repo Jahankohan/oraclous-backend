@@ -12,13 +12,22 @@ This service provides advanced graph analytics capabilities including:
 All methods are multi-tenant safe with proper graph_id filtering.
 """
 
+import re
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 from datetime import datetime
 import hashlib
 import asyncio
 
+# Only alphanumeric + underscore are safe to interpolate as Neo4j labels into GDS subquery strings.
+# GDS executes subquery strings internally — Cypher parameters cannot be used inside them.
+_SAFE_LABEL_RE = re.compile(r'^[A-Za-z0-9_]+$')
+
+from sqlalchemy import text, create_engine
+from sqlalchemy.pool import NullPool
+
 from app.core.neo4j_client import neo4j_client
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -36,86 +45,312 @@ class GraphAnalyticsService:
     # ==================== COMMUNITY DETECTION ====================
     
     async def get_community_context(
-        self, 
-        entities: List[Dict[str, Any]], 
-        graph_id: UUID
+        self,
+        entities: List[Dict[str, Any]],
+        graph_id: UUID,
     ) -> Dict[str, Any]:
         """
-        Find entities in same communities using Neo4j GDS Louvain algorithm with graph_id filtering.
-        
-        Args:
-            entities: List of entity dictionaries with 'id' and 'name' keys
-            graph_id: UUID of the specific graph to analyze
-            
-        Returns:
-            Dictionary containing communities information
+        Return community context from persisted __Community__ nodes (post-Leiden).
+
+        Falls back to simple shared-neighbor detection when no active communities exist.
         """
         if not entities:
             return {"communities": []}
-        
+
+        entity_ids = [e["id"] for e in entities if e.get("id")]
+
         try:
-            # Try advanced community detection with Neo4j GDS
-            community_query = """
-            CALL {
-                // Create temporary graph projection for this specific graph_id
-                CALL gds.graph.project.cypher(
-                    'temp-community-' + $graph_id,
-                    'MATCH (n) WHERE n.graph_id = "' + $graph_id + '" RETURN id(n) AS id, n.name AS name',
-                    'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" RETURN id(a) AS source, id(b) AS target'
-                )
-                YIELD graphName
-                
-                // Run Louvain community detection
-                CALL gds.louvain.stream('temp-community-' + $graph_id)
-                YIELD nodeId, communityId
-                
-                // Get original nodes
-                MATCH (node)
-                WHERE id(node) = nodeId AND node.graph_id = $graph_id
-                
-                WITH node, communityId
-                ORDER BY communityId, node.name
-                
-                // Group by community
-                WITH communityId, collect(node) as community_members
-                WHERE size(community_members) > 1  // Only communities with multiple members
-                
-                RETURN communityId,
-                    [member IN community_members | {
-                        id: member.id,
-                        name: member.name,
-                        labels: labels(member)
-                    }] as members,
-                    size(community_members) as size
-                LIMIT 10
-            }
-            
-            // Clean up the temporary graph
-            CALL gds.graph.drop('temp-community-' + $graph_id, false)
-            YIELD graphName as droppedGraph
-            
-            RETURN communityId, members, size
+            query = """
+            MATCH (entity:__Entity__)-[r:IN_COMMUNITY {graph_id: $graph_id, level: 1}]->(community:__Community__)
+            WHERE entity.id IN $entity_ids
+              AND community.graph_id = $graph_id
+              AND community.status = 'active'
+            WITH community, count(entity) AS member_hits
+            WHERE member_hits >= 2
+            RETURN community.id AS community_id,
+                   community.summary AS summary,
+                   community.level AS level,
+                   community.entity_count AS entity_count,
+                   community.status AS status,
+                   member_hits
+            ORDER BY member_hits DESC, community.entity_count ASC
+            LIMIT 3
             """
-            
-            results = await neo4j_client.execute_query(community_query, {
-                "graph_id": str(graph_id)
+            results = await neo4j_client.execute_query(query, {
+                "entity_ids": entity_ids,
+                "graph_id": str(graph_id),
             })
-            
-            communities = []
-            for result in results:
-                communities.append({
-                    "community_id": result["communityId"],
-                    "members": result["members"],
-                    "size": result["size"],
-                    "type": "louvain_community"
-                })
-            
-            return {"communities": communities}
-            
-        except Exception as e:
-            logger.warning(f"Advanced community detection failed: {e}")
-            # Fallback to simple shared neighbor detection
-            return await self.get_simple_community_context(entities, graph_id)
+
+            if results:
+                communities = [
+                    {
+                        "community_id": r["community_id"],
+                        "summary": r["summary"],
+                        "level": r["level"],
+                        "entity_count": r["entity_count"],
+                        "member_hits": r["member_hits"],
+                        "type": "leiden_community",
+                    }
+                    for r in results
+                ]
+                return {"communities": communities}
+
+        except Exception as exc:
+            logger.warning(f"Persisted community lookup failed: {exc}")
+
+        # Fallback when no active communities
+        return await self.get_simple_community_context(entities, graph_id)
+
+    # ==================== NEW: COMMUNITY MANAGEMENT METHODS ====================
+
+    async def detect_communities_async(
+        self,
+        graph_id: UUID,
+        levels: int = 3,
+        force_rebuild: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Queue a Celery community detection job and return the task ID.
+
+        Args:
+            graph_id: Target graph
+            levels: Number of hierarchy levels (1-5)
+            force_rebuild: Run even if status == 'active'
+
+        Returns:
+            Dict with job_id, graph_id, status
+        """
+        from app.tasks.community_tasks import detect_communities_task
+
+        level_indices = list(range(levels))
+        resolutions = [0.5, 1.0, 2.0, 3.0, 4.0][:levels]
+
+        result = detect_communities_task.apply_async(
+            args=[str(graph_id)],
+            kwargs={
+                "levels": level_indices,
+                "resolutions": resolutions,
+                "force_rebuild": force_rebuild,
+            },
+            countdown=0,
+        )
+
+        return {
+            "job_id": result.id,
+            "graph_id": str(graph_id),
+            "status": "queued",
+        }
+
+    async def get_community_status(self, graph_id: UUID) -> Dict[str, Any]:
+        """Return current community detection status for a graph."""
+        # Count communities per level
+        level_query = """
+        MATCH (c:__Community__ {graph_id: $graph_id})
+        RETURN c.level AS level, count(c) AS cnt, c.status AS status
+        ORDER BY level
+        """
+        level_results = await neo4j_client.execute_query(level_query, {"graph_id": str(graph_id)})
+
+        communities_by_level: Dict[str, int] = {}
+        detected_status = "not_detected"
+        for r in level_results:
+            communities_by_level[str(r["level"])] = r["cnt"]
+            if r["status"] == "active":
+                detected_status = "active"
+            elif r["status"] == "rebuilding":
+                detected_status = "rebuilding"
+            elif detected_status == "not_detected" and r["status"] == "stale":
+                detected_status = "stale"
+
+        # Entity counts from Postgres
+        entity_count_at_detection = 0
+        last_detected_at = None
+        current_entity_count = 0
+        try:
+            pg_engine = create_engine(
+                settings.POSTGRES_URL.replace("+asyncpg", ""),
+                poolclass=NullPool,
+            )
+            with pg_engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT communities_detected_at, entity_count_at_detection, "
+                        "entity_delta_since_detection, communities_status "
+                        "FROM knowledge_graphs WHERE id = :gid"
+                    ),
+                    {"gid": str(graph_id)},
+                ).fetchone()
+                if row:
+                    last_detected_at = row[0]
+                    entity_count_at_detection = row[1] or 0
+                    delta = row[2] or 0
+                    current_entity_count = entity_count_at_detection + delta
+                    if row[3]:
+                        detected_status = row[3]
+            pg_engine.dispose()
+        except Exception as exc:
+            logger.warning(f"Postgres community status lookup failed: {exc}")
+
+        staleness_pct = 0.0
+        if entity_count_at_detection > 0:
+            staleness_pct = (current_entity_count - entity_count_at_detection) / entity_count_at_detection
+
+        return {
+            "status": detected_status,
+            "last_detected_at": last_detected_at.isoformat() if last_detected_at else None,
+            "communities_by_level": communities_by_level,
+            "entity_count_at_detection": entity_count_at_detection,
+            "current_entity_count": current_entity_count,
+            "staleness_pct": round(staleness_pct, 4),
+        }
+
+    async def get_communities_list(
+        self,
+        graph_id: UUID,
+        level: Optional[int] = None,
+        min_size: int = 2,
+        limit: int = 50,
+        offset: int = 0,
+        include_summary: bool = True,
+    ) -> Dict[str, Any]:
+        """Return paginated list of communities for a graph."""
+        where_clauses = ["c.graph_id = $graph_id", "c.entity_count >= $min_size"]
+        params: Dict[str, Any] = {
+            "graph_id": str(graph_id),
+            "min_size": min_size,
+            "limit": limit,
+            "offset": offset,
+        }
+        if level is not None:
+            where_clauses.append("c.level = $level")
+            params["level"] = level
+
+        where = " AND ".join(where_clauses)
+        fields = "c.id AS community_id, c.level AS level, c.entity_count AS entity_count, c.weight AS weight, c.parent_id AS parent_id, c.status AS status"
+        if include_summary:
+            fields += ", c.summary AS summary"
+
+        count_query = f"MATCH (c:__Community__) WHERE {where} RETURN count(c) AS total"
+        list_query = f"""
+        MATCH (c:__Community__) WHERE {where}
+        RETURN {fields}
+        ORDER BY c.level, c.entity_count DESC
+        SKIP $offset LIMIT $limit
+        """
+
+        total_results = await neo4j_client.execute_query(count_query, params)
+        total = total_results[0]["total"] if total_results else 0
+
+        list_results = await neo4j_client.execute_query(list_query, params)
+
+        communities = []
+        for r in list_results:
+            item = {
+                "community_id": r["community_id"],
+                "level": r["level"],
+                "entity_count": r["entity_count"],
+                "weight": r["weight"],
+                "parent_id": r["parent_id"],
+                "status": r["status"],
+            }
+            if include_summary:
+                item["summary"] = r.get("summary")
+            communities.append(item)
+
+        # Detection status
+        status_info = await self.get_community_status(graph_id)
+
+        return {
+            "communities": communities,
+            "total": total,
+            "detection_status": status_info["status"],
+            "last_detected_at": status_info["last_detected_at"],
+        }
+
+    async def get_community_detail(
+        self, graph_id: UUID, community_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return full community detail with members and parent/child links."""
+        community_query = """
+        MATCH (c:__Community__ {id: $community_id, graph_id: $graph_id})
+        RETURN c.id AS community_id, c.level AS level, c.summary AS summary,
+               c.entity_count AS entity_count, c.algorithm AS algorithm,
+               c.parent_id AS parent_id, c.created_at AS created_at,
+               c.last_updated AS last_updated, c.status AS status
+        """
+        result = await neo4j_client.execute_query(community_query, {
+            "community_id": community_id,
+            "graph_id": str(graph_id),
+        })
+        if not result:
+            return None
+
+        r = result[0]
+
+        # Members
+        members_query = """
+        MATCH (e:__Entity__)-[:IN_COMMUNITY {graph_id: $graph_id, level: $level}]->(c:__Community__ {id: $cid, graph_id: $graph_id})
+        RETURN e.id AS entity_id, e.name AS entity_name, labels(e) AS entity_labels
+        LIMIT 100
+        """
+        members_result = await neo4j_client.execute_query(members_query, {
+            "graph_id": str(graph_id),
+            "level": r["level"],
+            "cid": community_id,
+        })
+        members = [
+            {
+                "entity_id": m["entity_id"],
+                "entity_name": m["entity_name"],
+                "entity_type": next(
+                    (lbl for lbl in (m["entity_labels"] or []) if lbl != "__Entity__"),
+                    "Entity",
+                ),
+            }
+            for m in members_result
+        ]
+
+        # Parent community
+        parent_community = None
+        if r.get("parent_id"):
+            parent_result = await neo4j_client.execute_query(
+                "MATCH (p:__Community__ {id: $pid, graph_id: $gid}) RETURN p.id AS community_id, p.summary AS summary",
+                {"pid": r["parent_id"], "gid": str(graph_id)},
+            )
+            if parent_result:
+                parent_community = {
+                    "community_id": parent_result[0]["community_id"],
+                    "summary": parent_result[0]["summary"],
+                }
+
+        # Child communities
+        child_query = """
+        MATCH (child:__Community__ {graph_id: $graph_id})-[:PARENT_COMMUNITY]->(parent:__Community__ {id: $cid, graph_id: $graph_id})
+        RETURN child.id AS community_id, child.summary AS summary, child.entity_count AS entity_count
+        LIMIT 20
+        """
+        child_results = await neo4j_client.execute_query(child_query, {
+            "graph_id": str(graph_id),
+            "cid": community_id,
+        })
+        child_communities = [
+            {"community_id": c["community_id"], "summary": c["summary"], "entity_count": c["entity_count"]}
+            for c in child_results
+        ]
+
+        return {
+            "community_id": r["community_id"],
+            "level": r["level"],
+            "summary": r["summary"],
+            "entity_count": r["entity_count"],
+            "algorithm": r["algorithm"],
+            "status": r["status"],
+            "parent_community": parent_community,
+            "child_communities": child_communities,
+            "members": members,
+            "created_at": r["created_at"],
+            "last_updated": r["last_updated"],
+        }
 
     async def get_simple_community_context(
         self, 
@@ -226,7 +461,14 @@ class GraphAnalyticsService:
             if not entity_label:
                 logger.warning(f"No suitable entity label found for graph {graph_id}")
                 return await self._create_simple_communities(graph_id)
-            
+
+            # Validate label before interpolating into GDS subquery string.
+            # GDS executes subquery strings internally so $params cannot be used inside them;
+            # graph_id is a UUID (safe by type); entity_label must match [A-Za-z0-9_] only.
+            if not _SAFE_LABEL_RE.match(entity_label):
+                logger.error(f"Unsafe entity label '{entity_label}' rejected for graph {graph_id}")
+                return await self._create_simple_communities(graph_id)
+
             logger.info(f"Using entity label: {entity_label}")
             
             # Generate unique graph projection name
@@ -243,9 +485,17 @@ class GraphAnalyticsService:
             RETURN graphName
             """
             
-            # Construct queries with proper parameter substitution
-            node_query = f"MATCH (n:{entity_label}) WHERE n.graph_id = '{str(graph_id)}' RETURN id(n) AS id"
-            relationship_query = f"MATCH (a:{entity_label})-[r]->(b:{entity_label}) WHERE a.graph_id = '{str(graph_id)}' AND b.graph_id = '{str(graph_id)}' RETURN id(a) AS source, id(b) AS target"
+            # GDS subquery strings are executed internally by the GDS library and cannot accept
+            # outer Cypher parameters — interpolation is unavoidable here.
+            # Safety: entity_label validated against _SAFE_LABEL_RE above;
+            # graph_id is a UUID type whose str() is always "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx".
+            graph_id_str = str(graph_id)
+            node_query = f"MATCH (n:{entity_label}) WHERE n.graph_id = '{graph_id_str}' RETURN id(n) AS id"
+            relationship_query = (
+                f"MATCH (a:{entity_label})-[r]->(b:{entity_label}) "
+                f"WHERE a.graph_id = '{graph_id_str}' AND b.graph_id = '{graph_id_str}' "
+                f"RETURN id(a) AS source, id(b) AS target"
+            )
             
             try:
                 await neo4j_client.execute_query(projection_query, {

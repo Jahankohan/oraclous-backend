@@ -46,27 +46,23 @@ class RetrievalService:
     def __init__(self, driver=None, embedder=None):
         """
         Initialize with Neo4j GraphRAG components.
-        
+
         Args:
-            driver: Neo4j driver (defaults to global client)
+            driver: Neo4j driver (defaults to global client, connected lazily on first use)
             embedder: OpenAI embedder (defaults to configured instance)
         """
-        # Use sync driver for Neo4j GraphRAG components (Phase 4: Dual Driver Architecture)
-        # GraphRAG components require synchronous drivers
-        if driver is None:
-            neo4j_client.connect_sync()  # Ensure sync driver is connected
-            driver = neo4j_client.sync_driver
+        # Store driver — if None, connection happens lazily on first retriever use
         self.driver = driver
-        
+
         # Create OpenAI embedder (Neo4j GraphRAG pattern)
         self.embedder = embedder or OpenAIEmbeddings(
             model=settings.EMBEDDING_MODEL or "text-embedding-3-large",
             api_key=settings.OPENAI_API_KEY
         )
-        
+
         # Simple retriever cache for performance
         self._retriever_cache = {}
-        
+
         logger.info("RetrievalService initialized with Neo4j GraphRAG components")
     
     # ==================== ENTITY SEARCH (SEMANTIC) ====================
@@ -230,11 +226,18 @@ class RetrievalService:
             return await self.similarity_search_entities(query, graph_id, k=k)
     
     # ==================== RETRIEVER FACTORIES (CACHED) ====================
-    
+
+    def _ensure_sync_connected(self):
+        """Connect the sync Neo4j driver on first use (lazy initialization)."""
+        if self.driver is None:
+            neo4j_client.connect_sync()
+            self.driver = neo4j_client.sync_driver
+
     def _get_entity_retriever(self, graph_id: UUID) -> MultiTenantVectorRetriever:
         """Get cached multi-tenant entity retriever using factory pattern."""
+        self._ensure_sync_connected()
         cache_key = f"entity_{graph_id}"
-        
+
         if cache_key not in self._retriever_cache:
             # Use factory function for clean creation
             self._retriever_cache[cache_key] = create_multi_tenant_vector_retriever(
@@ -249,8 +252,9 @@ class RetrievalService:
     
     def _get_chunk_retriever(self, graph_id: UUID) -> MultiTenantVectorRetriever:
         """Get cached multi-tenant chunk retriever using factory pattern."""
+        self._ensure_sync_connected()
         cache_key = f"chunk_{graph_id}"
-        
+
         if cache_key not in self._retriever_cache:
             # Use factory function for clean creation
             self._retriever_cache[cache_key] = create_multi_tenant_vector_retriever(
@@ -265,8 +269,9 @@ class RetrievalService:
     
     def _get_hybrid_retriever(self, graph_id: UUID) -> MultiTenantHybridRetriever:
         """Get cached multi-tenant hybrid retriever using factory pattern."""
+        self._ensure_sync_connected()
         cache_key = f"hybrid_{graph_id}"
-        
+
         if cache_key not in self._retriever_cache:
             # Use factory function for clean creation
             self._retriever_cache[cache_key] = create_multi_tenant_hybrid_retriever(
@@ -281,8 +286,9 @@ class RetrievalService:
     
     def _get_vector_cypher_retriever(self, graph_id: UUID) -> MultiTenantVectorCypherRetriever:
         """Get cached multi-tenant vector+cypher retriever using factory pattern."""
+        self._ensure_sync_connected()
         cache_key = f"vector_cypher_{graph_id}"
-        
+
         if cache_key not in self._retriever_cache:
             # Define graph-aware retrieval query
             retrieval_query = """
@@ -446,9 +452,3 @@ def get_retrieval_service() -> RetrievalService:
             return await retrieval_service.similarity_search_entities(...)
     """
     return RetrievalService()
-
-
-# ==================== GLOBAL INSTANCE (BACKWARD COMPATIBILITY) ====================
-
-# Create global instance for backward compatibility with existing code
-retrieval_service = RetrievalService()
