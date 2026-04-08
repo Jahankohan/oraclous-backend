@@ -811,8 +811,6 @@ def create_graph_snapshot(
 
     from neo4j import GraphDatabase
 
-    from neo4j import GraphDatabase
-
     driver = GraphDatabase.driver(
         settings.NEO4J_URI,
         auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
@@ -1452,8 +1450,7 @@ def code_ingest_task(self, job_id: str, user_id: str) -> dict[str, Any]:
     ) -> None:
         with pg_engine.begin() as conn:
             conn.execute(
-                _text(
-                    """
+                _text("""
                     UPDATE ingestion_jobs
                     SET status = :status,
                         progress = :progress,
@@ -1462,8 +1459,7 @@ def code_ingest_task(self, job_id: str, user_id: str) -> dict[str, Any]:
                         completed_at = CASE WHEN :status IN ('completed','failed') THEN NOW() ELSE completed_at END,
                         started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN NOW() ELSE started_at END
                     WHERE id = :id
-                """
-                ),
+                """),
                 {
                     "id": job_id_str,
                     "status": status,
