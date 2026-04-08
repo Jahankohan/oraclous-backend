@@ -1,12 +1,25 @@
-from sqlalchemy import Column, String, Text, DateTime, Integer, Boolean, JSON, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy import Column, DateTime
-from sqlalchemy.sql import func
 import uuid
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.sql import func
+
 from app.core.database import Base
+
 
 class KnowledgeGraph(Base):
     """Knowledge graph metadata model"""
+
     __tablename__ = "knowledge_graphs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -15,7 +28,9 @@ class KnowledgeGraph(Base):
     user_id = Column(UUID(as_uuid=True), nullable=False)
     schema_config = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
     node_count = Column(Integer, default=0)
     relationship_count = Column(Integer, default=0)
     status = Column(String(50), default="active")
@@ -32,10 +47,12 @@ class KnowledgeGraph(Base):
     auto_snapshot_on_ingestion = Column(Boolean, default=False)
     auto_snapshot_last_at = Column(DateTime(timezone=True), nullable=True)
 
+
 class IngestionJob(Base):
     """Data ingestion job tracking"""
+
     __tablename__ = "ingestion_jobs"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     graph_id = Column(UUID(as_uuid=True), nullable=False)
     source_type = Column(String(50))  # 'text', 'pdf', 'url', 'api'
@@ -56,7 +73,9 @@ class IngestionJob(Base):
     entity_deduplication_count = Column(Integer, default=0)
     credits_consumed = Column(String(20), default="0")
     # Ingest mode: full | incremental | upsert (default: incremental)
-    ingest_mode = Column(String(20), default="incremental", nullable=False, server_default="incremental")
+    ingest_mode = Column(
+        String(20), default="incremental", nullable=False, server_default="incremental"
+    )
     # Provenance: captures graph_instructions + overrides + resolved at job start time
     effective_instructions = Column(JSON, nullable=True)
     # Ontology enforcement stats
@@ -69,6 +88,7 @@ class IngestionJob(Base):
 
 class GraphRollbackJob(Base):
     """Tracks async rollback jobs for large graphs (>10K nodes)."""
+
     __tablename__ = "graph_rollback_jobs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -93,49 +113,70 @@ class GraphRollbackJob(Base):
 
 class Connector(Base):
     """External data source connector registry"""
+
     __tablename__ = "connectors"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     graph_id = Column(Text, nullable=False, index=True)
     user_id = Column(Text, nullable=False, index=True)
     name = Column(Text, nullable=False)
-    connector_type = Column(Text, nullable=False)   # github, notion, linear, confluence, slack, rest_api, webhook_receiver
-    status = Column(Text, nullable=False, server_default="active")  # active, paused, error
+    connector_type = Column(
+        Text, nullable=False
+    )  # github, notion, linear, confluence, slack, rest_api, webhook_receiver
+    status = Column(
+        Text, nullable=False, server_default="active"
+    )  # active, paused, error
     config = Column(JSONB, nullable=False)
-    schedule = Column(Text, nullable=True)           # cron expression; NULL = webhook-only
+    schedule = Column(Text, nullable=True)  # cron expression; NULL = webhook-only
     last_synced_at = Column(DateTime(timezone=True), nullable=True)
     last_sync_cursor = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ConnectorSyncLog(Base):
     """Sync history for connectors"""
+
     __tablename__ = "connector_sync_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    connector_id = Column(UUID(as_uuid=True), ForeignKey("connectors.id", ondelete="CASCADE"), nullable=False, index=True)
+    connector_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("connectors.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     finished_at = Column(DateTime(timezone=True), nullable=True)
-    status = Column(Text, nullable=True)             # success, error, partial
+    status = Column(Text, nullable=True)  # success, error, partial
     items_processed = Column(Integer, nullable=False, server_default="0")
     entities_extracted = Column(Integer, nullable=False, server_default="0")
     error_message = Column(Text, nullable=True)
-    metadata = Column(JSONB, nullable=True)
+    sync_metadata = Column(JSONB, nullable=True)
 
 
 class WebhookEvent(Base):
     """Inbound webhook event queue with deduplication"""
+
     __tablename__ = "webhook_events"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    connector_id = Column(UUID(as_uuid=True), ForeignKey("connectors.id", ondelete="CASCADE"), nullable=False, index=True)
+    connector_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("connectors.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     event_type = Column(Text, nullable=True)
-    payload_hash = Column(Text, nullable=False)      # SHA-256 of raw payload for dedup
+    payload_hash = Column(Text, nullable=False)  # SHA-256 of raw payload for dedup
     payload = Column(JSONB, nullable=False)
     received_at = Column(DateTime(timezone=True), server_default=func.now())
     processed_at = Column(DateTime(timezone=True), nullable=True)
-    status = Column(Text, nullable=False, server_default="pending")  # pending, processed, error, duplicate
+    status = Column(
+        Text, nullable=False, server_default="pending"
+    )  # pending, processed, error, duplicate
     error_message = Column(Text, nullable=True)
 
     __table_args__ = (
