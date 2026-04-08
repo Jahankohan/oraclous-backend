@@ -15,6 +15,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from starlette.responses import Response
 
 from app.api.dependencies import get_current_user_id, verify_graph_access
 from app.core.logging import get_logger
@@ -177,6 +178,7 @@ async def update_memory(
 @router.delete(
     "/graphs/{graph_id}/memories/{memory_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     tags=["memories"],
     summary="Forget a memory (soft or hard delete)",
 )
@@ -185,7 +187,7 @@ async def delete_memory(
     memory_id: str,
     hard: bool = Query(default=False, description="Hard delete removes the node entirely"),
     user_id: str = Depends(get_current_user_id),
-) -> None:
+):
     await verify_graph_access(graph_id=graph_id, required_level="editor", user_id=user_id)
     try:
         await memory_service.delete_memory(

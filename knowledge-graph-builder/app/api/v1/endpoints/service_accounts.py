@@ -16,6 +16,7 @@ Error responses never reveal existence of inaccessible graphs (always 403, not 4
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
+from starlette.responses import Response
 
 from app.api.dependencies import (
     get_current_user,
@@ -196,6 +197,7 @@ async def update_service_account(
 @router.delete(
     "/service-accounts/{accountId}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def revoke_service_account(
     accountId: str,
@@ -321,6 +323,7 @@ async def list_graph_grants(
 @router.delete(
     "/service-accounts/{accountId}/graph-grants/{graphId}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def delete_graph_grant(
     accountId: str,

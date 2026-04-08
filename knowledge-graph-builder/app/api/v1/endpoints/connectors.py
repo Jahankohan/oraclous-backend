@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import Response
 
 from app.api.dependencies import get_current_user_id, get_database, verify_graph_access
 from app.schemas.connector_schemas import (
@@ -122,6 +123,7 @@ async def update_connector(
 @router.delete(
     "/graphs/{graph_id}/connectors/{connector_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a connector",
 )
 async def delete_connector(
