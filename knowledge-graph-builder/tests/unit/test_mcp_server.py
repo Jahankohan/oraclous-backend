@@ -4,27 +4,29 @@ Unit tests for the Oraclous MCP server tool handlers.
 All external dependencies (httpx client, Neo4j driver) are mocked so that
 these tests run without any live services.
 """
-from __future__ import annotations
 
-import pytest
-import pytest_asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
 
 # ---------------------------------------------------------------------------
 # Patch environment before importing the module under test so that the import
 # itself doesn't fail because ORACLOUS_API_KEY is not set.
 # ---------------------------------------------------------------------------
 import os
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+import pytest_asyncio
+
 os.environ.setdefault("ORACLOUS_API_KEY", "test-key")
 os.environ.setdefault("ORACLOUS_BASE_URL", "http://localhost:8003")
 
 import app.mcp.server as mcp_module
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _mock_httpx_response(status_code: int = 200, json_body: dict | list = None):
     """Return a mock httpx.Response."""
@@ -51,6 +53,7 @@ def _mock_async_client(get_return=None, post_return=None, delete_return=None):
 # Graph Management Tools
 # ---------------------------------------------------------------------------
 
+
 class TestCreateGraph:
     @pytest.mark.asyncio
     async def test_creates_graph_and_returns_metadata(self):
@@ -64,7 +67,9 @@ class TestCreateGraph:
         }
         client = _mock_async_client(post_return=_mock_httpx_response(200, api_response))
         with patch.object(mcp_module, "_client", return_value=client):
-            result = await mcp_module.create_graph(name="My Graph", description="A test graph")
+            result = await mcp_module.create_graph(
+                name="My Graph", description="A test graph"
+            )
 
         assert result["graph_id"] == "graph-001"
         assert result["name"] == "My Graph"
@@ -72,7 +77,13 @@ class TestCreateGraph:
 
     @pytest.mark.asyncio
     async def test_default_description_is_empty(self):
-        api_response = {"id": "g-1", "name": "X", "status": "active", "node_count": 0, "relationship_count": 0}
+        api_response = {
+            "id": "g-1",
+            "name": "X",
+            "status": "active",
+            "node_count": 0,
+            "relationship_count": 0,
+        }
         client = _mock_async_client(post_return=_mock_httpx_response(200, api_response))
         with patch.object(mcp_module, "_client", return_value=client):
             result = await mcp_module.create_graph(name="X")
@@ -84,8 +95,22 @@ class TestListGraphs:
     @pytest.mark.asyncio
     async def test_returns_list_of_graphs(self):
         api_response = [
-            {"id": "g-1", "name": "A", "description": "first", "status": "active", "node_count": 5, "relationship_count": 3},
-            {"id": "g-2", "name": "B", "description": "", "status": "active", "node_count": 0, "relationship_count": 0},
+            {
+                "id": "g-1",
+                "name": "A",
+                "description": "first",
+                "status": "active",
+                "node_count": 5,
+                "relationship_count": 3,
+            },
+            {
+                "id": "g-2",
+                "name": "B",
+                "description": "",
+                "status": "active",
+                "node_count": 0,
+                "relationship_count": 0,
+            },
         ]
         client = _mock_async_client(get_return=_mock_httpx_response(200, api_response))
         with patch.object(mcp_module, "_client", return_value=client):
@@ -136,11 +161,22 @@ class TestDeleteGraph:
         mock_app_client = MagicMock()
         mock_app_client.sync_driver = mock_driver
 
-        with patch.object(mcp_module, "_client", return_value=client), \
-             patch.dict("sys.modules", {"app.core.neo4j_client": MagicMock(neo4j_client=mock_app_client)}), \
-             patch("app.mcp.server.GraphNodeService", return_value=mock_svc, create=True):
+        with (
+            patch.object(mcp_module, "_client", return_value=client),
+            patch.dict(
+                "sys.modules",
+                {"app.core.neo4j_client": MagicMock(neo4j_client=mock_app_client)},
+            ),
+            patch(
+                "app.mcp.server.GraphNodeService", return_value=mock_svc, create=True
+            ),
+        ):
             # Patch the inner import within delete_graph
-            with patch("app.services.graph_node_service.GraphNodeService", mock_svc, create=True):
+            with patch(
+                "app.services.graph_node_service.GraphNodeService",
+                mock_svc,
+                create=True,
+            ):
                 result = await mcp_module.delete_graph("g-1")
 
         # We can't easily test the inner import path without heavier fixtures,
@@ -179,6 +215,7 @@ class TestGetGraphStats:
 # ---------------------------------------------------------------------------
 # Ingestion Tools
 # ---------------------------------------------------------------------------
+
 
 class TestIngestText:
     @pytest.mark.asyncio
@@ -240,6 +277,7 @@ class TestIngestFile:
 # Chat Tool
 # ---------------------------------------------------------------------------
 
+
 class TestChat:
     @pytest.mark.asyncio
     async def test_successful_chat(self):
@@ -264,9 +302,16 @@ class TestChat:
 
     @pytest.mark.asyncio
     async def test_valid_modes_accepted(self):
-        api_response = {"answer": "ok", "is_grounded": False, "sources": [], "retriever_used": "simple"}
+        api_response = {
+            "answer": "ok",
+            "is_grounded": False,
+            "sources": [],
+            "retriever_used": "simple",
+        }
         for mode in ("simple", "enhanced", "hybrid", "hybrid_plus", "natural"):
-            client = _mock_async_client(post_return=_mock_httpx_response(200, api_response))
+            client = _mock_async_client(
+                post_return=_mock_httpx_response(200, api_response)
+            )
             with patch.object(mcp_module, "_client", return_value=client):
                 result = await mcp_module.chat("g-1", "Q?", mode=mode)
             assert "error" not in result, f"mode {mode!r} should be valid"
@@ -285,12 +330,17 @@ class TestChat:
 # Node Inspection Tools
 # ---------------------------------------------------------------------------
 
-def _make_neo4j_sync_driver(records: list[dict] | None = None, single_record: dict | None = None):
+
+def _make_neo4j_sync_driver(
+    records: list[dict] | None = None, single_record: dict | None = None
+):
     """Build a minimal mock Neo4j sync driver."""
     mock_record = MagicMock()
     if single_record:
         mock_record.__getitem__ = MagicMock(side_effect=lambda k: single_record.get(k))
-        mock_record.get = MagicMock(side_effect=lambda k, default=None: single_record.get(k, default))
+        mock_record.get = MagicMock(
+            side_effect=lambda k, default=None: single_record.get(k, default)
+        )
 
     def _wrap(d):
         r = MagicMock()
@@ -318,14 +368,21 @@ class TestSearchNodes:
     @pytest.mark.asyncio
     async def test_returns_matching_entities(self):
         records = [
-            {"entity_id": "e-1", "name": "Alice", "type": "Person", "description": "CEO"},
+            {
+                "entity_id": "e-1",
+                "name": "Alice",
+                "type": "Person",
+                "description": "CEO",
+            },
         ]
         driver, _ = _make_neo4j_sync_driver(records=records)
         access_resp = _mock_httpx_response(200, {})
         client = _mock_async_client(get_return=access_resp)
 
-        with patch.object(mcp_module, "_client", return_value=client), \
-             patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver):
+        with (
+            patch.object(mcp_module, "_client", return_value=client),
+            patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver),
+        ):
             result = await mcp_module.search_nodes("g-1", "Alice")
 
         assert len(result) == 1
@@ -346,8 +403,10 @@ class TestSearchNodes:
         access_resp = _mock_httpx_response(200, {})
         client = _mock_async_client(get_return=access_resp)
 
-        with patch.object(mcp_module, "_client", return_value=client), \
-             patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver):
+        with (
+            patch.object(mcp_module, "_client", return_value=client),
+            patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver),
+        ):
             await mcp_module.search_nodes("g-1", "x", limit=999)
 
         # The Cypher call should use the clamped limit of 50
@@ -359,13 +418,20 @@ class TestSearchNodes:
 class TestGetNode:
     @pytest.mark.asyncio
     async def test_returns_entity_properties(self):
-        node_data = {"name": "Alice", "type": "Person", "description": "CEO", "entity_id": "e-1"}
+        node_data = {
+            "name": "Alice",
+            "type": "Person",
+            "description": "CEO",
+            "entity_id": "e-1",
+        }
         mock_node = MagicMock()
         # __iter__ makes dict(record["e"]) work
         mock_node.__iter__ = MagicMock(return_value=iter(node_data.items()))
 
         single_record = MagicMock()
-        single_record.__getitem__ = MagicMock(side_effect=lambda k: mock_node if k == "e" else None)
+        single_record.__getitem__ = MagicMock(
+            side_effect=lambda k: mock_node if k == "e" else None
+        )
 
         mock_result = MagicMock()
         mock_result.single.return_value = single_record
@@ -381,8 +447,10 @@ class TestGetNode:
         access_resp = _mock_httpx_response(200, {})
         client = _mock_async_client(get_return=access_resp)
 
-        with patch.object(mcp_module, "_client", return_value=client), \
-             patch.object(mcp_module, "_neo4j_sync_driver", return_value=mock_driver):
+        with (
+            patch.object(mcp_module, "_client", return_value=client),
+            patch.object(mcp_module, "_neo4j_sync_driver", return_value=mock_driver),
+        ):
             result = await mcp_module.get_node("g-1", "Alice")
 
         assert isinstance(result, dict)
@@ -403,8 +471,10 @@ class TestGetNode:
         access_resp = _mock_httpx_response(200, {})
         client = _mock_async_client(get_return=access_resp)
 
-        with patch.object(mcp_module, "_client", return_value=client), \
-             patch.object(mcp_module, "_neo4j_sync_driver", return_value=mock_driver):
+        with (
+            patch.object(mcp_module, "_client", return_value=client),
+            patch.object(mcp_module, "_neo4j_sync_driver", return_value=mock_driver),
+        ):
             result = await mcp_module.get_node("g-1", "Nobody")
 
         assert "error" in result
@@ -415,14 +485,21 @@ class TestGetNeighbors:
     @pytest.mark.asyncio
     async def test_returns_neighbors(self):
         records = [
-            {"anchor": "Alice", "rel_type": "WORKS_AT", "neighbor": "Acme", "neighbor_type": "Company"},
+            {
+                "anchor": "Alice",
+                "rel_type": "WORKS_AT",
+                "neighbor": "Acme",
+                "neighbor_type": "Company",
+            },
         ]
         driver, _ = _make_neo4j_sync_driver(records=records)
         access_resp = _mock_httpx_response(200, {})
         client = _mock_async_client(get_return=access_resp)
 
-        with patch.object(mcp_module, "_client", return_value=client), \
-             patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver):
+        with (
+            patch.object(mcp_module, "_client", return_value=client),
+            patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver),
+        ):
             result = await mcp_module.get_neighbors("g-1", "Alice", hops=1)
 
         assert result["entity"] == "Alice"
@@ -435,8 +512,10 @@ class TestGetNeighbors:
         access_resp = _mock_httpx_response(200, {})
         client = _mock_async_client(get_return=access_resp)
 
-        with patch.object(mcp_module, "_client", return_value=client), \
-             patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver):
+        with (
+            patch.object(mcp_module, "_client", return_value=client),
+            patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver),
+        ):
             result = await mcp_module.get_neighbors("g-1", "Unknown")
 
         assert "error" in result
@@ -449,9 +528,64 @@ class TestGetNeighbors:
         access_resp = _mock_httpx_response(200, {})
         client = _mock_async_client(get_return=access_resp)
 
-        with patch.object(mcp_module, "_client", return_value=client), \
-             patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver):
+        with (
+            patch.object(mcp_module, "_client", return_value=client),
+            patch.object(mcp_module, "_neo4j_sync_driver", return_value=driver),
+        ):
             # hops=10 should be clamped to 2 and not raise
             result = await mcp_module.get_neighbors("g-1", "Alice", hops=10)
 
         assert "error" in result or result.get("hops") == 2
+
+
+# ---------------------------------------------------------------------------
+# Lifespan / Shutdown
+# ---------------------------------------------------------------------------
+
+
+class TestLifespan:
+    @pytest.mark.asyncio
+    async def test_owned_driver_is_closed_on_shutdown(self):
+        """An owned (standalone) Neo4j driver must be closed when the server shuts down."""
+        mock_driver = MagicMock()
+        mock_http = AsyncMock()
+        mock_http.is_closed = False
+
+        mcp_module._neo4j_driver = mock_driver
+        mcp_module._neo4j_driver_owned = True
+        mcp_module._http_client = mock_http
+
+        async with mcp_module._lifespan(mcp_module.mcp):
+            pass  # server runs here; nothing to do
+
+        mock_driver.close.assert_called_once()
+        mock_http.aclose.assert_called_once()
+        assert mcp_module._neo4j_driver is None
+        assert mcp_module._http_client is None
+
+    @pytest.mark.asyncio
+    async def test_borrowed_driver_is_not_closed_on_shutdown(self):
+        """A borrowed app driver must NOT be closed by the MCP lifespan."""
+        mock_driver = MagicMock()
+        mock_http = AsyncMock()
+        mock_http.is_closed = True  # already closed
+
+        mcp_module._neo4j_driver = mock_driver
+        mcp_module._neo4j_driver_owned = False  # borrowed
+        mcp_module._http_client = mock_http
+
+        async with mcp_module._lifespan(mcp_module.mcp):
+            pass
+
+        mock_driver.close.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_with_no_driver_initialized(self):
+        """Lifespan must not raise when no driver was ever initialized."""
+        mcp_module._neo4j_driver = None
+        mcp_module._neo4j_driver_owned = False
+        mcp_module._http_client = None
+
+        # Should complete without error
+        async with mcp_module._lifespan(mcp_module.mcp):
+            pass

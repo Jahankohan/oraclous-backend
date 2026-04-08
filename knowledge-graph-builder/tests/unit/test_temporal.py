@@ -13,24 +13,26 @@ Covers:
 - IngestDataRequest.temporal_context field present and optional
 - ChatRequest.temporal_filter field present and optional
 """
-import pytest
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from pydantic import ValidationError
 
+from app.schemas.chat_schemas import ChatRequest
 from app.schemas.graph_schemas import (
+    IngestDataRequest,
     RelationshipProperties,
     TemporalContext,
     TemporalFilter,
     UpdateTemporalBoundsRequest,
-    IngestDataRequest,
 )
-from app.schemas.chat_schemas import ChatRequest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _dt(year: int, month: int = 1, day: int = 1) -> datetime:
     return datetime(year, month, day, tzinfo=timezone.utc)
@@ -45,6 +47,7 @@ def _rel_props(**kwargs) -> RelationshipProperties:
 # ---------------------------------------------------------------------------
 # RelationshipProperties — temporal field hardening
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 class TestRelationshipPropertiesTemporal:
@@ -106,6 +109,7 @@ class TestRelationshipPropertiesTemporal:
 # TemporalContext
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestTemporalContext:
     def test_basic_creation(self):
@@ -131,6 +135,7 @@ class TestTemporalContext:
 # ---------------------------------------------------------------------------
 # TemporalFilter
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 class TestTemporalFilter:
@@ -163,6 +168,7 @@ class TestTemporalFilter:
 # UpdateTemporalBoundsRequest
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestUpdateTemporalBoundsRequest:
     def test_valid_request(self):
@@ -182,50 +188,69 @@ class TestUpdateTemporalBoundsRequest:
 # compile_temporal_filter (TemporalFilterCompiler)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestCompileTemporalFilter:
     def _make_pipeline(self):
         from app.services.pipeline_service import MultiTenantGraphRAGPipeline
+
         pipeline = MultiTenantGraphRAGPipeline.__new__(MultiTenantGraphRAGPipeline)
         pipeline.graph_id = "test-graph"
         return pipeline
 
     def test_current_only_produces_null_check(self):
         pipeline = self._make_pipeline()
-        result = pipeline.compile_temporal_filter(TemporalFilter(current_only=True))
-        assert result == "r.valid_to IS NULL"
+        clause, params = pipeline.compile_temporal_filter(
+            TemporalFilter(current_only=True)
+        )
+        assert clause == "r.valid_to IS NULL"
+        assert params == {}
 
     def test_point_in_time_produces_range_clauses(self):
         pit = _dt(2022)
         pipeline = self._make_pipeline()
-        result = pipeline.compile_temporal_filter(TemporalFilter(point_in_time=pit))
-        assert "r.valid_from" in result
-        assert "r.valid_to" in result
-        assert pit.isoformat() in result
+        clause, params = pipeline.compile_temporal_filter(
+            TemporalFilter(point_in_time=pit)
+        )
+        assert "r.valid_from" in clause
+        assert "r.valid_to" in clause
+        # datetime value must be in params, not interpolated into the clause
+        assert "$tf_pit" in clause
+        assert pit.isoformat() not in clause
+        assert params["tf_pit"] == pit.isoformat()
 
     def test_empty_filter_returns_true(self):
         pipeline = self._make_pipeline()
-        result = pipeline.compile_temporal_filter(TemporalFilter())
-        assert result == "true"
+        clause, params = pipeline.compile_temporal_filter(TemporalFilter())
+        assert clause == "true"
+        assert params == {}
 
     def test_range_filter_includes_both_bounds(self):
         pipeline = self._make_pipeline()
         f = TemporalFilter(valid_from_gte=_dt(2020), valid_to_lte=_dt(2023))
-        result = pipeline.compile_temporal_filter(f)
-        assert _dt(2020).isoformat() in result
-        assert _dt(2023).isoformat() in result
-        assert "AND" in result
+        clause, params = pipeline.compile_temporal_filter(f)
+        # Values must be in params, not interpolated
+        assert "$tf_vf_gte" in clause
+        assert "$tf_vt_lte" in clause
+        assert _dt(2020).isoformat() not in clause
+        assert _dt(2023).isoformat() not in clause
+        assert params["tf_vf_gte"] == _dt(2020).isoformat()
+        assert params["tf_vt_lte"] == _dt(2023).isoformat()
+        assert "AND" in clause
 
     def test_graph_id_not_injected_into_clause(self):
         """compile_temporal_filter produces a clause for relationships only — not graph_id."""
         pipeline = self._make_pipeline()
-        result = pipeline.compile_temporal_filter(TemporalFilter(current_only=True))
-        assert "graph_id" not in result
+        clause, params = pipeline.compile_temporal_filter(
+            TemporalFilter(current_only=True)
+        )
+        assert "graph_id" not in clause
 
 
 # ---------------------------------------------------------------------------
 # IngestDataRequest — temporal_context field
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 class TestIngestDataRequestTemporalContext:
@@ -242,6 +267,7 @@ class TestIngestDataRequestTemporalContext:
 # ---------------------------------------------------------------------------
 # ChatRequest — temporal_filter field
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 class TestChatRequestTemporalFilter:
@@ -264,6 +290,7 @@ class TestChatRequestTemporalFilter:
 # ---------------------------------------------------------------------------
 # Temporal context override (unit — no Neo4j)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 class TestTemporalContextApplicationInPipeline:
