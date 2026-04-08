@@ -69,6 +69,7 @@ def test_current_trace_context_returns_ids_when_span_is_active():
 
 @pytest.mark.unit
 def test_get_tracer_returns_tracer():
+
     from app.core.telemetry import get_tracer
 
     tracer = get_tracer("test.tracer")
@@ -77,6 +78,7 @@ def test_get_tracer_returns_tracer():
 
 @pytest.mark.unit
 def test_get_meter_returns_meter():
+
     from app.core.telemetry import get_meter
 
     meter = get_meter("test.meter")

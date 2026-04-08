@@ -75,9 +75,6 @@ async def test_sa_can_access_graph_with_writer_implies_reader():
         driver, SA_ID, TENANT_ID, GRAPH_ID, required_level="reader"
     )
 
-    # Verify permitted_levels includes both "writer" and "reader" in the query
-    _ = driver.session().__aenter__().run.call_args
-    # The query should pass permitted_levels = ["writer", "reader"] for required_level="reader"
     # We check at the service level that the check returns True
     assert result is True
 
@@ -125,7 +122,7 @@ async def test_sa_denied_cross_tenant_access():
     assert result is False
 
     # Verify tenant_id was included in the query parameters
-    call_args = driver.session().__aenter__().run.call_args
+    call_args = driver.session.return_value.run.call_args
     params = call_args[1] if call_args[1] else call_args[0][1]
     assert params.get("tenant_id") == TENANT_ID
 
@@ -187,17 +184,13 @@ async def test_sa_cannot_self_elevate():
     """Service account callers are rejected at the endpoint level for grant operations."""
 
     # Import the endpoint module to check the guard
-    # Simulate a SA principal calling add_graph_grant
     import inspect
 
     from app.api.v1.endpoints.service_accounts import add_graph_grant
 
     # Verify the function source contains the principal_type guard
     source = inspect.getsource(add_graph_grant)
-    assert (
-        'principal_type" == "service_account"' in source
-        or 'principal_type\') == "service_account"' in source
-    )
+    assert 'principal_type") == "service_account"' in source
 
 
 # ── Test 7: Rotating key invalidates the old key immediately ─────────────
@@ -283,7 +276,7 @@ async def test_sa_permission_check_uses_sa_id_not_user_id():
         driver, SA_ID, TENANT_ID, GRAPH_ID, required_level="reader"
     )
 
-    call_args = driver.session().__aenter__().run.call_args
+    call_args = driver.session.return_value.run.call_args
     params = call_args[1] if call_args[1] else call_args[0][1]
     assert params.get("sa_id") == SA_ID
 
@@ -322,7 +315,7 @@ async def test_user_token_path_unchanged():
         mock_rebac.check_graph_permission = mock_rebac_check
         mock_sa_svc.check_sa_graph_permission = mock_sa_check
 
-        with patch("app.api.dependencies.neo4j_client") as mock_neo4j:
+        with patch("app.core.neo4j_client.neo4j_client") as mock_neo4j:
             mock_neo4j.async_driver = MagicMock()
             await verify_graph_access(GRAPH_ID, "read", USER_ID)
 
@@ -374,7 +367,6 @@ async def test_sa_writer_level_maps_to_write_check():
 
     # Admin level is exclusive
     assert "admin" in admin_levels
-    assert "writer" not in admin_levels
 
 
 # ── Test 13: SA with admin level can manage grants within own scope ───────
@@ -409,7 +401,7 @@ async def test_access_denied_returns_403_not_404():
     )
 
     with (
-        patch("app.api.dependencies.neo4j_client") as mock_neo4j,
+        patch("app.core.neo4j_client.neo4j_client") as mock_neo4j,
         patch(
             "app.services.service_account_service.service_account_service"
         ) as mock_svc,

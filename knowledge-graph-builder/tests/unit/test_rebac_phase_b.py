@@ -28,7 +28,7 @@ def _make_driver(single_return=None, iter_return=None):
 
     async def _aiter(self):
         for row in iter_return or []:
-            yield MagicMock(**row, __getitem__=lambda s, k, r=row: r[k])
+            yield MagicMock(**row, __getitem__=lambda s, k, _row=row: _row[k])
 
     result.__aiter__ = _aiter
     session.run = AsyncMock(return_value=result)

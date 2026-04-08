@@ -239,7 +239,7 @@ async def test_create_rollback_job_mode_is_full():
 
     with (
         patch("app.services.rollback_service.uuid") as mock_uuid,
-        patch.object(mock_db, "add"),
+        patch.object(mock_db, "add") as _mock_add,
     ):
 
         mock_uuid.uuid4.return_value = fake_job.id

@@ -87,9 +87,18 @@ export function standalone(): void {}
 
 
 @pytest.mark.unit
-def test_python_parsing_extracts_class_and_functions():
+def test_python_parsing_extracts_class_and_functions(tmp_path):
     """Criterion #1: 3 functions + 1 class → 4 symbols; graph_id set on all."""
-    meta = _make_file_meta("app/animals.py", PYTHON_MODULE)
+    src_file = tmp_path / "animals.py"
+    src_file.write_text(PYTHON_MODULE)
+    meta = FileMetadata(
+        path="app/animals.py",
+        abs_path=str(src_file),
+        language="python",
+        size_bytes=len(PYTHON_MODULE.encode()),
+        content_hash=_sha256(PYTHON_MODULE),
+        is_test=False,
+    )
     symbols = parse_file(meta)
 
     sym_types = {s.symbol_type for s in symbols}
@@ -104,9 +113,18 @@ def test_python_parsing_extracts_class_and_functions():
 
 
 @pytest.mark.unit
-def test_python_qualified_names_include_module():
+def test_python_qualified_names_include_module(tmp_path):
     """qualified_name must include module path prefix."""
-    meta = _make_file_meta("app/animals.py", PYTHON_MODULE)
+    src_file = tmp_path / "animals.py"
+    src_file.write_text(PYTHON_MODULE)
+    meta = FileMetadata(
+        path="app/animals.py",
+        abs_path=str(src_file),
+        language="python",
+        size_bytes=len(PYTHON_MODULE.encode()),
+        content_hash=_sha256(PYTHON_MODULE),
+        is_test=False,
+    )
     symbols = parse_file(meta)
 
     qnames = {s.qualified_name for s in symbols}
@@ -227,9 +245,7 @@ def test_resolve_symbols_creates_imports_edge():
     _, _, imports_edges, _ = resolve_symbols([importer, module_b], metas)
 
     # At least one import edge should reference mod_b as target
-    targets = {
-        e.get("target_name") or e.get("target_module") or "" for e in imports_edges
-    }
+    targets = {e.get("target") or e.get("target_name") or "" for e in imports_edges}
     assert any("mod_b" in t for t in targets)
 
 
@@ -434,7 +450,7 @@ def test_bootstrap_respects_exclude_patterns(tmp_path):
         git_url=None,
         branch="main",
         allowed_languages=None,
-        exclude_patterns=["**/test_*"],
+        exclude_patterns=["test_*"],
     )
 
     paths = {m.path for m in file_metas}

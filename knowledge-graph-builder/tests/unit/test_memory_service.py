@@ -5,13 +5,14 @@ All Neo4j calls are mocked — no real database required.
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.schemas.memory import (
+    ConflictInfo,
+    ContradictionResolution,
     MemoryCreate,
-    MemoryScope,
     MemorySource,
     MemoryType,
     MemoryUpdate,
@@ -194,8 +195,10 @@ class TestStoreMemory:
     async def test_contradiction_detection_called_for_semantic(self):
         svc = _make_service()
         mock_contradictions = [
-            MagicMock(
-                conflict_memory_id="old-id", content="Bob is CEO", resolution="new_wins"
+            ConflictInfo(
+                conflict_memory_id="old-id",
+                content="Bob is CEO",
+                resolution=ContradictionResolution.NEW_WINS,
             )
         ]
 
@@ -359,25 +362,11 @@ class TestConsolidate:
 class TestMemoryRetriever:
     @pytest.mark.unit
     async def test_search_returns_formatted_results(self):
-        from app.schemas.memory import MemorySearchResponse, MemorySearchResult
         from app.schemas.retriever_schemas import MemoryRetrieverConfig
         from app.services.retriever_factory import MemoryRetriever
 
         config = MemoryRetrieverConfig(query="test", top_k=5)
         retriever = MemoryRetriever(graph_id="graph-1", config=config)
-
-        mock_result = MemorySearchResult(
-            memory_id="m1",
-            type=MemoryType.SEMANTIC,
-            content="Reza is CEO",
-            importance_score=0.9,
-            relevance_score=0.85,
-            confidence=0.95,
-            valid_from=None,
-            valid_to=None,
-            scope=MemoryScope.ORGANIZATION,
-        )
-        MemorySearchResponse(memories=[mock_result], total=1)
 
         with patch(
             "app.services.retriever_factory.MemoryRetriever.search",

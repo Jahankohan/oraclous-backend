@@ -295,12 +295,12 @@ class TestDocumentProcessorPDFDelegation:
             "app.services.pdf_extractor.extract_pdf",
             return_value={
                 "text": "This is the extracted PDF text content.",
-                "page_count": 3,
                 "has_tables": False,
                 "image_paths": [],
                 "metadata": {
                     "processing_method": "pymupdf",
                     "content_type": "application/pdf",
+                    "page_count": 3,
                 },
             },
         ):
