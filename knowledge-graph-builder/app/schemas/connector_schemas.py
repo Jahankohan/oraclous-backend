@@ -1,11 +1,11 @@
-"""Pydantic schemas for the Connector Framework (ORA-78)."""
+"""Pydantic schemas for the Connector Framework (ORA-78) and Database Connectors (ORA-77)."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Auth config
@@ -161,6 +161,68 @@ class ConnectorTemplate(BaseModel):
 # ---------------------------------------------------------------------------
 # Built-in connector templates (spec §5)
 # ---------------------------------------------------------------------------
+
+# ===========================================================================
+# Database Connector schemas (ORA-77)
+# ===========================================================================
+
+DbConnectorType = Literal["postgresql", "mysql", "mongodb"]
+DbSyncModeType = Literal["full_snapshot", "schema_only", "cdc"]
+
+
+class RegisterDbConnectorRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=255)
+    connector_type: DbConnectorType
+    host: str = Field(..., min_length=1, max_length=253)
+    port: int = Field(..., ge=1, le=65535)
+    database: str = Field(..., min_length=1, max_length=255)
+    sync_mode: DbSyncModeType = "full_snapshot"
+    schema_filter: str | None = None  # PostgreSQL/MySQL schema name
+    table_filter: list[str] | None = None  # None = all tables
+    sample_row_limit: int = Field(default=100, ge=1, le=1000)
+
+
+class TriggerDbSyncRequest(BaseModel):
+    sync_mode: DbSyncModeType | None = None  # Override connector's default
+    table_filter: list[str] | None = None  # Subset for this run only
+    dry_run: bool = False
+
+
+class DbConnectorResponse(BaseModel):
+    connector_id: str
+    graph_id: str
+    display_name: str
+    connector_type: str
+    host: str
+    port: int
+    database: str
+    sync_mode: str
+    status: str
+    last_sync_at: int | None = None  # epoch milliseconds
+    last_sync_status: str | None = None
+    last_sync_row_count: int | None = None
+    created_at: int
+    updated_at: int
+
+    model_config = {"from_attributes": True}
+
+
+class DbConnectorDetailResponse(DbConnectorResponse):
+    recent_errors: list[dict[str, Any]] = []
+
+
+class DbConnectorListResponse(BaseModel):
+    connectors: list[DbConnectorResponse]
+    total: int
+
+
+class TriggerDbSyncResponse(BaseModel):
+    job_id: str
+    connector_id: str
+    sync_mode: str
+    status: str
+    queued_at: str
+
 
 CONNECTOR_TEMPLATES: dict[str, ConnectorTemplate] = {
     "github": ConnectorTemplate(
