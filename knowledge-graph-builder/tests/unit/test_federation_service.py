@@ -159,6 +159,48 @@ async def test_validate_passes_for_all_owned_and_federatable():
     assert {r["graph_id"] for r in result} == set(graph_ids)
 
 
+# ─── Regression tests (ORA-102) ───────────────────────────────────────────────
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_validate_uses_owner_user_id_not_user_id():
+    """Regression for ORA-102: query must read g.owner_user_id, not g.user_id.
+
+    The Graph node stores ownership under owner_user_id (set by rebac_service).
+    Using g.user_id (which is always None) caused all federated queries to 403.
+    """
+    import inspect
+
+    from app.services.federation_service import FederationService
+
+    source = inspect.getsource(FederationService._validate_and_filter)
+    assert "g.owner_user_id" in source, (
+        "Regression: _validate_and_filter must read g.owner_user_id (not g.user_id)"
+    )
+    assert "g.user_id AS user_id" not in source, (
+        "Regression: _validate_and_filter must NOT read g.user_id (it is always None)"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_validate_matches_system_namespace():
+    """Regression for ORA-102: query must filter Graph nodes by namespace='__system__'.
+
+    Without the namespace filter, non-ReBAC Graph nodes could be matched,
+    causing false positives/negatives in ownership checks.
+    """
+    import inspect
+
+    from app.services.federation_service import FederationService
+
+    source = inspect.getsource(FederationService._validate_and_filter)
+    assert "__system__" in source, (
+        "Regression: _validate_and_filter must filter by namespace='__system__'"
+    )
+
+
 # ─── Query builder tests ──────────────────────────────────────────────────────
 
 
