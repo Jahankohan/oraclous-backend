@@ -175,12 +175,12 @@ async def test_validate_uses_owner_user_id_not_user_id():
     from app.services.federation_service import FederationService
 
     source = inspect.getsource(FederationService._validate_and_filter)
-    assert "g.owner_user_id" in source, (
-        "Regression: _validate_and_filter must read g.owner_user_id (not g.user_id)"
-    )
-    assert "g.user_id AS user_id" not in source, (
-        "Regression: _validate_and_filter must NOT read g.user_id (it is always None)"
-    )
+    assert (
+        "g.owner_user_id" in source
+    ), "Regression: _validate_and_filter must read g.owner_user_id (not g.user_id)"
+    assert (
+        "g.user_id AS user_id" not in source
+    ), "Regression: _validate_and_filter must NOT read g.user_id (it is always None)"
 
 
 @pytest.mark.unit
@@ -196,9 +196,9 @@ async def test_validate_matches_system_namespace():
     from app.services.federation_service import FederationService
 
     source = inspect.getsource(FederationService._validate_and_filter)
-    assert "__system__" in source, (
-        "Regression: _validate_and_filter must filter by namespace='__system__'"
-    )
+    assert (
+        "__system__" in source
+    ), "Regression: _validate_and_filter must filter by namespace='__system__'"
 
 
 # ─── Query builder tests ──────────────────────────────────────────────────────
