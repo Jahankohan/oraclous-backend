@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re as _re
 import socket
 import uuid
 from abc import ABC, abstractmethod
@@ -346,6 +347,10 @@ class PostgreSQLConnector(DatabaseConnector):
     async def extract_sample_data(self, table: str, limit: int) -> List[SampleRow]:
         if not self._conn:
             raise RuntimeError("Not connected.")
+        # Table/schema identifiers cannot be parameterized in SQL — asyncpg $N
+        # placeholders are for values only, not identifiers.  Both values come
+        # from DB schema introspection (never direct user input).  Standard SQL
+        # double-quoting prevents injection from names containing special chars.
         rows = await self._conn.fetch(
             f'SELECT * FROM "{self._schema}"."{table}" LIMIT $1', limit
         )
@@ -454,6 +459,10 @@ class MySQLConnector(DatabaseConnector):
         import aiomysql  # type: ignore
 
         async with self._conn.cursor(aiomysql.DictCursor) as cur:
+            # Table/database identifiers cannot be parameterized in SQL — aiomysql
+            # %s placeholders are for values only, not identifiers.  Both values
+            # come from DB schema introspection (never direct user input).  MySQL
+            # backtick-quoting prevents injection from names containing special chars.
             await cur.execute(
                 f"SELECT * FROM `{self._database}`.`{table}` LIMIT %s", (limit,)
             )
@@ -568,7 +577,9 @@ class MongoDBConnector(DatabaseConnector):
                         fk_table=fk_table,
                     )
                 )
-            tables.append(TableMeta(name=coll_name, schema_name=self._database, columns=columns))
+            tables.append(
+                TableMeta(name=coll_name, schema_name=self._database, columns=columns)
+            )
 
         return SchemaSnapshot(
             connector_type=DatabaseConnectorType.MONGODB,
@@ -607,7 +618,9 @@ class MongoDBConnector(DatabaseConnector):
 # ---------------------------------------------------------------------------
 
 
-def make_connector(connector_type: DatabaseConnectorType, config: Dict[str, Any]) -> DatabaseConnector:
+def make_connector(
+    connector_type: DatabaseConnectorType, config: Dict[str, Any]
+) -> DatabaseConnector:
     if connector_type == DatabaseConnectorType.POSTGRESQL:
         return PostgreSQLConnector(config)
     if connector_type == DatabaseConnectorType.MYSQL:
@@ -660,7 +673,17 @@ def _entity_label(table_name: str) -> str:
 
 
 def _rel_type(target_label: str) -> str:
-    return f"REFERENCES_{target_label.upper()}"
+    # Neo4j relationship types cannot be parameterized in Cypher — they must
+    # appear as literal identifiers in the query string.  We derive the type
+    # from the FK target label (which itself comes from DB schema introspection,
+    # never from direct user input) and validate it before interpolation so that
+    # a malformed label can never inject arbitrary Cypher tokens.
+    safe = f"REFERENCES_{target_label.upper()}"
+    if not _re.match(r"^[A-Z_][A-Z0-9_]*$", safe):
+        raise ValueError(
+            f"Derived relationship type is not a valid Cypher identifier: {safe!r}"
+        )
+    return safe
 
 
 # ---------------------------------------------------------------------------
@@ -903,9 +926,7 @@ class DatabaseConnectorService:
         )
         return [dict(r["c"]) for r in result]
 
-    async def get_connector(
-        self, graph_id: str, connector_id: str
-    ) -> Dict[str, Any]:
+    async def get_connector(self, graph_id: str, connector_id: str) -> Dict[str, Any]:
         """Get connector with last 5 sync errors."""
         result = await neo4j_client.execute_query(
             """
@@ -982,7 +1003,11 @@ class DatabaseConnectorService:
             MATCH (c:Connector {graph_id: $graph_id, connector_id: $connector_id})
             SET c.last_schema_snapshot = $snapshot
             """,
-            {"graph_id": graph_id, "connector_id": connector_id, "snapshot": snapshot_json},
+            {
+                "graph_id": graph_id,
+                "connector_id": connector_id,
+                "snapshot": snapshot_json,
+            },
         )
 
     async def record_sync_error(
