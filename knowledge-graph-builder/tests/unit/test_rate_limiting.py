@@ -8,7 +8,7 @@ Verifies:
 - Requests within the limit return the expected non-429 response
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,7 +23,6 @@ from slowapi.errors import RateLimitExceeded
 def _make_app():
     """Build a minimal FastAPI app with the rate limiter attached."""
     from fastapi import FastAPI
-    from slowapi import _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
 
     from app.core.rate_limiter import limiter
@@ -76,7 +75,6 @@ def test_rate_limit_exceeded_handler_registered():
 def test_rate_limit_exceeded_returns_429():
     """When the limiter raises RateLimitExceeded the response status is 429."""
     from fastapi import FastAPI, Request
-    from fastapi.testclient import TestClient
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
     from slowapi.util import get_remote_address
@@ -106,7 +104,6 @@ def test_rate_limit_exceeded_returns_429():
 def test_different_ips_have_independent_limits():
     """Rate limits are per-IP — different IPs do not share a bucket."""
     from fastapi import FastAPI, Request
-    from fastapi.testclient import TestClient
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
     from slowapi.util import get_remote_address

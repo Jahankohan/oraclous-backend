@@ -12,7 +12,7 @@ so it can be fed directly into the existing text-based ingestion pipeline.
 import base64
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -70,7 +70,7 @@ class VisionExtractor:
         image_path: str,
         context: str = "",
         model: str = "claude",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Extract entities and relationships from an image file.
 
@@ -95,7 +95,7 @@ class VisionExtractor:
     # ── Serialisation helper ──────────────────────────────────────────────────
 
     @staticmethod
-    def to_text(result: Dict[str, Any], context: str = "") -> str:
+    def to_text(result: dict[str, Any], context: str = "") -> str:
         """
         Convert vision extraction output to human-readable text suitable for
         the existing text ingestion pipeline.
@@ -106,7 +106,7 @@ class VisionExtractor:
             API Gateway is a Service. HTTP routing service.
             AWS Lambda DEPENDS ON API Gateway.
         """
-        lines: List[str] = []
+        lines: list[str] = []
         if context:
             lines.append(f"Source context: {context}\n")
 
@@ -135,7 +135,7 @@ class VisionExtractor:
 
     def _extract_claude(
         self, image_b64: str, media_type: str, prompt: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         try:
             import anthropic
         except ImportError:
@@ -175,7 +175,7 @@ class VisionExtractor:
 
     def _extract_gpt4o(
         self, image_b64: str, media_type: str, prompt: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         try:
             from openai import OpenAI
         except ImportError:
@@ -222,7 +222,7 @@ class VisionExtractor:
         return _SUPPORTED_EXTENSIONS.get(suffix, "image/png")
 
     @staticmethod
-    def _parse(text: str) -> Dict[str, Any]:
+    def _parse(text: str) -> dict[str, Any]:
         """Parse JSON from LLM response, stripping markdown fences if present."""
         stripped = text.strip()
         if stripped.startswith("```"):

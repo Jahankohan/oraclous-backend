@@ -5,8 +5,10 @@ Security invariant: No authenticated user may access another tenant's
 knowledge graph via the chat API. These tests verify that /chat and
 /chat/stream return 403 when the requesting user does not own the graph.
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 OWNER_USER_ID = "owner-user-abc"
 OTHER_USER_ID = "intruder-user-xyz"
@@ -26,6 +28,7 @@ def _mock_auth(user_id: str):
 # ---------------------------------------------------------------------------
 # POST /chat ownership checks
 # ---------------------------------------------------------------------------
+
 
 class TestChatOwnership:
 
@@ -53,7 +56,9 @@ class TestChatOwnership:
         p = _mock_auth(OTHER_USER_ID)
         try:
             with patch("app.api.v1.endpoints.chat.GraphNodeService") as mock_gs_cls:
-                mock_gs_cls.return_value.get_graph.return_value = {"user_id": OWNER_USER_ID}
+                mock_gs_cls.return_value.get_graph.return_value = {
+                    "user_id": OWNER_USER_ID
+                }
                 response = await async_client.post(
                     "/api/v1/api/v1/chat",
                     json=CHAT_PAYLOAD,
@@ -70,13 +75,17 @@ class TestChatOwnership:
         """Ownership check passes and endpoint logic executes when user owns the graph."""
         p = _mock_auth(OWNER_USER_ID)
         try:
-            with patch("app.api.v1.endpoints.chat.GraphNodeService") as mock_gs_cls, \
-                 patch("app.services.chat_service.OpenAIEmbeddings"), \
-                 patch("app.services.chat_service.OpenAILLM"), \
-                 patch("app.services.chat_service.settings") as mock_cfg, \
-                 patch("app.services.chat_service.retriever_factory") as mock_fac, \
-                 patch("app.services.chat_service.GraphRAG") as mock_rag_cls:
-                mock_gs_cls.return_value.get_graph.return_value = {"user_id": OWNER_USER_ID}
+            with (
+                patch("app.api.v1.endpoints.chat.GraphNodeService") as mock_gs_cls,
+                patch("app.services.chat_service.OpenAIEmbeddings"),
+                patch("app.services.chat_service.OpenAILLM"),
+                patch("app.services.chat_service.settings") as mock_cfg,
+                patch("app.services.chat_service.retriever_factory") as mock_fac,
+                patch("app.services.chat_service.GraphRAG") as mock_rag_cls,
+            ):
+                mock_gs_cls.return_value.get_graph.return_value = {
+                    "user_id": OWNER_USER_ID
+                }
                 mock_cfg.OPENAI_API_KEY = "test-key"
                 mock_fac.create_retriever.return_value = MagicMock()
                 rag_instance = MagicMock()
@@ -120,6 +129,7 @@ class TestChatOwnership:
 # POST /chat/stream ownership checks
 # ---------------------------------------------------------------------------
 
+
 class TestChatStreamOwnership:
 
     @pytest.mark.unit
@@ -141,12 +151,16 @@ class TestChatStreamOwnership:
         assert response.json()["detail"] == "Access denied"
 
     @pytest.mark.unit
-    async def test_stream_returns_403_when_graph_owned_by_other_user(self, async_client):
+    async def test_stream_returns_403_when_graph_owned_by_other_user(
+        self, async_client
+    ):
         """POST /chat/stream returns 403 when authenticated user does not own the graph."""
         p = _mock_auth(OTHER_USER_ID)
         try:
             with patch("app.api.v1.endpoints.chat.GraphNodeService") as mock_gs_cls:
-                mock_gs_cls.return_value.get_graph.return_value = {"user_id": OWNER_USER_ID}
+                mock_gs_cls.return_value.get_graph.return_value = {
+                    "user_id": OWNER_USER_ID
+                }
                 response = await async_client.post(
                     "/api/v1/api/v1/chat/stream",
                     json=CHAT_PAYLOAD,
@@ -163,13 +177,17 @@ class TestChatStreamOwnership:
         """Ownership check passes and streaming pipeline executes for graph owner."""
         p = _mock_auth(OWNER_USER_ID)
         try:
-            with patch("app.api.v1.endpoints.chat.GraphNodeService") as mock_gs_cls, \
-                 patch("app.services.chat_service.OpenAIEmbeddings"), \
-                 patch("app.services.chat_service.OpenAILLM"), \
-                 patch("app.services.chat_service.settings") as mock_cfg, \
-                 patch("app.services.chat_service.retriever_factory") as mock_fac, \
-                 patch("app.services.chat_service.GraphRAG") as mock_rag_cls:
-                mock_gs_cls.return_value.get_graph.return_value = {"user_id": OWNER_USER_ID}
+            with (
+                patch("app.api.v1.endpoints.chat.GraphNodeService") as mock_gs_cls,
+                patch("app.services.chat_service.OpenAIEmbeddings"),
+                patch("app.services.chat_service.OpenAILLM"),
+                patch("app.services.chat_service.settings") as mock_cfg,
+                patch("app.services.chat_service.retriever_factory") as mock_fac,
+                patch("app.services.chat_service.GraphRAG") as mock_rag_cls,
+            ):
+                mock_gs_cls.return_value.get_graph.return_value = {
+                    "user_id": OWNER_USER_ID
+                }
                 mock_cfg.OPENAI_API_KEY = "test-key"
                 mock_fac.create_retriever.return_value = MagicMock()
                 rag_instance = MagicMock()

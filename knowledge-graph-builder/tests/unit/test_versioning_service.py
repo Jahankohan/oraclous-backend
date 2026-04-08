@@ -4,14 +4,14 @@ Unit tests for VersioningService.
 Covers: create_version, list_versions, get_version, delete_version, diff_versions, rollback.
 All Neo4j calls are mocked — no live database required.
 """
+
 import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.services.versioning_service import VersioningService, _version_ts
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,7 +20,7 @@ from app.services.versioning_service import VersioningService, _version_ts
 GRAPH_ID = str(uuid.uuid4())
 VERSION_ID = str(uuid.uuid4())
 OTHER_VERSION_ID = str(uuid.uuid4())
-_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=UTC)
 _NOW_ISO = _NOW.isoformat()
 
 
@@ -51,6 +51,7 @@ def _make_service() -> VersioningService:
 # _version_ts helper
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_version_ts_string_passthrough():
     version = {"captured_at": _NOW_ISO}
@@ -75,6 +76,7 @@ def test_version_ts_handles_neo4j_datetime_object():
 # create_version
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 async def test_create_version_passes_graph_id_to_cypher():
     """All Cypher calls in create_version must include graph_id (multi-tenancy rule #4)."""
@@ -82,7 +84,9 @@ async def test_create_version_passes_graph_id_to_cypher():
     node = _fake_neo4j_node()
 
     with patch("app.services.versioning_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(return_value=[{"entity_count": 5, "relationship_count": 3}])
+        mock_client.execute_query = AsyncMock(
+            return_value=[{"entity_count": 5, "relationship_count": 3}]
+        )
 
         # Second call for version_number, third for create
         mock_client.execute_query.side_effect = [
@@ -91,7 +95,7 @@ async def test_create_version_passes_graph_id_to_cypher():
             [{"v": node}],
         ]
 
-        result = await svc.create_version(
+        await svc.create_version(
             graph_id=GRAPH_ID,
             label="v1",
             description="test",
@@ -111,11 +115,13 @@ async def test_create_version_returns_version_dict():
     node = _fake_neo4j_node()
 
     with patch("app.services.versioning_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(side_effect=[
-            [{"entity_count": 5, "relationship_count": 3}],
-            [{"next_num": 2}],
-            [{"v": node}],
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                [{"entity_count": 5, "relationship_count": 3}],
+                [{"next_num": 2}],
+                [{"v": node}],
+            ]
+        )
 
         result = await svc.create_version(
             graph_id=GRAPH_ID,
@@ -131,6 +137,7 @@ async def test_create_version_returns_version_dict():
 # ---------------------------------------------------------------------------
 # list_versions
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 async def test_list_versions_filters_by_graph_id():
@@ -160,6 +167,7 @@ async def test_list_versions_empty_returns_empty_list():
 # get_version
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 async def test_get_version_filters_by_both_graph_id_and_version_id():
     """get_version must scope to both graph_id and version_id."""
@@ -188,6 +196,7 @@ async def test_get_version_returns_none_when_not_found():
 # ---------------------------------------------------------------------------
 # delete_version
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 async def test_delete_version_returns_true_when_found():
@@ -220,9 +229,7 @@ async def test_delete_version_passes_graph_id_to_cypher():
     node = _fake_neo4j_node()
 
     with patch("app.services.versioning_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(
-            side_effect=[[{"v": node}], []]
-        )
+        mock_client.execute_query = AsyncMock(side_effect=[[{"v": node}], []])
         await svc.delete_version(GRAPH_ID, VERSION_ID)
 
     # Both calls (get and delete) should have graph_id
@@ -235,6 +242,7 @@ async def test_delete_version_passes_graph_id_to_cypher():
 # diff_versions
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 async def test_diff_versions_returns_summary_and_changes():
     """diff_versions returns expected structure with summary and changes."""
@@ -245,15 +253,23 @@ async def test_diff_versions_returns_summary_and_changes():
     with patch("app.services.versioning_service.neo4j_client") as mock_client:
         mock_client.execute_query = AsyncMock(
             side_effect=[
-                [{"v": v1}],   # get v1
-                [{"v": v2}],   # get v2
+                [{"v": v1}],  # get v1
+                [{"v": v2}],  # get v2
                 [{"cnt": 2}],  # ea count
                 [{"cnt": 1}],  # ed count
                 [{"cnt": 1}],  # ra count
                 [{"cnt": 0}],  # rd count
-                [             # changes
-                    {"type": "entity_added", "id": "e1", "name": "A", "entity_type": "Person",
-                     "subject": "", "predicate": "", "object": "", "ts": _NOW_ISO}
+                [  # changes
+                    {
+                        "type": "entity_added",
+                        "id": "e1",
+                        "name": "A",
+                        "entity_type": "Person",
+                        "subject": "",
+                        "predicate": "",
+                        "object": "",
+                        "ts": _NOW_ISO,
+                    }
                 ],
             ]
         )
@@ -278,6 +294,7 @@ async def test_diff_versions_raises_on_missing_version():
 # ---------------------------------------------------------------------------
 # rollback (full path)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 async def test_rollback_requires_version_to_exist():
@@ -304,15 +321,17 @@ async def test_rollback_all_cypher_queries_include_graph_id():
         checkpoint_node = _fake_neo4j_node(str(uuid.uuid4()))
         mock_client.execute_query = AsyncMock(
             side_effect=[
-                [{"v": node}],                      # get_version
-                [{"entity_count": 5, "relationship_count": 3}],  # create checkpoint — count
-                [{"next_num": 2}],                  # checkpoint — version number
-                [{"v": checkpoint_node}],            # checkpoint — create node
-                [{"cnt": 2}],                        # del_new_entities
-                [{"cnt": 1}],                        # restore_entities
-                [{"cnt": 1}],                        # del_new_rels
-                [{"cnt": 0}],                        # restore_rels
-                [],                                  # integrity cascade
+                [{"v": node}],  # get_version
+                [
+                    {"entity_count": 5, "relationship_count": 3}
+                ],  # create checkpoint — count
+                [{"next_num": 2}],  # checkpoint — version number
+                [{"v": checkpoint_node}],  # checkpoint — create node
+                [{"cnt": 2}],  # del_new_entities
+                [{"cnt": 1}],  # restore_entities
+                [{"cnt": 1}],  # del_new_rels
+                [{"cnt": 0}],  # restore_rels
+                [],  # integrity cascade
             ]
         )
 

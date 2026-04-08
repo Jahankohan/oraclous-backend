@@ -4,19 +4,21 @@ Unit tests for background_jobs.py.
 Tests WorkerNeo4jManager, job status transitions, and error handling
 — all external deps (Neo4j, PostgreSQL, Celery) mocked.
 """
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
+
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
+
+import pytest
 
 from app.services.background_jobs import (
     WorkerNeo4jManager,
     _update_job_status_async,
 )
 
-
 # ---------------------------------------------------------------------------
 # Tests: WorkerNeo4jManager — context manager
 # ---------------------------------------------------------------------------
+
 
 class TestWorkerNeo4jManager:
     @pytest.mark.unit
@@ -169,7 +171,9 @@ class TestWorkerNeo4jManager:
             mock_settings.NEO4J_PASSWORD = "password"
 
             with patch("neo4j.GraphDatabase.driver") as mock_driver_cls:
-                mock_driver_cls.return_value.verify_connectivity.side_effect = Exception("connection refused")
+                mock_driver_cls.return_value.verify_connectivity.side_effect = (
+                    Exception("connection refused")
+                )
 
                 with pytest.raises(Exception, match="connection refused"):
                     manager.connect_sync_only()
@@ -204,8 +208,12 @@ class TestUpdateJobStatusAsync:
         mock_session.commit = AsyncMock()
 
         await _update_job_status_async(
-            mock_session, VALID_JOB_ID, "completed",
-            entities=10, relationships=5, chunks=3
+            mock_session,
+            VALID_JOB_ID,
+            "completed",
+            entities=10,
+            relationships=5,
+            chunks=3,
         )
 
         # Verify the session was called with a statement
@@ -218,8 +226,7 @@ class TestUpdateJobStatusAsync:
         mock_session.commit = AsyncMock()
 
         await _update_job_status_async(
-            mock_session, VALID_JOB_ID, "failed",
-            error="Neo4j unavailable"
+            mock_session, VALID_JOB_ID, "failed", error="Neo4j unavailable"
         )
 
         mock_session.execute.assert_awaited_once()
@@ -243,11 +250,7 @@ class TestUpdateJobStatusAsync:
         mock_session.execute = AsyncMock()
         mock_session.commit = AsyncMock()
 
-        await _update_job_status_async(
-            mock_session,
-            VALID_JOB_ID,
-            "processing"
-        )
+        await _update_job_status_async(mock_session, VALID_JOB_ID, "processing")
         mock_session.commit.assert_awaited_once()
 
     @pytest.mark.unit
@@ -261,6 +264,7 @@ class TestUpdateJobStatusAsync:
 # ---------------------------------------------------------------------------
 # Tests: process_ingestion_job state transitions (via async impl)
 # ---------------------------------------------------------------------------
+
 
 class TestProcessIngestionJobStateTransitions:
     @pytest.mark.unit
@@ -278,7 +282,9 @@ class TestProcessIngestionJobStateTransitions:
         with patch("app.services.background_jobs.worker_session_maker") as mock_maker:
             mock_maker.return_value = mock_session
 
-            result = await _process_pipeline_ingestion_async(mock_task, "12345678-1234-5678-1234-567812345678", "user-1")
+            result = await _process_pipeline_ingestion_async(
+                mock_task, "12345678-1234-5678-1234-567812345678", "user-1"
+            )
 
         assert result["status"] == "failed"
         assert "not found" in result["error"]
@@ -305,13 +311,20 @@ class TestProcessIngestionJobStateTransitions:
         mock_neo4j.__aenter__ = AsyncMock(return_value=mock_neo4j)
         mock_neo4j.__aexit__ = AsyncMock(return_value=False)
         mock_graph_service = MagicMock()
-        mock_graph_service.get_graph.return_value = {"user_id": "user-1", "graph_id": str(mock_job.graph_id)}
+        mock_graph_service.get_graph.return_value = {
+            "user_id": "user-1",
+            "graph_id": str(mock_job.graph_id),
+        }
         mock_neo4j.get_sync_driver = MagicMock(return_value=MagicMock())
 
-        with patch("app.services.background_jobs.worker_session_maker") as mock_maker, \
-             patch("app.services.background_jobs.WorkerNeo4jManager") as mock_manager_cls, \
-             patch("app.services.background_jobs.GraphNodeService") as mock_gns_cls, \
-             patch("app.services.background_jobs.document_processor") as mock_doc_proc:
+        with (
+            patch("app.services.background_jobs.worker_session_maker") as mock_maker,
+            patch(
+                "app.services.background_jobs.WorkerNeo4jManager"
+            ) as mock_manager_cls,
+            patch("app.services.background_jobs.GraphNodeService") as mock_gns_cls,
+            patch("app.services.background_jobs.document_processor") as mock_doc_proc,
+        ):
 
             mock_maker.return_value = mock_session
             mock_manager_cls.return_value = mock_neo4j
@@ -319,9 +332,7 @@ class TestProcessIngestionJobStateTransitions:
             mock_doc_proc.process_document.side_effect = Exception("parsing failed")
 
             result = await _process_pipeline_ingestion_async(
-                mock_task,
-                "12345678-1234-5678-1234-567812345678",
-                "user-1"
+                mock_task, "12345678-1234-5678-1234-567812345678", "user-1"
             )
 
         assert result["status"] == "failed"
@@ -352,11 +363,18 @@ class TestProcessIngestionJobStateTransitions:
 
         mock_graph_service = MagicMock()
         # Graph belongs to different user
-        mock_graph_service.get_graph.return_value = {"user_id": "other-user", "graph_id": str(mock_job.graph_id)}
+        mock_graph_service.get_graph.return_value = {
+            "user_id": "other-user",
+            "graph_id": str(mock_job.graph_id),
+        }
 
-        with patch("app.services.background_jobs.worker_session_maker") as mock_maker, \
-             patch("app.services.background_jobs.WorkerNeo4jManager") as mock_manager_cls, \
-             patch("app.services.background_jobs.GraphNodeService") as mock_gns_cls:
+        with (
+            patch("app.services.background_jobs.worker_session_maker") as mock_maker,
+            patch(
+                "app.services.background_jobs.WorkerNeo4jManager"
+            ) as mock_manager_cls,
+            patch("app.services.background_jobs.GraphNodeService") as mock_gns_cls,
+        ):
 
             mock_maker.return_value = mock_session
             mock_manager_cls.return_value = mock_neo4j
@@ -365,7 +383,7 @@ class TestProcessIngestionJobStateTransitions:
             result = await _process_pipeline_ingestion_async(
                 mock_task,
                 "12345678-1234-5678-1234-567812345678",
-                "requesting-user"  # different from graph owner
+                "requesting-user",  # different from graph owner
             )
 
         assert result["status"] == "error"

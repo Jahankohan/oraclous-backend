@@ -12,13 +12,12 @@ Covers:
 
 Auth is bypassed via patching. Neo4j and DB are mocked — no live services required.
 """
+
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -30,12 +29,13 @@ SNAPSHOT_ID = str(uuid.uuid4())
 OTHER_SNAPSHOT_ID = str(uuid.uuid4())
 JOB_ID = str(uuid.uuid4())
 
-_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=UTC).isoformat()
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _fake_user() -> dict:
     return {"id": USER_ID, "email": "user@example.com"}
@@ -84,7 +84,11 @@ def _fake_snapshot(
 def _fake_diff() -> dict:
     return {
         "from_version": {"version_id": SNAPSHOT_ID, "label": "v1", "captured_at": _NOW},
-        "to_version": {"version_id": OTHER_SNAPSHOT_ID, "label": "v2", "captured_at": _NOW},
+        "to_version": {
+            "version_id": OTHER_SNAPSHOT_ID,
+            "label": "v2",
+            "captured_at": _NOW,
+        },
         "summary": {
             "entities_added": 3,
             "entities_deleted": 1,
@@ -166,6 +170,7 @@ def _patch_graph_service(graph: dict | None = None):
 # Suite — Create snapshot
 # ---------------------------------------------------------------------------
 
+
 class TestCreateSnapshot:
 
     @pytest.mark.integration
@@ -218,7 +223,9 @@ class TestCreateSnapshot:
     async def test_create_snapshot_rejects_wrong_owner(self, async_client):
         """Cannot create a snapshot for a graph owned by another user → 403/404."""
         auth_p = _patch_auth()
-        graph_p, mock_svc = _patch_graph_service(graph=_neo4j_graph(user_id=str(uuid.uuid4())))
+        graph_p, mock_svc = _patch_graph_service(
+            graph=_neo4j_graph(user_id=str(uuid.uuid4()))
+        )
         with patch("app.api.v1.endpoints.graphs.versioning_service"):
             response = await async_client.post(
                 f"/api/v1/graphs/{GRAPH_ID}/snapshots",
@@ -234,6 +241,7 @@ class TestCreateSnapshot:
 # ---------------------------------------------------------------------------
 # Suite — List snapshots
 # ---------------------------------------------------------------------------
+
 
 class TestListSnapshots:
 
@@ -282,6 +290,7 @@ class TestListSnapshots:
 # Suite — Get single snapshot
 # ---------------------------------------------------------------------------
 
+
 class TestGetSnapshot:
 
     @pytest.mark.integration
@@ -325,6 +334,7 @@ class TestGetSnapshot:
 # ---------------------------------------------------------------------------
 # Suite — Delete snapshot
 # ---------------------------------------------------------------------------
+
 
 class TestDeleteSnapshot:
 
@@ -385,6 +395,7 @@ class TestDeleteSnapshot:
 # Suite — Diff two snapshots
 # ---------------------------------------------------------------------------
 
+
 class TestDiffSnapshots:
 
     @pytest.mark.integration
@@ -432,7 +443,9 @@ class TestDiffSnapshots:
         auth_p = _patch_auth()
         graph_p, _ = _patch_graph_service()
         with patch("app.api.v1.endpoints.graphs.versioning_service") as mock_vs:
-            mock_vs.diff_versions = AsyncMock(side_effect=ValueError("One or both versions not found"))
+            mock_vs.diff_versions = AsyncMock(
+                side_effect=ValueError("One or both versions not found")
+            )
             response = await async_client.get(
                 f"/api/v1/graphs/{GRAPH_ID}/snapshots/{SNAPSHOT_ID}/diff/{OTHER_SNAPSHOT_ID}",
                 headers=_auth_headers(),
@@ -447,6 +460,7 @@ class TestDiffSnapshots:
 # Suite — Rollback (sync path)
 # ---------------------------------------------------------------------------
 
+
 class TestRollbackSnapshot:
 
     @pytest.mark.integration
@@ -455,8 +469,10 @@ class TestRollbackSnapshot:
         """POST /rollback → 400 when confirm=false."""
         auth_p = _patch_auth()
         graph_p, _ = _patch_graph_service()
-        with patch("app.api.v1.endpoints.graphs.versioning_service"), \
-             patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j:
+        with (
+            patch("app.api.v1.endpoints.graphs.versioning_service"),
+            patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        ):
             mock_neo4j.execute_query = AsyncMock(return_value=[{"cnt": 50}])
             response = await async_client.post(
                 f"/api/v1/graphs/{GRAPH_ID}/snapshots/{SNAPSHOT_ID}/rollback",
@@ -476,8 +492,10 @@ class TestRollbackSnapshot:
 
         auth_p = _patch_auth()
         graph_p, _ = _patch_graph_service()
-        with patch("app.api.v1.endpoints.graphs.versioning_service") as mock_vs, \
-             patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j:
+        with (
+            patch("app.api.v1.endpoints.graphs.versioning_service") as mock_vs,
+            patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        ):
             mock_neo4j.execute_query = AsyncMock(return_value=[{"cnt": 50}])  # < 10K
             mock_vs.rollback = AsyncMock(return_value=result)
             response = await async_client.post(
@@ -522,11 +540,15 @@ class TestRollbackSnapshot:
 
         auth_p = _patch_auth()
         graph_p, _ = _patch_graph_service()
-        with patch("app.api.v1.endpoints.graphs.versioning_service") as mock_vs, \
-             patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-             patch("app.api.v1.endpoints.graphs.GraphRollbackJob"), \
-             patch("app.services.background_jobs.async_rollback_graph") as mock_task:
-            mock_neo4j.execute_query = AsyncMock(return_value=[{"cnt": 15_000}])  # > 10K
+        with (
+            patch("app.api.v1.endpoints.graphs.versioning_service") as mock_vs,
+            patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+            patch("app.api.v1.endpoints.graphs.GraphRollbackJob"),
+            patch("app.services.background_jobs.async_rollback_graph") as mock_task,
+        ):
+            mock_neo4j.execute_query = AsyncMock(
+                return_value=[{"cnt": 15_000}]
+            )  # > 10K
             mock_vs.create_rollback_job = AsyncMock(return_value=job_data)
             mock_task.delay = MagicMock(return_value=fake_task)
 
@@ -535,7 +557,9 @@ class TestRollbackSnapshot:
             mock_db.execute = AsyncMock()
             mock_db.commit = AsyncMock()
 
-            with patch("app.api.v1.endpoints.graphs.get_database", return_value=mock_db):
+            with patch(
+                "app.api.v1.endpoints.graphs.get_database", return_value=mock_db
+            ):
                 response = await async_client.post(
                     f"/api/v1/graphs/{GRAPH_ID}/snapshots/{SNAPSHOT_ID}/rollback",
                     json={"confirm": True, "mode": "full"},
@@ -556,8 +580,10 @@ class TestRollbackSnapshot:
         """POST /rollback → 404 when snapshot doesn't exist."""
         auth_p = _patch_auth()
         graph_p, _ = _patch_graph_service()
-        with patch("app.api.v1.endpoints.graphs.versioning_service") as mock_vs, \
-             patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j:
+        with (
+            patch("app.api.v1.endpoints.graphs.versioning_service") as mock_vs,
+            patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+        ):
             mock_neo4j.execute_query = AsyncMock(return_value=[{"cnt": 50}])
             mock_vs.rollback = AsyncMock(side_effect=ValueError("Version not found"))
             response = await async_client.post(
@@ -574,6 +600,7 @@ class TestRollbackSnapshot:
 # ---------------------------------------------------------------------------
 # Suite — Get rollback job status
 # ---------------------------------------------------------------------------
+
 
 class TestRollbackJobStatus:
 
@@ -639,6 +666,7 @@ class TestRollbackJobStatus:
 # ---------------------------------------------------------------------------
 # Suite — Multi-tenancy isolation
 # ---------------------------------------------------------------------------
+
 
 class TestSnapshotMultiTenancyIsolation:
 

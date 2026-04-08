@@ -9,7 +9,7 @@ Verifies:
 - Schema validation: too few graph_ids, duplicates
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -206,7 +206,7 @@ async def test_entity_union_passes_graph_ids_as_params():
     driver.session.return_value = mock_session
 
     svc = FederationService(async_driver=driver)
-    result = await svc.federated_query(
+    await svc.federated_query(
         user_id=user_id,
         graph_ids=graph_ids,
         search_term="Alice",

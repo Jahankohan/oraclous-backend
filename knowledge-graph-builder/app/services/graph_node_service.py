@@ -7,7 +7,7 @@ Each Graph node represents a knowledge graph with metadata and tenant isolation.
 Graph Node Schema:
 (graph:Graph {
     graph_id: "uuid",
-    name: "Graph Name", 
+    name: "Graph Name",
     description: "Optional description",
     user_id: "user_uuid",
     created_at: datetime(),
@@ -18,23 +18,24 @@ Graph Node Schema:
 })
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Any
+
 from neo4j import Driver
 from neo4j.exceptions import Neo4jError
 
 
 class GraphNodeService:
     """Service for managing Graph nodes in Neo4j"""
-    
+
     def __init__(self, driver: Driver):
         """
         Initialize GraphNodeService with Neo4j driver
-        
+
         Args:
             driver: Neo4j driver instance
         """
         self.driver = driver
-    
+
     # Temporal indexes created once per graph at creation time.
     # Neo4j 5.x syntax: relationship property indexes use wildcard type (-[r]-).
     _TEMPORAL_INDEX_STATEMENTS = [
@@ -54,8 +55,7 @@ class GraphNodeService:
         # those traversal patterns.
         "CREATE INDEX rel_valid_from_idx IF NOT EXISTS "
         "FOR ()-[r]-() ON (r.valid_from)",
-        "CREATE INDEX rel_valid_to_idx IF NOT EXISTS "
-        "FOR ()-[r]-() ON (r.valid_to)",
+        "CREATE INDEX rel_valid_to_idx IF NOT EXISTS " "FOR ()-[r]-() ON (r.valid_to)",
         # __Contradiction__ label added at schema init (not ad hoc per CTO review)
         "CREATE INDEX contradiction_graph_idx IF NOT EXISTS "
         "FOR (c:__Contradiction__) ON (c.graph_id, c.detected_at)",
@@ -70,12 +70,8 @@ class GraphNodeService:
     ]
 
     def create_graph(
-        self,
-        graph_id: str,
-        name: str,
-        user_id: str,
-        description: Optional[str] = None
-    ) -> Dict[str, Any]:
+        self, graph_id: str, name: str, user_id: str, description: str | None = None
+    ) -> dict[str, Any]:
         """Create a new Graph node in Neo4j and ensure temporal indexes exist."""
 
         query = """
@@ -100,12 +96,15 @@ class GraphNodeService:
                 raise ValueError("Neo4j driver not initialized")
 
             with self.driver.session() as session:
-                result = session.run(query, {
-                    'graph_id': graph_id,
-                    'name': name,
-                    'description': description or '',
-                    'user_id': user_id
-                })
+                result = session.run(
+                    query,
+                    {
+                        "graph_id": graph_id,
+                        "name": name,
+                        "description": description or "",
+                        "user_id": user_id,
+                    },
+                )
 
                 record = result.single()
                 if not record:
@@ -117,23 +116,23 @@ class GraphNodeService:
             self._ensure_temporal_indexes()
 
             return {
-                'graph_id': graph_data['graph_id'],
-                'name': graph_data['name'],
-                'description': graph_data['description'],
-                'user_id': graph_data['user_id'],
-                'created_at': graph_data['created_at'].isoformat(),
-                'updated_at': graph_data['updated_at'].isoformat(),
-                'node_count': graph_data['node_count'],
-                'relationship_count': graph_data['relationship_count'],
-                'status': graph_data['status'],
-                'federatable': graph_data.get('federatable', False),
-                'federation_group': graph_data.get('federation_group'),
+                "graph_id": graph_data["graph_id"],
+                "name": graph_data["name"],
+                "description": graph_data["description"],
+                "user_id": graph_data["user_id"],
+                "created_at": graph_data["created_at"].isoformat(),
+                "updated_at": graph_data["updated_at"].isoformat(),
+                "node_count": graph_data["node_count"],
+                "relationship_count": graph_data["relationship_count"],
+                "status": graph_data["status"],
+                "federatable": graph_data.get("federatable", False),
+                "federation_group": graph_data.get("federation_group"),
             }
 
         except Neo4jError as e:
-            raise Exception(f"Failed to create graph: {str(e)}")
+            raise Exception(f"Failed to create graph: {str(e)}") from None
         except Exception as e:
-            raise Exception(f"Unexpected error creating graph: {str(e)}")
+            raise Exception(f"Unexpected error creating graph: {str(e)}") from None
 
     def _ensure_temporal_indexes(self) -> None:
         """Create temporal indexes if they don't exist. Idempotent."""
@@ -144,14 +143,14 @@ class GraphNodeService:
                 except Exception:
                     # Index creation errors are non-fatal; the graph node was already created
                     pass
-    
-    def get_graph(self, graph_id: str) -> Optional[Dict[str, Any]]:
+
+    def get_graph(self, graph_id: str) -> dict[str, Any] | None:
         """
         Retrieve a Graph node by graph_id.
-        
+
         Args:
             graph_id: Graph identifier
-            
+
         Returns:
             Graph metadata dict or None if not found
         """
@@ -177,26 +176,26 @@ class GraphNodeService:
                 raise ValueError("Neo4j driver not initialized")
 
             with self.driver.session() as session:
-                result = session.run(query, {'graph_id': graph_id})
+                result = session.run(query, {"graph_id": graph_id})
                 record = result.single()
 
                 if record:
-                    data = dict(record['graph'])
-                    data.setdefault('federatable', False)
-                    data.setdefault('federation_group', None)
+                    data = dict(record["graph"])
+                    data.setdefault("federatable", False)
+                    data.setdefault("federation_group", None)
                     return data
                 return None
 
         except Neo4jError as e:
-            raise Exception(f"Failed to retrieve Graph node {graph_id}: {e}")
-    
-    def list_user_graphs(self, user_id: str) -> List[Dict[str, Any]]:
+            raise Exception(f"Failed to retrieve Graph node {graph_id}: {e}") from None
+
+    def list_user_graphs(self, user_id: str) -> list[dict[str, Any]]:
         """
         List all Graph nodes for a specific user.
-        
+
         Args:
             user_id: User identifier
-            
+
         Returns:
             List of graph metadata dicts
         """
@@ -223,57 +222,57 @@ class GraphNodeService:
                 raise ValueError("Neo4j driver not initialized")
 
             with self.driver.session() as session:
-                result = session.run(query, {'user_id': user_id})
+                result = session.run(query, {"user_id": user_id})
 
-                graphs: List[Dict[str, Any]] = []
+                graphs: list[dict[str, Any]] = []
                 for record in result:
-                    data = dict(record['graph'])
-                    data.setdefault('federatable', False)
-                    data.setdefault('federation_group', None)
+                    data = dict(record["graph"])
+                    data.setdefault("federatable", False)
+                    data.setdefault("federation_group", None)
                     graphs.append(data)
 
                 return graphs
 
         except Neo4jError as e:
-            raise Exception(f"Failed to list user graphs: {e}")
-    
+            raise Exception(f"Failed to list user graphs: {e}") from None
+
     def update_graph(
         self,
         graph_id: str,
         user_id: str,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        node_count: Optional[int] = None,
-        relationship_count: Optional[int] = None,
-        status: Optional[str] = None,
-        federatable: Optional[bool] = None,
-        federation_group: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        name: str | None = None,
+        description: str | None = None,
+        node_count: int | None = None,
+        relationship_count: int | None = None,
+        status: str | None = None,
+        federatable: bool | None = None,
+        federation_group: str | None = None,
+    ) -> dict[str, Any] | None:
         """Update Graph node metadata."""
-        params: Dict[str, Any] = {'graph_id': graph_id, 'user_id': user_id}
+        params: dict[str, Any] = {"graph_id": graph_id, "user_id": user_id}
 
         set_parts = ["g.updated_at = datetime()"]
         if name is not None:
             set_parts.append("g.name = $name")
-            params['name'] = name
+            params["name"] = name
         if description is not None:
             set_parts.append("g.description = $description")
-            params['description'] = description
+            params["description"] = description
         if node_count is not None:
             set_parts.append("g.node_count = $node_count")
-            params['node_count'] = node_count
+            params["node_count"] = node_count
         if relationship_count is not None:
             set_parts.append("g.relationship_count = $relationship_count")
-            params['relationship_count'] = relationship_count
+            params["relationship_count"] = relationship_count
         if status is not None:
             set_parts.append("g.status = $status")
-            params['status'] = status
+            params["status"] = status
         if federatable is not None:
             set_parts.append("g.federatable = $federatable")
-            params['federatable'] = federatable
+            params["federatable"] = federatable
         if federation_group is not None:
             set_parts.append("g.federation_group = $federation_group")
-            params['federation_group'] = federation_group
+            params["federation_group"] = federation_group
 
         set_clause = ", ".join(set_parts)
         query = f"""
@@ -303,16 +302,18 @@ class GraphNodeService:
                 record = result.single()
 
                 if record:
-                    data = dict(record['graph'])
-                    data.setdefault('federatable', False)
-                    data.setdefault('federation_group', None)
+                    data = dict(record["graph"])
+                    data.setdefault("federatable", False)
+                    data.setdefault("federation_group", None)
                     return data
                 return None
 
         except Neo4jError as e:
-            raise Exception(f"Failed to update graph: {e}")
+            raise Exception(f"Failed to update graph: {e}") from None
 
-    def list_federatable_graphs(self, user_id: str, graph_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def list_federatable_graphs(
+        self, user_id: str, graph_ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Return graphs owned by user_id that have federatable=true.
 
         If graph_ids is provided, only return graphs in that list (ownership + federatable check).
@@ -330,7 +331,7 @@ class GraphNodeService:
                 .federation_group
             } as graph
             """
-            params: Dict[str, Any] = {'user_id': user_id, 'graph_ids': graph_ids}
+            params: dict[str, Any] = {"user_id": user_id, "graph_ids": graph_ids}
         else:
             query = """
             MATCH (g:Graph {user_id: $user_id, federatable: true})
@@ -343,7 +344,7 @@ class GraphNodeService:
             } as graph
             ORDER BY g.name ASC
             """
-            params = {'user_id': user_id}
+            params = {"user_id": user_id}
 
         try:
             if not self.driver:
@@ -351,19 +352,19 @@ class GraphNodeService:
 
             with self.driver.session() as session:
                 result = session.run(query, params)
-                return [dict(record['graph']) for record in result]
+                return [dict(record["graph"]) for record in result]
 
         except Neo4jError as e:
-            raise Exception(f"Failed to list federatable graphs: {e}")
+            raise Exception(f"Failed to list federatable graphs: {e}") from None
 
     def delete_graph(self, graph_id: str, user_id: str) -> bool:
         """
         Delete a Graph node and all its relationships.
-        
+
         Args:
             graph_id: Graph identifier
             user_id: User identifier (for tenant isolation)
-            
+
         Returns:
             True if deleted, False if not found
         """
@@ -372,26 +373,23 @@ class GraphNodeService:
         DETACH DELETE g
         RETURN count(g) as deleted_count
         """
-        
+
         try:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
-                
+
             with self.driver.session() as session:
-                result = session.run(query, {
-                    'graph_id': graph_id,
-                    'user_id': user_id
-                })
-                
+                result = session.run(query, {"graph_id": graph_id, "user_id": user_id})
+
                 record = result.single()
                 if record:
-                    return record['deleted_count'] > 0
+                    return record["deleted_count"] > 0
                 return False
-                
+
         except Neo4jError as e:
-            raise Exception(f"Failed to delete graph: {e}")
-    
-    def migrate_relationship_properties(self, graph_id: str) -> Dict[str, Any]:
+            raise Exception(f"Failed to delete graph: {e}") from None
+
+    def migrate_relationship_properties(self, graph_id: str) -> dict[str, Any]:
         """
         Run 3-phase migration to move contextual properties from entity nodes
         to their corresponding relationships, per the ORA-4 spec.
@@ -485,16 +483,16 @@ class GraphNodeService:
             }
 
         except Neo4jError as e:
-            raise Exception(f"Migration failed for graph {graph_id}: {e}")
+            raise Exception(f"Migration failed for graph {graph_id}: {e}") from None
 
     def graph_exists(self, graph_id: str, user_id: str) -> bool:
         """
         Check if a Graph node exists for the given user.
-        
+
         Args:
             graph_id: Graph identifier
             user_id: User identifier
-            
+
         Returns:
             True if graph exists, False otherwise
         """
@@ -502,21 +500,18 @@ class GraphNodeService:
         MATCH (g:Graph {graph_id: $graph_id, user_id: $user_id})
         RETURN count(g) > 0 as exists
         """
-        
+
         try:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
-                
+
             with self.driver.session() as session:
-                result = session.run(query, {
-                    'graph_id': graph_id,
-                    'user_id': user_id
-                })
-                
+                result = session.run(query, {"graph_id": graph_id, "user_id": user_id})
+
                 record = result.single()
                 if record:
-                    return record['exists']
+                    return record["exists"]
                 return False
-                
+
         except Neo4jError as e:
-            raise Exception(f"Failed to check graph existence: {e}")
+            raise Exception(f"Failed to check graph existence: {e}") from None

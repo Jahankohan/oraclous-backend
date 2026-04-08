@@ -5,20 +5,21 @@ All external dependencies (ChatService, RAGAS, OpenAI) are mocked.
 Tests cover: metric selection, ground_truth handling, RAGAS result mapping,
 RAGAS import failure, empty context warnings, and multi-tenancy usage.
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.schemas.evaluation_schemas import EvaluationScores, RetrievedContextItem
-from app.services.evaluation_service import (
-    EvaluationService,
-    SUPPORTED_METRICS,
-    _RECALL_METRICS,
-)
+import pytest
 
+from app.schemas.evaluation_schemas import EvaluationScores
+from app.services.evaluation_service import (
+    SUPPORTED_METRICS,
+    EvaluationService,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_grounded_result(
     answer="Alice is the CEO.",
@@ -31,15 +32,23 @@ def _make_grounded_result(
     result.is_grounded = is_grounded
     result.confidence = confidence
     result.sources = sources or [
-        {"node_id": "n1", "node_labels": ["Person"], "content": "Alice is CEO of Acme.", "relevance_score": 0.95},
+        {
+            "node_id": "n1",
+            "node_labels": ["Person"],
+            "content": "Alice is CEO of Acme.",
+            "relevance_score": 0.95,
+        },
     ]
     result.retriever_result = None
     return result
 
 
-def _make_ragas_dataframe(faithfulness=0.9, answer_relevancy=0.85, context_precision=0.8, context_recall=None):
+def _make_ragas_dataframe(
+    faithfulness=0.9, answer_relevancy=0.85, context_precision=0.8, context_recall=None
+):
     """Build a minimal pandas-like mock returned by ragas evaluate()."""
     import pandas as pd
+
     row = {
         "faithfulness": faithfulness,
         "answer_relevancy": answer_relevancy,
@@ -53,6 +62,7 @@ def _make_ragas_dataframe(faithfulness=0.9, answer_relevancy=0.85, context_preci
 # ---------------------------------------------------------------------------
 # Patch helper: suppresses ChatService and RAGAS internals
 # ---------------------------------------------------------------------------
+
 
 class _MockEvalCtx:
     """Context manager that patches ChatService + RAGAS for EvaluationService tests."""
@@ -80,7 +90,9 @@ class _MockEvalCtx:
         # Patch _run_ragas to avoid real RAGAS/OpenAI calls
         ragas_df = self._ragas_df
 
-        def _fake_run_ragas(self_inner, question, answer, contexts, ground_truth, metric_names):
+        def _fake_run_ragas(
+            self_inner, question, answer, contexts, ground_truth, metric_names
+        ):
             if self._ragas_import_error:
                 return {name: None for name in SUPPORTED_METRICS}
             row = ragas_df.iloc[0].to_dict()
@@ -114,6 +126,7 @@ class _MockEvalCtx:
 # Tests: basic evaluation flow
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluationServiceBasic:
 
     @pytest.mark.asyncio
@@ -136,13 +149,17 @@ class TestEvaluationServiceBasic:
         assert result["scores"].context_precision == 0.8
         assert result["scores"].context_recall is None
         assert isinstance(result["overall"], float)
-        assert result["metrics_computed"] == ["answer_relevance", "context_precision", "faithfulness"]
+        assert result["metrics_computed"] == [
+            "answer_relevance",
+            "context_precision",
+            "faithfulness",
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_caller_supplied_answer_is_used(self):
         """When caller provides an answer, the generated answer should NOT be used."""
-        with _MockEvalCtx() as ctx:
+        with _MockEvalCtx():
             svc = EvaluationService(graph_id="g1", user_id="u1")
             result = await svc.evaluate(
                 question="Who leads Acme?",
@@ -218,14 +235,25 @@ class TestEvaluationServiceBasic:
 # Tests: context handling
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluationServiceContext:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_retrieved_contexts_mapped_from_sources(self):
         sources = [
-            {"node_id": "n1", "node_labels": ["Person"], "content": "Alice is CEO.", "relevance_score": 0.95},
-            {"node_id": "n2", "node_labels": ["Company"], "content": "Acme Corp HQ is NYC.", "relevance_score": 0.88},
+            {
+                "node_id": "n1",
+                "node_labels": ["Person"],
+                "content": "Alice is CEO.",
+                "relevance_score": 0.95,
+            },
+            {
+                "node_id": "n2",
+                "node_labels": ["Company"],
+                "content": "Acme Corp HQ is NYC.",
+                "relevance_score": 0.88,
+            },
         ]
         grounded = _make_grounded_result(sources=sources)
         with _MockEvalCtx(grounded_result=grounded):
@@ -252,6 +280,7 @@ class TestEvaluationServiceContext:
 # Tests: RAGAS failure handling
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluationServiceRagasFailure:
 
     @pytest.mark.asyncio
@@ -274,12 +303,15 @@ class TestEvaluationServiceRagasFailure:
 # Tests: overall score calculation
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluationServiceOverall:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_overall_is_mean_of_computed_scores(self):
-        df = _make_ragas_dataframe(faithfulness=0.8, answer_relevancy=0.6, context_precision=0.7)
+        df = _make_ragas_dataframe(
+            faithfulness=0.8, answer_relevancy=0.6, context_precision=0.7
+        )
         with _MockEvalCtx(ragas_df=df):
             svc = EvaluationService(graph_id="g1", user_id="u1")
             result = await svc.evaluate(

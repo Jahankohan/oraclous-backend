@@ -3,13 +3,15 @@ Document Processing Service
 
 Handles different file types for ingestion:
 - Raw text
-- PDF files  
+- PDF files
 - DOC/DOCX files
 - Future: URLs, structured data
 
 This service prepares documents for the GraphRAG pipeline.
 """
-from typing import Dict, Any, List, Optional
+
+from typing import Any
+
 from fastapi import HTTPException, status
 
 from app.core.logging import get_logger
@@ -20,32 +22,30 @@ logger = get_logger(__name__)
 class DocumentProcessor:
     """
     Process different document types for GraphRAG ingestion.
-    
+
     Supported formats:
     - text: Raw text content
     - pdf: PDF files (future implementation)
     - doc/docx: Word documents (future implementation)
     - url: Web content (future implementation)
     """
-    
+
     @staticmethod
     def process_document(
-        content: str, 
-        source_type: str = "text",
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        content: str, source_type: str = "text", metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Process document content based on source type.
-        
+
         Args:
             content: Document content (text or base64 for files)
             source_type: Type of document ("text", "pdf", "doc", "docx", "url")
             metadata: Additional metadata for the document
-            
+
         Returns:
             Processed document with text content and metadata
         """
-        
+
         if source_type == "text":
             return DocumentProcessor._process_text(content, metadata)
         elif source_type == "pdf":
@@ -57,33 +57,39 @@ class DocumentProcessor:
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported source type: {source_type}. Supported types: text, pdf, doc, docx, url"
+                detail=f"Unsupported source type: {source_type}. Supported types: text, pdf, doc, docx, url",
             )
-    
+
     @staticmethod
-    def _process_text(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _process_text(
+        content: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Process raw text content."""
         if not content or len(content.strip()) < 10:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Text content must be at least 10 characters long"
+                detail="Text content must be at least 10 characters long",
             )
-        
+
         processed_metadata = metadata or {}
-        processed_metadata.update({
-            "content_length": len(content),
-            "content_type": "text/plain",
-            "processing_method": "raw_text"
-        })
-        
+        processed_metadata.update(
+            {
+                "content_length": len(content),
+                "content_type": "text/plain",
+                "processing_method": "raw_text",
+            }
+        )
+
         return {
             "text": content.strip(),
             "metadata": processed_metadata,
-            "success": True
+            "success": True,
         }
-    
+
     @staticmethod
-    def _process_pdf(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _process_pdf(
+        content: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Process a PDF file.
 
@@ -119,7 +125,9 @@ class DocumentProcessor:
         }
 
     @staticmethod
-    def _process_word(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _process_word(
+        content: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Process a DOCX file.
 
@@ -153,30 +161,32 @@ class DocumentProcessor:
             "image_paths": [],
             "success": True,
         }
-    
+
     @staticmethod
-    def _process_url(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _process_url(
+        content: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Process URL content by fetching and extracting text.
-        
+
         TODO: Implement web scraping using:
         - requests + BeautifulSoup
         - newspaper3k for articles
         - readability-lxml for clean text extraction
         """
         logger.warning("URL processing not yet implemented")
-        
+
         # For now, return error
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="URL processing is not yet implemented. Coming soon!"
+            detail="URL processing is not yet implemented. Coming soon!",
         )
-    
+
     @staticmethod
-    def get_supported_types() -> List[str]:
+    def get_supported_types() -> list[str]:
         """Return list of supported document types."""
         return ["text", "pdf", "doc", "docx"]
-    
+
     @staticmethod
     def validate_source_type(source_type: str) -> bool:
         """Validate if source type is supported."""

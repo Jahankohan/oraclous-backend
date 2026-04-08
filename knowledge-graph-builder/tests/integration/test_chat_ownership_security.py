@@ -8,13 +8,11 @@ TC-SEC-003: User A can chat with their own graph (regression check)        → 2
 TC-SEC-004: Graph not found → 403 (no info leakage)
 TC-SEC-005: Empty/null graph_id results in validation error                → 422
 """
+
 import uuid
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from app.main import app
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -36,6 +34,7 @@ _auth_patch_ref = None
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _override_user(user_id: str):
     """Mock auth_service.verify_token to return the given user_id."""
@@ -95,12 +94,17 @@ def _stop_patches(patches):
 
 
 def _minimal_chat_payload(graph_id: str, include_sources: bool = False) -> dict:
-    return {"query": "Tell me about this graph.", "graph_id": graph_id, "include_sources": include_sources}
+    return {
+        "query": "Tell me about this graph.",
+        "graph_id": graph_id,
+        "include_sources": include_sources,
+    }
 
 
 # ---------------------------------------------------------------------------
 # TC-SEC-001 — Cross-tenant POST /chat returns 403
 # ---------------------------------------------------------------------------
+
 
 class TestTC_SEC_001_CrossTenantChatBlocked:
     """
@@ -132,10 +136,18 @@ class TestTC_SEC_001_CrossTenantChatBlocked:
 
     @pytest.mark.integration
     @pytest.mark.security
-    async def test_cross_tenant_chat_response_contains_no_graph_data(self, async_client):
+    async def test_cross_tenant_chat_response_contains_no_graph_data(
+        self, async_client
+    ):
         """Response body must not leak any graph content on 403."""
         _override_user(USER_A_ID)
-        graph_p = _mock_graph_service({"user_id": USER_B_ID, "graph_id": GRAPH_B_ID, "name": "SECRET_GRAPH_NAME_B"})
+        graph_p = _mock_graph_service(
+            {
+                "user_id": USER_B_ID,
+                "graph_id": GRAPH_B_ID,
+                "name": "SECRET_GRAPH_NAME_B",
+            }
+        )
         try:
             response = await async_client.post(
                 CHAT_ENDPOINT,
@@ -149,7 +161,9 @@ class TestTC_SEC_001_CrossTenantChatBlocked:
         assert response.status_code == 403
         # Ensure no graph-specific data is leaked in the response body
         body = response.text
-        assert "SECRET_GRAPH_NAME_B" not in body, "Graph name leaked in 403 response body"
+        assert (
+            "SECRET_GRAPH_NAME_B" not in body
+        ), "Graph name leaked in 403 response body"
         assert USER_B_ID not in body, "User B's ID leaked in 403 response body"
 
     @pytest.mark.integration
@@ -177,6 +191,7 @@ class TestTC_SEC_001_CrossTenantChatBlocked:
 # ---------------------------------------------------------------------------
 # TC-SEC-002 — Cross-tenant POST /chat/stream returns 403
 # ---------------------------------------------------------------------------
+
 
 class TestTC_SEC_002_CrossTenantStreamBlocked:
     """
@@ -224,15 +239,20 @@ class TestTC_SEC_002_CrossTenantStreamBlocked:
         assert response.status_code == 403
         # Response body should not contain SSE event data
         body = response.text
-        assert "data:" not in body, (
-            "SSE data events were emitted before the 403 — potential data leakage"
+        assert (
+            "data:" not in body
+        ), "SSE data events were emitted before the 403 — potential data leakage"
+        assert (
+            '"type"' not in body
+            or "error" in body.lower()
+            or response.status_code == 403
         )
-        assert '"type"' not in body or "error" in body.lower() or response.status_code == 403
 
 
 # ---------------------------------------------------------------------------
 # TC-SEC-003 — Normal operation regression check
 # ---------------------------------------------------------------------------
+
 
 class TestTC_SEC_003_NormalOperationRegression:
     """
@@ -293,6 +313,7 @@ class TestTC_SEC_003_NormalOperationRegression:
 # ---------------------------------------------------------------------------
 # TC-SEC-004 — Graph not found → 403 (no info leakage)
 # ---------------------------------------------------------------------------
+
 
 class TestTC_SEC_004_GraphNotFound:
     """

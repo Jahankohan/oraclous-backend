@@ -6,24 +6,23 @@ and the corresponding job responses.
 """
 
 from datetime import datetime
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
-class VisionModel(str, Enum):
+class VisionModel(StrEnum):
     """Vision model to use for image entity extraction."""
 
     CLAUDE = "claude"
     GPT4O = "gpt4o"
 
 
-class PDFExtractor(str, Enum):
+class PDFExtractor(StrEnum):
     """PDF extraction backend."""
 
-    AUTO = "auto"      # PyMuPDF for standard PDFs, falls back to basic text
+    AUTO = "auto"  # PyMuPDF for standard PDFs, falls back to basic text
     PYMUPDF = "pymupdf"
 
 

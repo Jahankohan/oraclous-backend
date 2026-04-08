@@ -8,26 +8,22 @@ Implements:
 """
 
 import json
-import warnings
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional, List
+from datetime import UTC, datetime
 
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.schemas.graph_schemas import (
-    ExtractionDensity,
     EntityTypeDefinition,
-    EntityTypeRule,
-    RelationshipTypeDefinition,
-    RelationshipRule,
-    OntologyValidationMode,
+    ExtractionDensity,
     GraphInstructions,
     GraphInstructionsResponse,
     IngestionOverrides,
+    OntologyPatchRequest,
     OntologyResponse,
     OntologySetRequest,
-    OntologyPatchRequest,
+    OntologyValidationMode,
+    RelationshipTypeDefinition,
 )
 
 logger = get_logger(__name__)
@@ -35,25 +31,28 @@ logger = get_logger(__name__)
 
 # ==================== RESOLVED INSTRUCTIONS ====================
 
+
 @dataclass
 class ResolvedInstructions:
     """
     Final merged extraction instructions for one ingestion job.
     Not persisted — computed fresh per job from GraphInstructions + IngestionOverrides.
     """
-    domain: Optional[str] = None
+
+    domain: str | None = None
     extraction_density: ExtractionDensity = ExtractionDensity.BALANCED
-    entity_types: Optional[List[EntityTypeDefinition]] = None
-    relationship_types: Optional[List[RelationshipTypeDefinition]] = None
-    edge_property_fields: Optional[List[str]] = None
-    focus_areas: Optional[List[str]] = field(default_factory=list)
-    ignore_patterns: Optional[List[str]] = None
+    entity_types: list[EntityTypeDefinition] | None = None
+    relationship_types: list[RelationshipTypeDefinition] | None = None
+    edge_property_fields: list[str] | None = None
+    focus_areas: list[str] | None = field(default_factory=list)
+    ignore_patterns: list[str] | None = None
     language: str = "en"
-    custom_prompt_suffix: Optional[str] = None
+    custom_prompt_suffix: str | None = None
     ontology_mode: OntologyValidationMode = OntologyValidationMode.WARN
 
 
 # ==================== INSTRUCTIONS RESOLVER ====================
+
 
 class InstructionsResolver:
     """
@@ -69,7 +68,7 @@ class InstructionsResolver:
     async def resolve(
         self,
         graph_id: str,
-        overrides: Optional[IngestionOverrides] = None,
+        overrides: IngestionOverrides | None = None,
     ) -> ResolvedInstructions:
         """
         Load graph-level instructions from Neo4j and merge with per-job overrides.
@@ -84,11 +83,31 @@ class InstructionsResolver:
             resolved = ResolvedInstructions(
                 domain=graph_instructions.domain,
                 extraction_density=graph_instructions.extraction_density,
-                entity_types=list(graph_instructions.entity_types) if graph_instructions.entity_types else None,
-                relationship_types=list(graph_instructions.relationship_types) if graph_instructions.relationship_types else None,
-                edge_property_fields=list(graph_instructions.edge_property_fields) if graph_instructions.edge_property_fields else None,
-                focus_areas=list(graph_instructions.focus_areas) if graph_instructions.focus_areas else [],
-                ignore_patterns=list(graph_instructions.ignore_patterns) if graph_instructions.ignore_patterns else None,
+                entity_types=(
+                    list(graph_instructions.entity_types)
+                    if graph_instructions.entity_types
+                    else None
+                ),
+                relationship_types=(
+                    list(graph_instructions.relationship_types)
+                    if graph_instructions.relationship_types
+                    else None
+                ),
+                edge_property_fields=(
+                    list(graph_instructions.edge_property_fields)
+                    if graph_instructions.edge_property_fields
+                    else None
+                ),
+                focus_areas=(
+                    list(graph_instructions.focus_areas)
+                    if graph_instructions.focus_areas
+                    else []
+                ),
+                ignore_patterns=(
+                    list(graph_instructions.ignore_patterns)
+                    if graph_instructions.ignore_patterns
+                    else None
+                ),
                 language=graph_instructions.language or "en",
                 custom_prompt_suffix=graph_instructions.custom_prompt_suffix,
                 ontology_mode=graph_instructions.ontology_mode,
@@ -121,7 +140,7 @@ class InstructionsResolver:
 
         return resolved
 
-    async def _load_from_neo4j(self, graph_id: str) -> Optional[GraphInstructions]:
+    async def _load_from_neo4j(self, graph_id: str) -> GraphInstructions | None:
         """Read instructions_config JSON from the Graph node."""
         query = """
         MATCH (g:Graph {graph_id: $graph_id})
@@ -143,6 +162,7 @@ class InstructionsResolver:
 
 # ==================== INSTRUCTIONS COMPILER ====================
 
+
 class InstructionsCompiler:
     """
     Converts ResolvedInstructions into an LLM prompt prefix string.
@@ -153,7 +173,7 @@ class InstructionsCompiler:
 
     def to_prompt(self, resolved: ResolvedInstructions) -> str:
         """Build and return the prompt prefix. Returns empty string for all-default instructions."""
-        blocks: List[str] = []
+        blocks: list[str] = []
 
         if resolved.domain:
             blocks.append(
@@ -166,7 +186,9 @@ class InstructionsCompiler:
             lines = ["## Entity Types", "Extract ONLY entities of the following types:"]
             for et in resolved.entity_types:
                 desc = f": {et.description}" if et.description else ""
-                examples = f" Examples: {', '.join(et.examples)}." if et.examples else ""
+                examples = (
+                    f" Examples: {', '.join(et.examples)}." if et.examples else ""
+                )
                 props = ""
                 if et.properties:
                     prop_list = ", ".join(
@@ -212,7 +234,7 @@ class InstructionsCompiler:
         if not resolved.entity_types and not resolved.relationship_types:
             return ""
 
-        parts: List[str] = []
+        parts: list[str] = []
         if resolved.entity_types:
             node_types = ", ".join(et.name for et in resolved.entity_types)
             parts.append(f"Node types: {node_types}")
@@ -250,6 +272,7 @@ class InstructionsCompiler:
 
 # ==================== INSTRUCTIONS SERVICE ====================
 
+
 class InstructionsService:
     """
     CRUD for graph-level extraction instructions.
@@ -261,7 +284,7 @@ class InstructionsService:
     ) -> GraphInstructionsResponse:
         """Store or replace GraphInstructions on the Graph node. Increments version."""
         config_json = instructions.model_dump_json()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         query = """
         MATCH (g:Graph {graph_id: $graph_id})
@@ -270,11 +293,14 @@ class InstructionsService:
             g.instructions_updated_at = datetime($updated_at)
         RETURN g.instructions_version AS version
         """
-        records = await neo4j_client.execute_query(query, {
-            "graph_id": graph_id,
-            "config": config_json,
-            "updated_at": now.isoformat(),
-        })
+        records = await neo4j_client.execute_query(
+            query,
+            {
+                "graph_id": graph_id,
+                "config": config_json,
+                "updated_at": now.isoformat(),
+            },
+        )
 
         version = records[0]["version"] if records else 1
         logger.info(f"Set instructions v{version} for graph {graph_id}")
@@ -286,7 +312,7 @@ class InstructionsService:
             updated_at=now,
         )
 
-    async def get_instructions(self, graph_id: str) -> Optional[GraphInstructionsResponse]:
+    async def get_instructions(self, graph_id: str) -> GraphInstructionsResponse | None:
         """Fetch GraphInstructions from the Graph node. Returns None if not configured."""
         query = """
         MATCH (g:Graph {graph_id: $graph_id})
@@ -307,7 +333,9 @@ class InstructionsService:
             data = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
             instructions = GraphInstructions(**data)
         except Exception as e:
-            logger.error(f"Failed to deserialize instructions for graph {graph_id}: {e}")
+            logger.error(
+                f"Failed to deserialize instructions for graph {graph_id}: {e}"
+            )
             return None
 
         raw_updated_at = row.get("updated_at")
@@ -316,7 +344,7 @@ class InstructionsService:
         elif isinstance(raw_updated_at, str):
             updated_at = datetime.fromisoformat(raw_updated_at)
         else:
-            updated_at = datetime.now(timezone.utc)
+            updated_at = datetime.now(UTC)
 
         return GraphInstructionsResponse(
             graph_id=graph_id,  # type: ignore[arg-type]
@@ -336,7 +364,7 @@ class InstructionsService:
 
     # ==================== ONTOLOGY CRUD ====================
 
-    async def get_ontology(self, graph_id: str) -> Optional[OntologyResponse]:
+    async def get_ontology(self, graph_id: str) -> OntologyResponse | None:
         """
         Return the ontology section of the graph's instructions.
         Returns None if no instructions are set or no ontology is configured.
@@ -354,7 +382,9 @@ class InstructionsService:
             updated_at=result.updated_at,
         )
 
-    async def set_ontology(self, graph_id: str, request: OntologySetRequest) -> OntologyResponse:
+    async def set_ontology(
+        self, graph_id: str, request: OntologySetRequest
+    ) -> OntologyResponse:
         """
         Replace the ontology fields on the graph's instructions.
         Creates instructions if none exist; preserves all non-ontology fields.
@@ -362,11 +392,13 @@ class InstructionsService:
         """
         existing = await self.get_instructions(graph_id)
         if existing is not None:
-            instructions = existing.instructions.model_copy(update={
-                "entity_types": request.entity_types,
-                "relationship_types": request.relationship_types or [],
-                "ontology_mode": request.ontology_mode,
-            })
+            instructions = existing.instructions.model_copy(
+                update={
+                    "entity_types": request.entity_types,
+                    "relationship_types": request.relationship_types or [],
+                    "ontology_mode": request.ontology_mode,
+                }
+            )
         else:
             instructions = GraphInstructions(
                 entity_types=request.entity_types,
@@ -384,7 +416,9 @@ class InstructionsService:
             updated_at=response.updated_at,
         )
 
-    async def patch_ontology(self, graph_id: str, patch: OntologyPatchRequest) -> OntologyResponse:
+    async def patch_ontology(
+        self, graph_id: str, patch: OntologyPatchRequest
+    ) -> OntologyResponse:
         """
         Merge-update the ontology: add/remove individual types, update mode.
         Raises ValueError if no ontology is configured and nothing to add.
@@ -396,8 +430,10 @@ class InstructionsService:
         else:
             instructions = GraphInstructions()
 
-        entity_types: List[EntityTypeDefinition] = list(instructions.entity_types or [])
-        rel_types: List[RelationshipTypeDefinition] = list(instructions.relationship_types or [])
+        entity_types: list[EntityTypeDefinition] = list(instructions.entity_types or [])
+        rel_types: list[RelationshipTypeDefinition] = list(
+            instructions.relationship_types or []
+        )
 
         if patch.remove_entity_types:
             remove_set = set(patch.remove_entity_types)
@@ -407,7 +443,9 @@ class InstructionsService:
             existing_names = {et.name for et in entity_types}
             for et in patch.add_entity_types:
                 if et.name in existing_names:
-                    entity_types = [et if e.name == et.name else e for e in entity_types]
+                    entity_types = [
+                        et if e.name == et.name else e for e in entity_types
+                    ]
                 else:
                     entity_types.append(et)
 
@@ -423,13 +461,19 @@ class InstructionsService:
                 else:
                     rel_types.append(rt)
 
-        mode = patch.ontology_mode if patch.ontology_mode is not None else instructions.ontology_mode
+        mode = (
+            patch.ontology_mode
+            if patch.ontology_mode is not None
+            else instructions.ontology_mode
+        )
 
-        updated = instructions.model_copy(update={
-            "entity_types": entity_types or None,
-            "relationship_types": rel_types or None,
-            "ontology_mode": mode,
-        })
+        updated = instructions.model_copy(
+            update={
+                "entity_types": entity_types or None,
+                "relationship_types": rel_types or None,
+                "ontology_mode": mode,
+            }
+        )
         response = await self.set_instructions(graph_id, updated)
         await self._invalidate_schema_cache(graph_id)
         return OntologyResponse(
@@ -450,11 +494,13 @@ class InstructionsService:
         existing = await self.get_instructions(graph_id)
         if existing is None:
             return
-        updated = existing.instructions.model_copy(update={
-            "entity_types": None,
-            "relationship_types": None,
-            "ontology_mode": OntologyValidationMode.WARN,
-        })
+        updated = existing.instructions.model_copy(
+            update={
+                "entity_types": None,
+                "relationship_types": None,
+                "ontology_mode": OntologyValidationMode.WARN,
+            }
+        )
         await self.set_instructions(graph_id, updated)
         await self._invalidate_schema_cache(graph_id)
         logger.info(f"Deleted ontology for graph {graph_id}")
@@ -463,6 +509,7 @@ class InstructionsService:
         """Invalidate the schema_manager cache for this graph after ontology changes."""
         try:
             from app.services.schema_service import schema_manager
+
             schema_manager.clear_cache(graph_id)
         except Exception:
             pass  # Non-critical — cache will expire naturally

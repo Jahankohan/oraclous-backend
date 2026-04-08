@@ -16,19 +16,18 @@ Tests validate:
 These tests will be superseded by live Neo4j integration tests once
 ORA-99 is resolved and Docker test infra is confirmed healthy.
 """
-import ast
+
 import os
 import re
-import textwrap
+
 import pytest
 
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
 
-_BASE = os.path.join(
-    os.path.dirname(__file__), "..", "..", "app"
-)
+_BASE = os.path.join(os.path.dirname(__file__), "..", "..", "app")
+
 
 def _read(rel: str) -> str:
     with open(os.path.join(_BASE, rel)) as f:
@@ -38,6 +37,7 @@ def _read(rel: str) -> str:
 # ---------------------------------------------------------------------------
 # Suite 1: snapshot_service.py — index definitions
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 class TestSnapshotServiceTemporalIndex:
@@ -54,9 +54,9 @@ class TestSnapshotServiceTemporalIndex:
     def test_rel_temporal_idx_present(self):
         """The composite temporal index for relationships must exist."""
         src = _read("services/snapshot_service.py")
-        assert "rel_temporal_idx" in src, (
-            "Missing rel_temporal_idx — ORA-138 fix not applied or index renamed"
-        )
+        assert (
+            "rel_temporal_idx" in src
+        ), "Missing rel_temporal_idx — ORA-138 fix not applied or index renamed"
 
     def test_rel_temporal_idx_covers_valid_from(self):
         """Composite index must include r.valid_from."""
@@ -64,9 +64,9 @@ class TestSnapshotServiceTemporalIndex:
         # Find the line containing rel_temporal_idx
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert "valid_from" in line, (
-                    f"rel_temporal_idx does not cover valid_from: {line!r}"
-                )
+                assert (
+                    "valid_from" in line
+                ), f"rel_temporal_idx does not cover valid_from: {line!r}"
                 return
         pytest.fail("rel_temporal_idx CREATE INDEX statement not found")
 
@@ -75,9 +75,9 @@ class TestSnapshotServiceTemporalIndex:
         src = _read("services/snapshot_service.py")
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert "valid_to" in line, (
-                    f"rel_temporal_idx does not cover valid_to: {line!r}"
-                )
+                assert (
+                    "valid_to" in line
+                ), f"rel_temporal_idx does not cover valid_to: {line!r}"
                 return
         pytest.fail("rel_temporal_idx CREATE INDEX statement not found")
 
@@ -86,9 +86,9 @@ class TestSnapshotServiceTemporalIndex:
         src = _read("services/snapshot_service.py")
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert "graph_id" in line, (
-                    f"rel_temporal_idx missing graph_id — multi-tenant scan risk: {line!r}"
-                )
+                assert (
+                    "graph_id" in line
+                ), f"rel_temporal_idx missing graph_id — multi-tenant scan risk: {line!r}"
                 # graph_id should appear before valid_from in the index definition
                 gi = line.index("graph_id")
                 vf = line.index("valid_from")
@@ -104,9 +104,9 @@ class TestSnapshotServiceTemporalIndex:
         src = _read("services/snapshot_service.py")
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert "()-[r]-()" in line or "FOR ()-[" in line, (
-                    f"rel_temporal_idx must be a relationship property index: {line!r}"
-                )
+                assert (
+                    "()-[r]-()" in line or "FOR ()-[" in line
+                ), f"rel_temporal_idx must be a relationship property index: {line!r}"
                 return
         pytest.fail("rel_temporal_idx CREATE INDEX statement not found")
 
@@ -115,9 +115,9 @@ class TestSnapshotServiceTemporalIndex:
         src = _read("services/snapshot_service.py")
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert "IF NOT EXISTS" in line, (
-                    f"Missing IF NOT EXISTS — index creation not idempotent: {line!r}"
-                )
+                assert (
+                    "IF NOT EXISTS" in line
+                ), f"Missing IF NOT EXISTS — index creation not idempotent: {line!r}"
                 return
         pytest.fail("rel_temporal_idx CREATE INDEX statement not found")
 
@@ -132,9 +132,9 @@ class TestSnapshotServiceTemporalIndex:
             "rel_version_composite_idx",
         ]
         for idx in required:
-            assert idx in src, (
-                f"Pre-existing index {idx!r} was removed — regression in ORA-138 fix"
-            )
+            assert (
+                idx in src
+            ), f"Pre-existing index {idx!r} was removed — regression in ORA-138 fix"
 
     def test_ensure_indexes_is_async(self):
         """ensure_indexes must be an async method (called with await in lifespan)."""
@@ -142,14 +142,15 @@ class TestSnapshotServiceTemporalIndex:
         # Find the method definition
         m = re.search(r"(async\s+def|def)\s+ensure_indexes", src)
         assert m is not None, "ensure_indexes method not found"
-        assert m.group(0).startswith("async"), (
-            "ensure_indexes must be async — it's awaited in main.py lifespan"
-        )
+        assert m.group(0).startswith(
+            "async"
+        ), "ensure_indexes must be async — it's awaited in main.py lifespan"
 
 
 # ---------------------------------------------------------------------------
 # Suite 2: main.py — startup wiring
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 class TestStartupWiring:
@@ -157,11 +158,15 @@ class TestStartupWiring:
 
     def test_ensure_indexes_called_in_lifespan(self):
         """main.py lifespan must call snapshot_service.ensure_indexes()."""
-        src = _read("../app/main.py") if os.path.exists(
-            os.path.join(_BASE, "../app/main.py")
-        ) else _read_main()
-        assert "snapshot_service.ensure_indexes()" in src or \
-               "await snapshot_service.ensure_indexes()" in src, (
+        src = (
+            _read("../app/main.py")
+            if os.path.exists(os.path.join(_BASE, "../app/main.py"))
+            else _read_main()
+        )
+        assert (
+            "snapshot_service.ensure_indexes()" in src
+            or "await snapshot_service.ensure_indexes()" in src
+        ), (
             "snapshot_service.ensure_indexes() not called in application startup — "
             "indexes will not be created on deployment"
         )
@@ -187,6 +192,7 @@ def _read_main() -> str:
 # Suite 3: compile_temporal_filter — static WHERE clause validation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestCompileTemporalFilterLogic:
     """
@@ -209,7 +215,7 @@ class TestCompileTemporalFilterLogic:
         # Collect method body until next method or class definition at same indent
         indent = len(lines[start]) - len(lines[start].lstrip())
         body_lines = [lines[start]]
-        for line in lines[start + 1:]:
+        for line in lines[start + 1 :]:
             stripped = line.strip()
             if not stripped:
                 body_lines.append(line)
@@ -223,23 +229,23 @@ class TestCompileTemporalFilterLogic:
     def test_current_only_returns_valid_to_null_check(self):
         """current_only filter must return 'r.valid_to IS NULL'."""
         src = self._get_method_source()
-        assert "r.valid_to IS NULL" in src, (
-            "current_only branch must return \"r.valid_to IS NULL\""
-        )
+        assert (
+            "r.valid_to IS NULL" in src
+        ), 'current_only branch must return "r.valid_to IS NULL"'
 
     def test_point_in_time_filters_on_valid_from(self):
         """point_in_time filter must include r.valid_from clause."""
         src = self._get_method_source()
-        assert "r.valid_from" in src and "point_in_time" in src, (
-            "compile_temporal_filter must filter on r.valid_from for point_in_time"
-        )
+        assert (
+            "r.valid_from" in src and "point_in_time" in src
+        ), "compile_temporal_filter must filter on r.valid_from for point_in_time"
 
     def test_point_in_time_filters_on_valid_to(self):
         """point_in_time filter must include r.valid_to clause."""
         src = self._get_method_source()
-        assert "r.valid_to" in src and "point_in_time" in src, (
-            "compile_temporal_filter must filter on r.valid_to for point_in_time"
-        )
+        assert (
+            "r.valid_to" in src and "point_in_time" in src
+        ), "compile_temporal_filter must filter on r.valid_to for point_in_time"
 
     def test_empty_filter_returns_true(self):
         """Empty filter (no criteria) must return 'true' (no-op)."""
@@ -252,16 +258,16 @@ class TestCompileTemporalFilterLogic:
     def test_valid_from_gte_filter_present(self):
         """valid_from_gte range filter must be supported."""
         src = self._get_method_source()
-        assert "valid_from_gte" in src, (
-            "valid_from_gte range filter not implemented in compile_temporal_filter"
-        )
+        assert (
+            "valid_from_gte" in src
+        ), "valid_from_gte range filter not implemented in compile_temporal_filter"
 
     def test_valid_to_lte_filter_present(self):
         """valid_to_lte range filter must be supported."""
         src = self._get_method_source()
-        assert "valid_to_lte" in src, (
-            "valid_to_lte range filter not implemented in compile_temporal_filter"
-        )
+        assert (
+            "valid_to_lte" in src
+        ), "valid_to_lte range filter not implemented in compile_temporal_filter"
 
     def test_null_safe_clauses_for_open_ended_relationships(self):
         """
@@ -291,6 +297,7 @@ class TestCompileTemporalFilterLogic:
 # ---------------------------------------------------------------------------
 # Suite 4: Index strategy review — composite + standalone (ORA-138 final design)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 class TestIndexStrategyReview:

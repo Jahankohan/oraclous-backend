@@ -7,8 +7,9 @@ for testing the knowledge graph builder service in Docker environment.
 
 import asyncio
 import os
-from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Union
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,7 +17,7 @@ import pytest_asyncio
 
 try:
     import neo4j
-    from neo4j import AsyncDriver, AsyncSession
+    from neo4j import AsyncDriver
 
     _NEO4J_AVAILABLE = True
 except ImportError:
@@ -216,7 +217,7 @@ def mock_schema_manager():
         },
         constraints=[],
         indexes=[],
-        last_updated=datetime.now(timezone.utc),
+        last_updated=datetime.now(UTC),
         schema_version="test_v1",
     )
 
@@ -229,7 +230,7 @@ def mock_schema_manager():
 
 
 @pytest.fixture
-def sample_node_schemas() -> Dict[str, NodeSchema]:
+def sample_node_schemas() -> dict[str, NodeSchema]:
     """Sample node schemas for testing."""
     return {
         "Company": NodeSchema(
@@ -258,7 +259,7 @@ def sample_node_schemas() -> Dict[str, NodeSchema]:
 
 
 @pytest.fixture
-def sample_relationship_schemas() -> Dict[str, RelationshipSchema]:
+def sample_relationship_schemas() -> dict[str, RelationshipSchema]:
     """Sample relationship schemas for testing."""
     return {
         "CEO_OF": RelationshipSchema(
@@ -304,9 +305,9 @@ def mock_retriever_factory():
 
 
 @pytest.fixture
-def sample_retriever_configs() -> Dict[
+def sample_retriever_configs() -> dict[
     str,
-    Union[VectorRetrieverConfig, Text2CypherRetrieverConfig, HybridRetrieverConfig],
+    VectorRetrieverConfig | Text2CypherRetrieverConfig | HybridRetrieverConfig,
 ]:
     """Sample retriever configurations for testing."""
     return {
@@ -373,7 +374,7 @@ def mock_openai_embeddings():
 @pytest.fixture
 def mock_datetime():
     """Mock datetime for consistent testing."""
-    fixed_time = datetime(2025, 9, 4, 12, 0, 0, tzinfo=timezone.utc)
+    fixed_time = datetime(2025, 9, 4, 12, 0, 0, tzinfo=UTC)
     with patch("app.services.schema_service.datetime") as mock_dt:
         mock_dt.now.return_value = fixed_time
         mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
@@ -389,7 +390,7 @@ def test_graph_id():
 # ==================== HELPER FUNCTIONS ====================
 
 
-def assert_valid_schema_response(response_data: Dict[str, Any]):
+def assert_valid_schema_response(response_data: dict[str, Any]):
     """Assert that a schema response has the expected structure."""
     required_fields = [
         "graph_id",
@@ -405,7 +406,7 @@ def assert_valid_schema_response(response_data: Dict[str, Any]):
     assert isinstance(response_data["relationships"], dict)
 
 
-def assert_valid_chat_response(response_data: Dict[str, Any]):
+def assert_valid_chat_response(response_data: dict[str, Any]):
     """Assert that a chat response has the expected structure."""
     required_fields = ["response", "graph_id", "retriever_type"]
     for field in required_fields:

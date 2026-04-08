@@ -1,9 +1,11 @@
 import contextvars
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, AsyncGenerator
+
 from app.core.database import get_db
 from app.services.auth_service import auth_service
 from app.services.rebac_service import rebac_service
@@ -13,14 +15,14 @@ security = HTTPBearer()
 # Stores the resolved principal dict for the current request (set in get_current_user).
 # Enables verify_graph_access to route SA vs user permission checks without
 # changing the call signature used by the 40+ existing endpoint callers.
-_current_principal: contextvars.ContextVar[Dict[str, Any]] = contextvars.ContextVar(
-    "current_principal", default={}
+_current_principal: contextvars.ContextVar[dict[str, Any] | None] = (
+    contextvars.ContextVar("current_principal", default=None)
 )
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-) -> Dict[str, Any]:
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> dict[str, Any]:
     """Dependency to get current authenticated user or service account principal."""
     token = credentials.credentials
     user = await auth_service.verify_token(token)
@@ -30,7 +32,7 @@ async def get_current_user(
 
 
 async def get_current_user_id(
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: dict[str, Any] = Depends(get_current_user),
 ) -> str:
     """Dependency to get current principal ID (user_id or service_account_id)."""
     return str(current_user["id"])
@@ -67,11 +69,12 @@ async def verify_graph_access(
             detail="Neo4j connection not available",
         )
 
-    principal = _current_principal.get()
+    principal = _current_principal.get() or {}
     principal_type = principal.get("principal_type", "user")
 
     if principal_type == "service_account":
         from app.services.service_account_service import service_account_service
+
         tenant_id = principal.get("tenant_id", "")
         authorized = await service_account_service.check_sa_graph_permission(
             driver=neo4j_client.async_driver,
@@ -89,5 +92,7 @@ async def verify_graph_access(
         )
 
     if not authorized:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
     return graph_id

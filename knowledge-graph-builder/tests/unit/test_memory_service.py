@@ -3,8 +3,8 @@ Unit tests for memory_service.py.
 
 All Neo4j calls are mocked — no real database required.
 """
-import math
-from datetime import datetime, timezone, timedelta
+
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,17 +19,16 @@ from app.schemas.memory import (
 from app.services.memory_service import (
     MemoryService,
     _content_hash,
-    _recency_factor,
     compute_importance,
 )
-
 
 # ============================================================
 # Helpers
 # ============================================================
 
+
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _make_service() -> MemoryService:
@@ -39,6 +38,7 @@ def _make_service() -> MemoryService:
 # ============================================================
 # compute_importance
 # ============================================================
+
 
 class TestComputeImportance:
     @pytest.mark.unit
@@ -94,6 +94,7 @@ class TestComputeImportance:
 # _content_hash
 # ============================================================
 
+
 class TestContentHash:
     @pytest.mark.unit
     def test_same_content_same_hash(self):
@@ -116,13 +117,16 @@ class TestContentHash:
 # MemoryService.store_memory
 # ============================================================
 
+
 class TestStoreMemory:
     @pytest.mark.unit
     async def test_duplicate_returns_existing(self):
         svc = _make_service()
         existing = {"memory_id": "existing-id", "importance_score": 0.9}
 
-        with patch.object(svc, "_find_by_content_hash", new=AsyncMock(return_value=existing)):
+        with patch.object(
+            svc, "_find_by_content_hash", new=AsyncMock(return_value=existing)
+        ):
             req = MemoryCreate(type=MemoryType.SEMANTIC, content="Reza is CEO")
             result = await svc.store_memory("graph-1", req)
 
@@ -134,10 +138,16 @@ class TestStoreMemory:
     async def test_new_memory_creates_node(self):
         svc = _make_service()
 
-        with patch.object(svc, "_find_by_content_hash", new=AsyncMock(return_value=None)), \
-             patch("app.services.memory_service.neo4j_client") as mock_client, \
-             patch.object(svc, "_detect_and_record_contradictions", new=AsyncMock(return_value=[])), \
-             patch.object(svc, "_link_to_entity", new=AsyncMock(return_value=None)):
+        with (
+            patch.object(
+                svc, "_find_by_content_hash", new=AsyncMock(return_value=None)
+            ),
+            patch("app.services.memory_service.neo4j_client") as mock_client,
+            patch.object(
+                svc, "_detect_and_record_contradictions", new=AsyncMock(return_value=[])
+            ),
+            patch.object(svc, "_link_to_entity", new=AsyncMock(return_value=None)),
+        ):
             mock_client.execute_write_query = AsyncMock(return_value=[])
 
             req = MemoryCreate(
@@ -151,16 +161,24 @@ class TestStoreMemory:
             result = await svc.store_memory("graph-1", req)
 
         assert result.memory_id  # non-empty UUID
-        assert result.importance_score == pytest.approx(0.8, abs=0.01)  # high confidence
+        assert result.importance_score == pytest.approx(
+            0.8, abs=0.01
+        )  # high confidence
 
     @pytest.mark.unit
     async def test_user_feedback_gets_max_importance(self):
         svc = _make_service()
 
-        with patch.object(svc, "_find_by_content_hash", new=AsyncMock(return_value=None)), \
-             patch("app.services.memory_service.neo4j_client") as mock_client, \
-             patch.object(svc, "_detect_and_record_contradictions", new=AsyncMock(return_value=[])), \
-             patch.object(svc, "_link_to_entity", new=AsyncMock(return_value=None)):
+        with (
+            patch.object(
+                svc, "_find_by_content_hash", new=AsyncMock(return_value=None)
+            ),
+            patch("app.services.memory_service.neo4j_client") as mock_client,
+            patch.object(
+                svc, "_detect_and_record_contradictions", new=AsyncMock(return_value=[])
+            ),
+            patch.object(svc, "_link_to_entity", new=AsyncMock(return_value=None)),
+        ):
             mock_client.execute_write_query = AsyncMock(return_value=[])
 
             req = MemoryCreate(
@@ -176,16 +194,23 @@ class TestStoreMemory:
     async def test_contradiction_detection_called_for_semantic(self):
         svc = _make_service()
         mock_contradictions = [
-            MagicMock(conflict_memory_id="old-id", content="Bob is CEO", resolution="new_wins")
+            MagicMock(
+                conflict_memory_id="old-id", content="Bob is CEO", resolution="new_wins"
+            )
         ]
 
-        with patch.object(svc, "_find_by_content_hash", new=AsyncMock(return_value=None)), \
-             patch("app.services.memory_service.neo4j_client") as mock_client, \
-             patch.object(
-                 svc, "_detect_and_record_contradictions",
-                 new=AsyncMock(return_value=mock_contradictions)
-             ), \
-             patch.object(svc, "_link_to_entity", new=AsyncMock(return_value=None)):
+        with (
+            patch.object(
+                svc, "_find_by_content_hash", new=AsyncMock(return_value=None)
+            ),
+            patch("app.services.memory_service.neo4j_client") as mock_client,
+            patch.object(
+                svc,
+                "_detect_and_record_contradictions",
+                new=AsyncMock(return_value=mock_contradictions),
+            ),
+            patch.object(svc, "_link_to_entity", new=AsyncMock(return_value=None)),
+        ):
             mock_client.execute_write_query = AsyncMock(return_value=[])
 
             req = MemoryCreate(
@@ -203,6 +228,7 @@ class TestStoreMemory:
 # ============================================================
 # MemoryService.delete_memory
 # ============================================================
+
 
 class TestDeleteMemory:
     @pytest.mark.unit
@@ -229,6 +255,7 @@ class TestDeleteMemory:
 # MemoryService.update_memory
 # ============================================================
 
+
 class TestUpdateMemory:
     @pytest.mark.unit
     async def test_update_raises_on_missing_memory(self):
@@ -236,7 +263,9 @@ class TestUpdateMemory:
         with patch("app.services.memory_service.neo4j_client") as mock_client:
             mock_client.execute_query = AsyncMock(return_value=[])
             with pytest.raises(ValueError, match="not found"):
-                await svc.update_memory("graph-1", "nonexistent", MemoryUpdate(content="new"))
+                await svc.update_memory(
+                    "graph-1", "nonexistent", MemoryUpdate(content="new")
+                )
 
     @pytest.mark.unit
     async def test_update_creates_supersedes_link(self):
@@ -254,7 +283,9 @@ class TestUpdateMemory:
         with patch("app.services.memory_service.neo4j_client") as mock_client:
             mock_client.execute_query = AsyncMock(return_value=[old_record])
             mock_client.execute_write_query = AsyncMock(return_value=[])
-            result = await svc.update_memory("graph-1", "old-id", MemoryUpdate(content="new content"))
+            result = await svc.update_memory(
+                "graph-1", "old-id", MemoryUpdate(content="new content")
+            )
 
         assert result.old_memory_id == "old-id"
         assert result.new_memory_id  # non-empty
@@ -264,6 +295,7 @@ class TestUpdateMemory:
 # ============================================================
 # MemoryService.consolidate
 # ============================================================
+
 
 class TestConsolidate:
     @pytest.mark.unit
@@ -278,10 +310,17 @@ class TestConsolidate:
     async def test_single_memory_returns_zero_merged(self):
         svc = _make_service()
         with patch("app.services.memory_service.neo4j_client") as mock_client:
-            mock_client.execute_query = AsyncMock(return_value=[
-                {"memory_id": "m1", "content": "only memory",
-                 "importance_score": 0.8, "confidence": 0.9, "base_importance": 0.8}
-            ])
+            mock_client.execute_query = AsyncMock(
+                return_value=[
+                    {
+                        "memory_id": "m1",
+                        "content": "only memory",
+                        "importance_score": 0.8,
+                        "confidence": 0.9,
+                        "base_importance": 0.8,
+                    }
+                ]
+            )
             result = await svc.consolidate("graph-1")
         assert result["merged"] == 0
 
@@ -290,10 +329,20 @@ class TestConsolidate:
         svc = _make_service()
         content = "Reza is CEO"
         dupes = [
-            {"memory_id": "m1", "content": content, "importance_score": 0.9,
-             "confidence": 0.9, "base_importance": 0.9},
-            {"memory_id": "m2", "content": content, "importance_score": 0.7,
-             "confidence": 0.7, "base_importance": 0.7},
+            {
+                "memory_id": "m1",
+                "content": content,
+                "importance_score": 0.9,
+                "confidence": 0.9,
+                "base_importance": 0.9,
+            },
+            {
+                "memory_id": "m2",
+                "content": content,
+                "importance_score": 0.7,
+                "confidence": 0.7,
+                "base_importance": 0.7,
+            },
         ]
         with patch("app.services.memory_service.neo4j_client") as mock_client:
             mock_client.execute_query = AsyncMock(return_value=dupes)
@@ -306,12 +355,13 @@ class TestConsolidate:
 # MemoryRetriever
 # ============================================================
 
+
 class TestMemoryRetriever:
     @pytest.mark.unit
     async def test_search_returns_formatted_results(self):
         from app.schemas.memory import MemorySearchResponse, MemorySearchResult
-        from app.services.retriever_factory import MemoryRetriever
         from app.schemas.retriever_schemas import MemoryRetrieverConfig
+        from app.services.retriever_factory import MemoryRetriever
 
         config = MemoryRetrieverConfig(query="test", top_k=5)
         retriever = MemoryRetriever(graph_id="graph-1", config=config)
@@ -327,16 +377,22 @@ class TestMemoryRetriever:
             valid_to=None,
             scope=MemoryScope.ORGANIZATION,
         )
-        mock_response = MemorySearchResponse(memories=[mock_result], total=1)
+        MemorySearchResponse(memories=[mock_result], total=1)
 
-        with patch("app.services.retriever_factory.MemoryRetriever.search",
-                   new=AsyncMock(return_value=[{
-                       "content": "Reza is CEO",
-                       "score": 0.85,
-                       "memory_id": "m1",
-                       "type": "semantic",
-                       "importance_score": 0.9,
-                   }])):
+        with patch(
+            "app.services.retriever_factory.MemoryRetriever.search",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "content": "Reza is CEO",
+                        "score": 0.85,
+                        "memory_id": "m1",
+                        "type": "semantic",
+                        "importance_score": 0.9,
+                    }
+                ]
+            ),
+        ):
             results = await retriever.search("CEO query")
 
         assert len(results) == 1

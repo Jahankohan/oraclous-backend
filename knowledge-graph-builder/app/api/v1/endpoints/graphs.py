@@ -1,12 +1,12 @@
 # app/api/v1/endpoints/graphs.py - NEO4J-ONLY VERSION
 
 from datetime import datetime
-from typing import Any, List
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import Response
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Core dependencies
@@ -15,9 +15,7 @@ from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.rate_limiter import limiter
 from app.models.graph import (  # Keep for job tracking only
-    GraphRollbackJob,
     IngestionJob,
-    KnowledgeGraph,
 )
 from app.schemas.graph_schemas import (
     AsyncRollbackResponse,
@@ -173,7 +171,7 @@ async def create_graph(
 
 @router.get(
     "/graphs",
-    response_model=List[GraphResponse],
+    response_model=list[GraphResponse],
     summary="List knowledge graphs",
 )
 async def list_graphs(user_id: str = Depends(get_current_user_id)):
@@ -688,7 +686,7 @@ async def migrate_graph_properties(
 
 @router.get(
     "/graphs/{graph_id}/jobs",
-    response_model=List[IngestionJobResponse],
+    response_model=list[IngestionJobResponse],
     summary="List ingestion jobs",
     responses={
         404: {"description": "Graph not found"},
@@ -1805,7 +1803,9 @@ async def diff_graph_snapshots(
         )
         return VersionDiffResponse(**diff)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from None
     except Exception as exc:
         logger.error(f"Diff failed for graph {graph_id}: {exc}")
         raise HTTPException(
@@ -1899,7 +1899,9 @@ async def rollback_graph_snapshot(
         )
         return RollbackResponse(**result)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from None
     except Exception as exc:
         logger.error(
             f"Rollback failed for graph {graph_id} snapshot {snapshot_id}: {exc}"

@@ -15,7 +15,12 @@ show-fixes = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
-ignore = ["E501"]  # ignore line length if Black handles it
+ignore = [
+    "E501",   # Black handles line length
+    "B008",   # FastAPI Depends() in arg defaults is intentional
+    "B904",   # HTTPException raises in except blocks intentionally hide internal exceptions
+    "E402",   # Module-level imports not at top — intentional lazy imports to avoid circular deps
+]
 
 [tool.mypy]
 python_version = "3.12"

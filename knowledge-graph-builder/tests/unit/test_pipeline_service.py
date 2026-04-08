@@ -4,21 +4,23 @@ Unit tests for PipelineService and MultiTenantGraphRAGPipeline.
 Tests extraction logic, entity normalization, banned property enforcement,
 pipeline caching, and multi-tenant isolation — all external deps mocked.
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
+import pytest
+
+from app.schemas.graph_schemas import BANNED_NODE_PROPERTIES
 from app.services.pipeline_service import (
     MultiTenantGraphRAGPipeline,
-    PipelineService,
     PipelineConfig,
+    PipelineService,
 )
-from app.schemas.graph_schemas import BANNED_NODE_PROPERTIES
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_node(node_id: str, label: str = "Person", **props):
     node = MagicMock()
@@ -28,7 +30,9 @@ def _make_node(node_id: str, label: str = "Person", **props):
     return node
 
 
-def _make_relationship(start_id: str, end_id: str, rel_type: str = "WORKS_FOR", **props):
+def _make_relationship(
+    start_id: str, end_id: str, rel_type: str = "WORKS_FOR", **props
+):
     rel = MagicMock()
     rel.start_node_id = start_id
     rel.end_node_id = end_id
@@ -57,6 +61,7 @@ def _make_pipeline(graph_id: str = "test-graph") -> MultiTenantGraphRAGPipeline:
 # ---------------------------------------------------------------------------
 # Tests: PipelineConfig
 # ---------------------------------------------------------------------------
+
 
 class TestPipelineConfig:
     @pytest.mark.unit
@@ -92,6 +97,7 @@ class TestPipelineConfig:
 # ---------------------------------------------------------------------------
 # Tests: _model_supports_json_object
 # ---------------------------------------------------------------------------
+
 
 class TestModelSupportsJsonObject:
     @pytest.mark.unit
@@ -129,6 +135,7 @@ class TestModelSupportsJsonObject:
 # Tests: _strip_banned_node_properties (Critical — property placement enforcement)
 # ---------------------------------------------------------------------------
 
+
 class TestStripBannedNodeProperties:
     @pytest.mark.unit
     def test_strips_job_title_from_node(self):
@@ -136,7 +143,9 @@ class TestStripBannedNodeProperties:
         graph = _make_graph(nodes=[node])
         pipeline = _make_pipeline()
 
-        result_graph, violations, migrated = pipeline._strip_banned_node_properties(graph)
+        result_graph, violations, migrated = pipeline._strip_banned_node_properties(
+            graph
+        )
 
         assert "job_title" not in result_graph.nodes[0].properties
         assert violations == 1
@@ -198,7 +207,9 @@ class TestStripBannedNodeProperties:
         graph = _make_graph(nodes=[])
         pipeline = _make_pipeline()
 
-        result_graph, violations, migrated = pipeline._strip_banned_node_properties(graph)
+        result_graph, violations, migrated = pipeline._strip_banned_node_properties(
+            graph
+        )
 
         assert violations == 0
         assert migrated == 0
@@ -230,6 +241,7 @@ class TestStripBannedNodeProperties:
 # ---------------------------------------------------------------------------
 # Tests: _normalize_overlapping_entities
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeOverlappingEntities:
     @pytest.mark.unit
@@ -307,7 +319,11 @@ class TestNormalizeOverlappingEntities:
         node1.properties = {"name": "Alice"}  # fewer props
 
         node2 = _make_node("chunk_2:Alice")
-        node2.properties = {"name": "Alice", "industry": "Tech", "founded": 2020}  # more props
+        node2.properties = {
+            "name": "Alice",
+            "industry": "Tech",
+            "founded": 2020,
+        }  # more props
 
         graph = _make_graph(nodes=[node1, node2])
         pipeline = _make_pipeline()
@@ -322,19 +338,22 @@ class TestNormalizeOverlappingEntities:
 # Tests: process_documents (routing logic)
 # ---------------------------------------------------------------------------
 
+
 class TestMultiTenantGraphRAGPipelineProcessDocuments:
     @pytest.mark.unit
     async def test_small_doc_set_processed_synchronously(self):
         pipeline = _make_pipeline(graph_id="tenant-1")
         pipeline._initialize_components = AsyncMock()
-        pipeline._process_documents_sync = AsyncMock(return_value={
-            "documents_processed": 3,
-            "entities_created": 10,
-            "relationships_created": 5,
-            "chunks_created": 3,
-            "property_violations_detected": 0,
-            "property_violations_migrated": 0,
-        })
+        pipeline._process_documents_sync = AsyncMock(
+            return_value={
+                "documents_processed": 3,
+                "entities_created": 10,
+                "relationships_created": 5,
+                "chunks_created": 3,
+                "property_violations_detected": 0,
+                "property_violations_migrated": 0,
+            }
+        )
 
         docs = [{"text": f"doc{i}", "source": f"src{i}"} for i in range(3)]
         result = await pipeline.process_documents(docs)
@@ -370,14 +389,16 @@ class TestMultiTenantGraphRAGPipelineProcessDocuments:
     async def test_graph_id_always_in_result(self):
         pipeline = _make_pipeline(graph_id="isolated-tenant")
         pipeline._initialize_components = AsyncMock()
-        pipeline._process_documents_sync = AsyncMock(return_value={
-            "documents_processed": 1,
-            "entities_created": 2,
-            "relationships_created": 1,
-            "chunks_created": 1,
-            "property_violations_detected": 0,
-            "property_violations_migrated": 0,
-        })
+        pipeline._process_documents_sync = AsyncMock(
+            return_value={
+                "documents_processed": 1,
+                "entities_created": 2,
+                "relationships_created": 1,
+                "chunks_created": 1,
+                "property_violations_detected": 0,
+                "property_violations_migrated": 0,
+            }
+        )
 
         docs = [{"text": "Hello world document.", "source": "src"}]
         result = await pipeline.process_documents(docs)
@@ -388,6 +409,7 @@ class TestMultiTenantGraphRAGPipelineProcessDocuments:
 # ---------------------------------------------------------------------------
 # Tests: PipelineService — pipeline caching and multi-tenant isolation
 # ---------------------------------------------------------------------------
+
 
 class TestPipelineService:
     @pytest.mark.unit
@@ -489,20 +511,25 @@ class TestPipelineService:
             graph_id = UUID("aaaabbbb-cccc-dddd-eeee-ffffaaaabbbb")
 
             mock_pipeline = AsyncMock()
-            mock_pipeline.process_documents = AsyncMock(return_value={
-                "status": "completed",
-                "graph_id": str(graph_id),
-                "entities_created": 5,
-            })
+            mock_pipeline.process_documents = AsyncMock(
+                return_value={
+                    "status": "completed",
+                    "graph_id": str(graph_id),
+                    "entities_created": 5,
+                }
+            )
             svc._pipeline_cache[f"pipeline_{graph_id}"] = mock_pipeline
 
             docs = [{"text": "test doc content here", "source": "test"}]
             await svc.process_documents(documents=docs, graph_id=graph_id)
 
             mock_pipeline.process_documents.assert_awaited_once_with(
-                docs, None, None,
+                docs,
+                None,
+                None,
                 temporal_context=None,
-                mode=pytest.approx(None) or mock_pipeline.process_documents.await_args.kwargs.get("mode"),
+                mode=pytest.approx(None)
+                or mock_pipeline.process_documents.await_args.kwargs.get("mode"),
                 job_id=None,
             )
             # Core check: graph_id must flow to the pipeline instance (validated by cache key)
@@ -512,6 +539,7 @@ class TestPipelineService:
 # ---------------------------------------------------------------------------
 # Tests: multi-tenant isolation — graph_id enforcement
 # ---------------------------------------------------------------------------
+
 
 class TestMultiTenantIsolation:
     @pytest.mark.unit
@@ -540,8 +568,14 @@ class TestMultiTenantIsolation:
         mock_writer = MagicMock()
         mock_writer.run = AsyncMock()
 
-        with patch("app.services.pipeline_service.create_multi_tenant_kg_writer", return_value=mock_writer):
-            docs = [{"text": "", "source": "empty"}, {"content": "", "source": "also-empty"}]
+        with patch(
+            "app.services.pipeline_service.create_multi_tenant_kg_writer",
+            return_value=mock_writer,
+        ):
+            docs = [
+                {"text": "", "source": "empty"},
+                {"content": "", "source": "also-empty"},
+            ]
             result = await pipeline._process_documents_sync(docs)
 
             # Writer should not have been called since both docs are empty

@@ -8,14 +8,15 @@ Business logic for the Agent Memory API:
 - Consolidation logic
 - Context window assembly for agent prompt injection
 """
+
 from __future__ import annotations
 
 import hashlib
 import math
 import time
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
@@ -39,16 +40,16 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Decay constants (Ebbinghaus λ) by memory type
 # ---------------------------------------------------------------------------
-_DECAY: Dict[str, float] = {
+_DECAY: dict[str, float] = {
     MemoryType.EPISODIC: 0.05,
     MemoryType.SEMANTIC: 0.005,
     MemoryType.PROCEDURAL: 0.01,
 }
 
 # Base importance by source
-_BASE_IMPORTANCE: Dict[str, float] = {
+_BASE_IMPORTANCE: dict[str, float] = {
     "user_feedback": 1.0,
-    "agent_high": 0.8,   # confidence >= 0.9
+    "agent_high": 0.8,  # confidence >= 0.9
     "agent_medium": 0.0,  # filled dynamically: confidence * 0.9
     "episodic": 0.4,
     "inference": 0.3,
@@ -60,12 +61,13 @@ _RANK_WEIGHTS = {"vector": 0.50, "importance": 0.30, "recency": 0.20}
 
 # ==================== DECAY HELPERS ====================
 
+
 def compute_importance(
     base_importance: float,
     memory_type: str,
     last_accessed_at: datetime,
     access_count: int,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> float:
     """
     Ebbinghaus-inspired forgetting curve with access boosting.
@@ -73,9 +75,9 @@ def compute_importance(
     I(t) = base_importance * e^(-λ * days) + access_boost
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
     if last_accessed_at.tzinfo is None:
-        last_accessed_at = last_accessed_at.replace(tzinfo=timezone.utc)
+        last_accessed_at = last_accessed_at.replace(tzinfo=UTC)
 
     lam = _DECAY.get(memory_type, 0.01)
     days = max(0.0, (now - last_accessed_at).total_seconds() / 86400)
@@ -84,11 +86,11 @@ def compute_importance(
     return min(1.0, decayed + access_boost)
 
 
-def _recency_factor(last_accessed_at: datetime, now: Optional[datetime] = None) -> float:
+def _recency_factor(last_accessed_at: datetime, now: datetime | None = None) -> float:
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
     if last_accessed_at.tzinfo is None:
-        last_accessed_at = last_accessed_at.replace(tzinfo=timezone.utc)
+        last_accessed_at = last_accessed_at.replace(tzinfo=UTC)
     days = max(0.0, (now - last_accessed_at).total_seconds() / 86400)
     return math.exp(-0.02 * days)
 
@@ -112,6 +114,7 @@ def _content_hash(content: str) -> str:
 
 # ==================== MEMORY SERVICE ====================
 
+
 class MemoryService:
     """
     All memory operations. Uses neo4j_client.async_driver (FastAPI rule).
@@ -125,7 +128,7 @@ class MemoryService:
     async def store_memory(
         self, graph_id: str, req: MemoryCreate
     ) -> MemoryCreateResponse:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         content_hash = _content_hash(req.content)
 
         # 1. Duplicate check
@@ -143,7 +146,7 @@ class MemoryService:
         valid_from = req.valid_from or now
 
         # 2. Build type-specific extra properties
-        extra_props: Dict[str, Any] = {}
+        extra_props: dict[str, Any] = {}
         labels = ["Memory"]
         if req.type == MemoryType.EPISODIC:
             labels.append("Episodic")
@@ -163,11 +166,9 @@ class MemoryService:
 
         # 3. Create node
         label_str = ":".join(labels)
-        set_clauses = "\n".join(
-            f"  m.{k} = ${k}," for k in extra_props
-        ).rstrip(",")
+        set_clauses = "\n".join(f"  m.{k} = ${k}," for k in extra_props).rstrip(",")
 
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "memory_id": memory_id,
             "graph_id": graph_id,
             "memory_type": req.type.value,
@@ -219,19 +220,21 @@ class MemoryService:
         """
         # Remove SET if there is nothing to set
         if not extra_set:
-            create_query = create_query.replace("\n        SET\n        RETURN", "\n        RETURN")
+            create_query = create_query.replace(
+                "\n        SET\n        RETURN", "\n        RETURN"
+            )
 
         await neo4j_client.execute_write_query(create_query, params)
 
         # 4. Contradiction detection (semantic only)
-        contradictions: List[ConflictInfo] = []
+        contradictions: list[ConflictInfo] = []
         if req.type == MemoryType.SEMANTIC and req.subject and req.predicate:
             contradictions = await self._detect_and_record_contradictions(
                 graph_id, memory_id, req, now
             )
 
         # 5. Entity linking
-        entity_linked: Optional[str] = None
+        entity_linked: str | None = None
         if req.type == MemoryType.SEMANTIC and req.subject:
             entity_linked = await self._link_to_entity(graph_id, memory_id, req.subject)
 
@@ -250,17 +253,17 @@ class MemoryService:
         self,
         graph_id: str,
         query: str,
-        memory_type: Optional[MemoryType] = None,
-        scope: Optional[MemoryScope] = None,
+        memory_type: MemoryType | None = None,
+        scope: MemoryScope | None = None,
         temporal: str = "current",
         min_confidence: float = 0.0,
         limit: int = 20,
         include_graph_facts: bool = False,
     ) -> MemorySearchResponse:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         where_clauses = ["m.graph_id = $graph_id", "m.confidence >= $min_confidence"]
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "graph_id": graph_id,
             "min_confidence": min_confidence,
             "limit": limit,
@@ -322,7 +325,7 @@ class MemoryService:
         memories = [self._record_to_search_result(r) for r in records]
 
         # Graph facts
-        graph_facts: List[GraphFact] = []
+        graph_facts: list[GraphFact] = []
         if include_graph_facts and query:
             graph_facts = await self._fetch_graph_facts(graph_id, query, limit=10)
 
@@ -340,17 +343,17 @@ class MemoryService:
         self,
         graph_id: str,
         query: str,
-        agent_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        scopes: Optional[List[str]] = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        scopes: list[str] | None = None,
         max_tokens: int = 2000,
-        include_types: Optional[List[str]] = None,
+        include_types: list[str] | None = None,
     ) -> MemoryContext:
         t0 = time.monotonic()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         scope_filter = ""
-        scope_params: Dict[str, Any] = {}
+        scope_params: dict[str, Any] = {}
         if scopes:
             scope_filter = "AND m.scope IN $scopes"
             scope_params["scopes"] = scopes
@@ -360,7 +363,7 @@ class MemoryService:
             type_filter = "AND m.memory_type IN $include_types"
             scope_params["include_types"] = include_types
 
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "graph_id": graph_id,
             "query": query,
             "limit": 50,
@@ -390,12 +393,12 @@ class MemoryService:
         records = await neo4j_client.execute_query(context_query, params)
 
         # Token-budgeted assembly
-        sections: Dict[str, List[str]] = {
+        sections: dict[str, list[str]] = {
             "semantic": [],
             "procedural": [],
             "episodic": [],
         }
-        used_ids: List[str] = []
+        used_ids: list[str] = []
         estimated_tokens = 0
         tokens_per_char = 0.25  # ~4 chars per token
 
@@ -409,7 +412,7 @@ class MemoryService:
             used_ids.append(rec["memory_id"])
             estimated_tokens += entry_tokens
 
-        lines: List[str] = ["## Relevant Memory\n"]
+        lines: list[str] = ["## Relevant Memory\n"]
         if sections.get("semantic"):
             lines.append("**Facts:**")
             lines.extend(sections["semantic"])
@@ -441,7 +444,7 @@ class MemoryService:
     async def update_memory(
         self, graph_id: str, memory_id: str, req: MemoryUpdate
     ) -> MemoryUpdateResponse:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Fetch existing
         existing_records = await neo4j_client.execute_query(
@@ -461,7 +464,9 @@ class MemoryService:
         old = existing_records[0]
         new_id = str(uuid.uuid4())
         new_content = req.content if req.content is not None else old["content"]
-        new_confidence = req.confidence if req.confidence is not None else old["confidence"]
+        new_confidence = (
+            req.confidence if req.confidence is not None else old["confidence"]
+        )
         new_hash = _content_hash(new_content)
         base_imp = float(old["base_importance"]) if old["base_importance"] else 0.8
 
@@ -526,7 +531,7 @@ class MemoryService:
                 {"graph_id": graph_id, "memory_id": memory_id},
             )
         else:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             await neo4j_client.execute_write_query(
                 """
                 MATCH (m:Memory {graph_id: $graph_id, memory_id: $memory_id})
@@ -540,7 +545,7 @@ class MemoryService:
     # Consolidation (called from Celery task)                             #
     # ------------------------------------------------------------------ #
 
-    async def consolidate(self, graph_id: str) -> Dict[str, Any]:
+    async def consolidate(self, graph_id: str) -> dict[str, Any]:
         """
         Find clusters of semantically similar memories (cosine sim > 0.92)
         and merge duplicates. Returns stats dict.
@@ -549,7 +554,7 @@ class MemoryService:
         a task-scoped sync driver, so this method is also called via
         asyncio.run() inside the Celery task wrapper.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Fetch all current memories for the graph that have embeddings
         # We cluster by content similarity using Neo4j's vector index
@@ -575,13 +580,13 @@ class MemoryService:
         # True vector clustering would require iterating the vector index;
         # we approximate with hash-based dedup and fulltext matches here,
         # leaving full HNSW cluster traversal for a future optimization.
-        content_hash_map: Dict[str, List[str]] = {}
+        content_hash_map: dict[str, list[str]] = {}
         for c in candidates:
             h = _content_hash(c["content"])
             content_hash_map.setdefault(h, []).append(c["memory_id"])
 
         merged_count = 0
-        for hash_val, ids in content_hash_map.items():
+        for _hash_val, ids in content_hash_map.items():
             if len(ids) < 2:
                 continue
             # Keep the first (highest importance_score — sorted DESC above)
@@ -618,7 +623,9 @@ class MemoryService:
                 )
                 merged_count += 1
 
-        logger.info(f"Consolidation for graph {graph_id}: merged {merged_count} duplicate memories")
+        logger.info(
+            f"Consolidation for graph {graph_id}: merged {merged_count} duplicate memories"
+        )
         return {"merged": merged_count, "graph_id": graph_id}
 
     # ------------------------------------------------------------------ #
@@ -627,7 +634,7 @@ class MemoryService:
 
     async def _find_by_content_hash(
         self, graph_id: str, content_hash: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         records = await neo4j_client.execute_query(
             """
             MATCH (m:Memory {graph_id: $graph_id, content_hash: $content_hash})
@@ -645,7 +652,7 @@ class MemoryService:
         new_memory_id: str,
         req: MemoryCreate,
         now: datetime,
-    ) -> List[ConflictInfo]:
+    ) -> list[ConflictInfo]:
         """Detect semantic memories with same subject+predicate but different object."""
         records = await neo4j_client.execute_query(
             """
@@ -667,7 +674,7 @@ class MemoryService:
             },
         )
 
-        conflicts: List[ConflictInfo] = []
+        conflicts: list[ConflictInfo] = []
         for rec in records:
             resolution = ContradictionResolution.NEW_WINS
             await neo4j_client.execute_write_query(
@@ -701,7 +708,7 @@ class MemoryService:
 
     async def _link_to_entity(
         self, graph_id: str, memory_id: str, subject: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """Create ABOUT edge to matching __Entity__ node."""
         records = await neo4j_client.execute_query(
             """
@@ -727,7 +734,7 @@ class MemoryService:
         return entity_id
 
     async def _bump_access(
-        self, graph_id: str, memory_ids: List[str], now: datetime
+        self, graph_id: str, memory_ids: list[str], now: datetime
     ) -> None:
         await neo4j_client.execute_write_query(
             """
@@ -750,7 +757,7 @@ class MemoryService:
 
     async def _fetch_graph_facts(
         self, graph_id: str, query: str, limit: int = 10
-    ) -> List[GraphFact]:
+    ) -> list[GraphFact]:
         records = await neo4j_client.execute_query(
             """
             CALL db.index.fulltext.queryNodes('entity_text_fulltext', $query)
@@ -774,8 +781,8 @@ class MemoryService:
             for r in records
         ]
 
-    def _record_to_search_result(self, rec: Dict[str, Any]) -> MemorySearchResult:
-        def _dt(v: Any) -> Optional[datetime]:
+    def _record_to_search_result(self, rec: dict[str, Any]) -> MemorySearchResult:
+        def _dt(v: Any) -> datetime | None:
             if v is None:
                 return None
             if isinstance(v, datetime):

@@ -10,11 +10,10 @@ Verifies that the chat endpoint:
   6. Confidence score reflects retrieval quality (0.0 when no context found)
   7. is_grounded flag is False when no context was retrieved
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.main import app
-
+import pytest
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -28,8 +27,10 @@ FAKE_USER = {"id": "test-user-hall-001", "email": "qa@example.com"}
 # Helpers (mirrored from test_chat_api.py for self-containment)
 # ---------------------------------------------------------------------------
 
-def _retriever_item(content: str, score: float = 0.9, node_id: str = "n1",
-                    name: str = "Entity"):
+
+def _retriever_item(
+    content: str, score: float = 0.9, node_id: str = "n1", name: str = "Entity"
+):
     item = MagicMock()
     item.content = content
     item.score = score
@@ -91,6 +92,7 @@ class _auth_patch:
     GraphNodeService.get_graph so the ORA-21 ownership check passes.
     Usage: auth = _auth_patch(); ... ; auth.stop()
     """
+
     def __init__(self, graph_id: str = GRAPH_ID):
         self._graph_id = graph_id
         self._gs_patch = None
@@ -103,7 +105,10 @@ class _auth_patch:
         mock_auth.verify_token = AsyncMock(return_value={"id": uid})
         self._gs_patch = patch("app.api.v1.endpoints.chat.GraphNodeService")
         mock_cls = self._gs_patch.start()
-        mock_cls.return_value.get_graph.return_value = {"user_id": uid, "graph_id": self._graph_id}
+        mock_cls.return_value.get_graph.return_value = {
+            "user_id": uid,
+            "graph_id": self._graph_id,
+        }
         return self
 
     def stop(self):
@@ -127,6 +132,7 @@ def _headers():
 # Suite 4a — Known-facts correctness
 # ---------------------------------------------------------------------------
 
+
 class TestKnownFactsCorrectness:
 
     @pytest.mark.integration
@@ -143,11 +149,13 @@ class TestKnownFactsCorrectness:
         try:
             with _ChatPatch(
                 answer=expected_answer,
-                items=[_retriever_item(
-                    content=graph_content,
-                    node_id="person-alice",
-                    name="Alice Smith",
-                )],
+                items=[
+                    _retriever_item(
+                        content=graph_content,
+                        node_id="person-alice",
+                        name="Alice Smith",
+                    )
+                ],
             ):
                 response = await async_client.post(
                     "/api/v1/api/v1/chat",
@@ -164,9 +172,9 @@ class TestKnownFactsCorrectness:
         data = response.json()
         assert data["success"] is True
         assert data["is_grounded"] is True
-        assert "Alice Smith" in data["answer"], (
-            "Known fact 'Alice Smith is CEO' was not reflected in the answer"
-        )
+        assert (
+            "Alice Smith" in data["answer"]
+        ), "Known fact 'Alice Smith is CEO' was not reflected in the answer"
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -206,9 +214,9 @@ class TestKnownFactsCorrectness:
         assert len(data["sources"]) > 0
         # The source node ID must match what was in the graph
         source_ids = [s["node_id"] for s in data["sources"]]
-        assert "company-technova" in source_ids, (
-            f"Expected source node 'company-technova' in {source_ids}"
-        )
+        assert (
+            "company-technova" in source_ids
+        ), f"Expected source node 'company-technova' in {source_ids}"
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -222,7 +230,9 @@ class TestKnownFactsCorrectness:
                 answer="Alice Smith founded TechNova.",
                 items=[
                     _retriever_item(content="Alice Smith founded TechNova", score=0.95),
-                    _retriever_item(content="TechNova was established in 2015", score=0.88),
+                    _retriever_item(
+                        content="TechNova was established in 2015", score=0.88
+                    ),
                 ],
             ):
                 response = await async_client.post(
@@ -235,20 +245,23 @@ class TestKnownFactsCorrectness:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["confidence"] > 0.5, (
-            f"Confidence {data['confidence']} too low for high-score retrieval"
-        )
+        assert (
+            data["confidence"] > 0.5
+        ), f"Confidence {data['confidence']} too low for high-score retrieval"
 
 
 # ---------------------------------------------------------------------------
 # Suite 4b — No-data / empty graph scenarios
 # ---------------------------------------------------------------------------
 
+
 class TestNoDataResponses:
 
     @pytest.mark.integration
     @pytest.mark.api
-    async def test_empty_graph_returns_no_data_response_not_hallucination(self, async_client):
+    async def test_empty_graph_returns_no_data_response_not_hallucination(
+        self, async_client
+    ):
         """
         ANTI-HALLUCINATION: Empty graph → structured no-data response.
         Must NOT invent an answer (is_grounded=False, confidence=0.0).
@@ -270,21 +283,27 @@ class TestNoDataResponses:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert data["is_grounded"] is False, (
-            "is_grounded must be False when no context was retrieved"
-        )
-        assert data["confidence"] == 0.0, (
-            f"Confidence must be 0.0 for empty retrieval, got {data['confidence']}"
-        )
+        assert (
+            data["is_grounded"] is False
+        ), "is_grounded must be False when no context was retrieved"
+        assert (
+            data["confidence"] == 0.0
+        ), f"Confidence must be 0.0 for empty retrieval, got {data['confidence']}"
         # The response should clearly indicate lack of data (not fabricate an answer)
         answer_lower = data["answer"].lower()
-        assert any(phrase in answer_lower for phrase in [
-            "does not contain", "no information", "not found",
-            "don't have", "unable to find", "no data",
-            "cannot find", "not available"
-        ]), (
-            f"Expected a no-data indicator in the answer, got: '{data['answer']}'"
-        )
+        assert any(
+            phrase in answer_lower
+            for phrase in [
+                "does not contain",
+                "no information",
+                "not found",
+                "don't have",
+                "unable to find",
+                "no data",
+                "cannot find",
+                "not available",
+            ]
+        ), f"Expected a no-data indicator in the answer, got: '{data['answer']}'"
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -308,9 +327,9 @@ class TestNoDataResponses:
         assert response.status_code == 200
         data = response.json()
         sources = data.get("sources") or []
-        assert len(sources) == 0, (
-            f"Expected 0 sources for empty graph, got {len(sources)}: {sources}"
-        )
+        assert (
+            len(sources) == 0
+        ), f"Expected 0 sources for empty graph, got {len(sources)}: {sources}"
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -338,9 +357,9 @@ class TestNoDataResponses:
         assert response.status_code == 200
         data = response.json()
         # Must not claim to know Phantom Corp's revenue
-        assert "Phantom Corp" not in data["answer"] or data["is_grounded"] is False, (
-            "System appears to have hallucinated Phantom Corp data"
-        )
+        assert (
+            "Phantom Corp" not in data["answer"] or data["is_grounded"] is False
+        ), "System appears to have hallucinated Phantom Corp data"
         assert data["confidence"] == 0.0 or data["is_grounded"] is False
 
     @pytest.mark.integration
@@ -357,15 +376,20 @@ class TestNoDataResponses:
         try:
             with _ChatPatch(
                 answer=f"{real_entity} is a leading AI company.",
-                items=[_retriever_item(
-                    content=f"{real_entity} develops AI solutions",
-                    node_id="company-technova",
-                    name=real_entity,
-                )],
+                items=[
+                    _retriever_item(
+                        content=f"{real_entity} develops AI solutions",
+                        node_id="company-technova",
+                        name=real_entity,
+                    )
+                ],
             ):
                 response = await async_client.post(
                     "/api/v1/api/v1/chat",
-                    json={"query": "Tell me about AI companies in the graph", "graph_id": GRAPH_ID},
+                    json={
+                        "query": "Tell me about AI companies in the graph",
+                        "graph_id": GRAPH_ID,
+                    },
                     headers=_headers(),
                 )
         finally:
@@ -374,9 +398,9 @@ class TestNoDataResponses:
         assert response.status_code == 200
         data = response.json()
         # The fabricated entity should not appear in the answer
-        assert fabricated_entity not in data["answer"], (
-            f"Fabricated entity '{fabricated_entity}' appeared in grounded answer"
-        )
+        assert (
+            fabricated_entity not in data["answer"]
+        ), f"Fabricated entity '{fabricated_entity}' appeared in grounded answer"
         # The real entity from the graph should be there
         assert real_entity in data["answer"]
 
@@ -384,6 +408,7 @@ class TestNoDataResponses:
 # ---------------------------------------------------------------------------
 # Suite 4c — Grounding and provenance integrity
 # ---------------------------------------------------------------------------
+
 
 class TestGroundingIntegrity:
 
@@ -452,9 +477,9 @@ class TestGroundingIntegrity:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["graph_id"] == target_graph_id, (
-            f"Response graph_id '{data['graph_id']}' does not match request '{target_graph_id}'"
-        )
+        assert (
+            data["graph_id"] == target_graph_id
+        ), f"Response graph_id '{data['graph_id']}' does not match request '{target_graph_id}'"
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -465,7 +490,9 @@ class TestGroundingIntegrity:
         """
         n_items = 3
         items = [
-            _retriever_item(f"Entity content {i}", node_id=f"node-{i}", score=0.9 - i * 0.05)
+            _retriever_item(
+                f"Entity content {i}", node_id=f"node-{i}", score=0.9 - i * 0.05
+            )
             for i in range(n_items)
         ]
 
@@ -491,17 +518,18 @@ class TestGroundingIntegrity:
         assert response.status_code == 200
         data = response.json()
         assert data["is_grounded"] is True
-        assert len(data["sources"]) == n_items, (
-            f"Expected {n_items} sources, got {len(data['sources'])}"
-        )
-        assert data["context"]["total_results"] == n_items, (
-            f"context.total_results should be {n_items}, got {data['context']['total_results']}"
-        )
+        assert (
+            len(data["sources"]) == n_items
+        ), f"Expected {n_items} sources, got {len(data['sources'])}"
+        assert (
+            data["context"]["total_results"] == n_items
+        ), f"context.total_results should be {n_items}, got {data['context']['total_results']}"
 
 
 # ---------------------------------------------------------------------------
 # Suite 4d — Error recovery (no hallucination on failure)
 # ---------------------------------------------------------------------------
+
 
 class TestErrorRecoveryNoHallucination:
 

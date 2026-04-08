@@ -10,16 +10,17 @@ Compatible with Jaeger (via OTLP) and Grafana Tempo.
 
 from __future__ import annotations
 
-from typing import Optional
-
-from opentelemetry import trace, metrics
+from opentelemetry import metrics, trace
+from opentelemetry.propagate import set_global_textmap
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import (
+    ConsoleMetricExporter,
+    PeriodicExportingMetricReader,
+)
+from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
-from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-from opentelemetry.propagate import set_global_textmap
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -27,8 +28,8 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 # Module-level providers — set once at startup
-_tracer_provider: Optional[TracerProvider] = None
-_meter_provider: Optional[MeterProvider] = None
+_tracer_provider: TracerProvider | None = None
+_meter_provider: MeterProvider | None = None
 
 
 def _build_resource() -> Resource:
@@ -47,10 +48,16 @@ def _build_span_exporter():
     protocol = settings.OTEL_EXPORTER_OTLP_PROTOCOL
 
     if protocol == "grpc":
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter,
+        )
+
         return OTLPSpanExporter(endpoint=endpoint, insecure=True)
     else:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+
         return OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")
 
 
@@ -60,10 +67,16 @@ def _build_metric_exporter():
     protocol = settings.OTEL_EXPORTER_OTLP_PROTOCOL
 
     if protocol == "grpc":
-        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+            OTLPMetricExporter,
+        )
+
         return OTLPMetricExporter(endpoint=endpoint, insecure=True)
     else:
-        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+            OTLPMetricExporter,
+        )
+
         return OTLPMetricExporter(endpoint=f"{endpoint}/v1/metrics")
 
 
@@ -102,7 +115,9 @@ def setup_telemetry() -> None:
     # ── Metrics ────────────────────────────────────────────────────────────
     try:
         metric_exporter = _build_metric_exporter()
-        reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30_000)
+        reader = PeriodicExportingMetricReader(
+            metric_exporter, export_interval_millis=30_000
+        )
         _meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
         metrics.set_meter_provider(_meter_provider)
         logger.info("OTel metrics initialised")
@@ -200,6 +215,7 @@ def instrument_fastapi(app) -> None:
         return
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
         FastAPIInstrumentor.instrument_app(app)
         logger.info("FastAPI OTel instrumentation attached")
     except Exception as exc:
@@ -222,6 +238,7 @@ def instrument_celery() -> None:
         return
     try:
         from opentelemetry.instrumentation.celery import CeleryInstrumentor
+
         CeleryInstrumentor().instrument()
         logger.info("Celery OTel instrumentation attached")
     except Exception as exc:

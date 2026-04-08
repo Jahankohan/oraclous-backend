@@ -1,48 +1,64 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any, Optional
 from uuid import UUID
 
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ==================== ONTOLOGY VALIDATION MODE ====================
 
-class OntologyValidationMode(str, Enum):
-    WARN = "warn"      # Count violations but do not modify the extracted graph
+
+class OntologyValidationMode(StrEnum):
+    WARN = "warn"  # Count violations but do not modify the extracted graph
     STRICT = "strict"  # Remove nodes whose label is not in the allowed set
     COERCE = "coerce"  # Fuzzy-remap close matches; drop the rest (threshold 0.7)
 
 
-class IngestMode(str, Enum):
-    FULL = "full"                # Delete all chunks+entities → re-extract (backward-compat)
-    INCREMENTAL = "incremental"  # SHA256 hash guard → only process changed chunks (default)
-    UPSERT = "upsert"            # Process all chunks, MERGE everywhere, never delete
+class IngestMode(StrEnum):
+    FULL = "full"  # Delete all chunks+entities → re-extract (backward-compat)
+    INCREMENTAL = (
+        "incremental"  # SHA256 hash guard → only process changed chunks (default)
+    )
+    UPSERT = "upsert"  # Process all chunks, MERGE everywhere, never delete
+
 
 # Properties that describe relational context — must live on edges, never on entity nodes.
 BANNED_NODE_PROPERTIES = {
-    "job_title", "position", "role", "title", "employer",
-    "proficiency", "seniority", "ownership_pct", "allocation",
-    "start_date_of_employment", "end_date_of_employment",
+    "job_title",
+    "position",
+    "role",
+    "title",
+    "employer",
+    "proficiency",
+    "seniority",
+    "ownership_pct",
+    "allocation",
+    "start_date_of_employment",
+    "end_date_of_employment",
 }
 
 
 class RelationshipProperties(BaseModel):
     source_chunk_id: str = Field(..., description="ID of the source Chunk node")
     confidence: float = Field(..., ge=0.0, le=1.0)
-    ingested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ingested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     # Bitemporal fields — valid_time tracks when the fact was true in the world
-    valid_from: Optional[datetime] = Field(None, description="When this fact became true in the world")
-    valid_to: Optional[datetime] = Field(None, description="When this fact stopped being true (null = still valid)")
+    valid_from: datetime | None = Field(
+        None, description="When this fact became true in the world"
+    )
+    valid_to: datetime | None = Field(
+        None, description="When this fact stopped being true (null = still valid)"
+    )
     # transaction_time is always set server-side — never trust client for this value
     transaction_time: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="When this fact was recorded in the graph (server-set)",
     )
-    extra: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    extra: dict[str, Any] | None = Field(default_factory=dict)
 
     @field_validator("valid_from", "valid_to", mode="before")
     @classmethod
-    def coerce_temporal_string(cls, v: Any) -> Optional[datetime]:
+    def coerce_temporal_string(cls, v: Any) -> datetime | None:
         """Accept ISO-8601 strings from LLM output and coerce to datetime."""
         if v is None or isinstance(v, datetime):
             return v
@@ -68,12 +84,14 @@ class RelationshipProperties(BaseModel):
 
 class EntityNodeProperties(BaseModel):
     name: str
-    description: Optional[str] = None
-    extra: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    description: str | None = None
+    extra: dict[str, Any] | None = Field(default_factory=dict)
 
     @field_validator("extra")
     @classmethod
-    def reject_banned_properties(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def reject_banned_properties(
+        cls, v: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
         if not v:
             return v
         violations = set(v.keys()) & BANNED_NODE_PROPERTIES
@@ -99,20 +117,26 @@ class ExtractedRelationship(BaseModel):
 
 
 class LLMExtractionOutput(BaseModel):
-    nodes: List[ExtractedEntity]
-    relationships: List[ExtractedRelationship]
+    nodes: list[ExtractedEntity]
+    relationships: list[ExtractedRelationship]
 
     @field_validator("relationships")
     @classmethod
-    def validate_node_references(cls, rels: List[ExtractedRelationship], info: Any) -> List[ExtractedRelationship]:
+    def validate_node_references(
+        cls, rels: list[ExtractedRelationship], info: Any
+    ) -> list[ExtractedRelationship]:
         if "nodes" not in info.data:
             return rels
         node_ids = {n.id for n in info.data["nodes"]}
         for rel in rels:
             if rel.start_node_id not in node_ids:
-                raise ValueError(f"start_node_id '{rel.start_node_id}' not in extracted nodes")
+                raise ValueError(
+                    f"start_node_id '{rel.start_node_id}' not in extracted nodes"
+                )
             if rel.end_node_id not in node_ids:
-                raise ValueError(f"end_node_id '{rel.end_node_id}' not in extracted nodes")
+                raise ValueError(
+                    f"end_node_id '{rel.end_node_id}' not in extracted nodes"
+                )
         return rels
 
 
@@ -121,12 +145,14 @@ class MigrationOrphanLog(BaseModel):
     entity_id: str
     entity_name: str
     entity_type: str
-    orphaned_properties: Dict[str, Any]
-    source_chunk_ids: List[str]
+    orphaned_properties: dict[str, Any]
+    source_chunk_ids: list[str]
     detected_at: datetime = Field(default_factory=datetime.utcnow)
     status: str = Field(default="pending")  # pending | re_extracted | manual_review
 
+
 # ==================== TEMPORAL MODELS ====================
+
 
 class TemporalContext(BaseModel):
     """Per-ingestion temporal context — specifies world-time bounds for ingested facts.
@@ -134,15 +160,16 @@ class TemporalContext(BaseModel):
     When provided, `valid_from` / `valid_to` are applied to all relationships written
     during that ingestion job, overriding values extracted by the LLM.
     """
-    valid_from: Optional[datetime] = Field(
+
+    valid_from: datetime | None = Field(
         None,
         description="Start of world-time validity for facts in this document.",
     )
-    valid_to: Optional[datetime] = Field(
+    valid_to: datetime | None = Field(
         None,
         description="End of world-time validity. Null means still valid.",
     )
-    source_date: Optional[str] = Field(
+    source_date: str | None = Field(
         None,
         description="Human-readable document date, e.g. 'Q3 2023'. Stored as metadata; not used for filtering.",
     )
@@ -157,22 +184,22 @@ class TemporalContext(BaseModel):
 class TemporalFilter(BaseModel):
     """Query-time temporal filter — scopes entity/relationship retrieval to a point or range in time."""
 
-    point_in_time: Optional[datetime] = Field(
+    point_in_time: datetime | None = Field(
         None,
         description="Return only facts valid at this instant (valid_from ≤ t < valid_to or valid_to IS NULL).",
     )
-    valid_from_gte: Optional[datetime] = Field(
+    valid_from_gte: datetime | None = Field(
         None,
         description="Lower bound filter on valid_from (inclusive).",
     )
-    valid_to_lte: Optional[datetime] = Field(
+    valid_to_lte: datetime | None = Field(
         None,
         description="Upper bound filter on valid_to (inclusive). Null entries are always included.",
     )
     current_only: bool = Field(
         False,
         description="When True, return only currently-valid facts (valid_to IS NULL). "
-                    "Takes precedence over point_in_time when both are set.",
+        "Takes precedence over point_in_time when both are set.",
     )
 
     @model_validator(mode="after")
@@ -184,8 +211,11 @@ class TemporalFilter(BaseModel):
 
 class UpdateTemporalBoundsRequest(BaseModel):
     """Request body for PATCH /graphs/{id}/entities/{entity_id}/temporal."""
-    valid_from: Optional[datetime] = Field(None, description="New world-time start.")
-    valid_to: Optional[datetime] = Field(None, description="New world-time end. Null clears the end date.")
+
+    valid_from: datetime | None = Field(None, description="New world-time start.")
+    valid_to: datetime | None = Field(
+        None, description="New world-time end. Null clears the end date."
+    )
 
     @model_validator(mode="after")
     def validate_range(self) -> "UpdateTemporalBoundsRequest":
@@ -196,28 +226,33 @@ class UpdateTemporalBoundsRequest(BaseModel):
 
 class TimelineEvent(BaseModel):
     """A single entry in a graph timeline."""
-    event_type: str = Field(..., description="'entity_created', 'entity_updated', or 'relationship'")
+
+    event_type: str = Field(
+        ..., description="'entity_created', 'entity_updated', or 'relationship'"
+    )
     entity_id: str
-    entity_name: Optional[str] = None
-    entity_label: Optional[str] = None
-    relationship_type: Optional[str] = None
-    related_entity_name: Optional[str] = None
-    valid_from: Optional[datetime] = None
-    valid_to: Optional[datetime] = None
-    transaction_time: Optional[datetime] = None
+    entity_name: str | None = None
+    entity_label: str | None = None
+    relationship_type: str | None = None
+    related_entity_name: str | None = None
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    transaction_time: datetime | None = None
 
 
 class TimelineResponse(BaseModel):
     """Response for GET /graphs/{id}/timeline."""
+
     graph_id: str
-    entity_id: Optional[str] = None
-    events: List[TimelineEvent]
+    entity_id: str | None = None
+    events: list[TimelineEvent]
     total: int
 
 
 # ==================== USER CONTEXT & INSTRUCTIONS MODELS ====================
 
-class ExtractionDensity(str, Enum):
+
+class ExtractionDensity(StrEnum):
     SPARSE = "sparse"
     BALANCED = "balanced"
     DENSE = "dense"
@@ -225,10 +260,15 @@ class ExtractionDensity(str, Enum):
 
 class EntityTypeDefinition(BaseModel):
     """Canonical entity type definition for ontology-guided extraction."""
+
     name: str = Field(..., description="Entity type label, e.g. Person, Company, Drug")
-    description: Optional[str] = Field(None, description="What qualifies as this entity type")
-    examples: Optional[List[str]] = Field(None, description="Canonical examples to guide LLM")
-    properties: Optional[Dict[str, str]] = Field(
+    description: str | None = Field(
+        None, description="What qualifies as this entity type"
+    )
+    examples: list[str] | None = Field(
+        None, description="Canonical examples to guide LLM"
+    )
+    properties: dict[str, str] | None = Field(
         None,
         description="Property name -> description map. Tells the LLM what attributes to capture on this type.",
     )
@@ -240,15 +280,16 @@ EntityTypeRule = EntityTypeDefinition
 
 class RelationshipTypeDefinition(BaseModel):
     """Canonical relationship type definition for ontology-guided extraction."""
+
     name: str = Field(..., description="Relationship type, e.g. WORKS_FOR, PRESCRIBES")
-    source_type: Optional[str] = Field(None, description="Expected source entity type")
-    target_type: Optional[str] = Field(None, description="Expected target entity type")
-    properties: Optional[List[str]] = Field(
+    source_type: str | None = Field(None, description="Expected source entity type")
+    target_type: str | None = Field(None, description="Expected target entity type")
+    properties: list[str] | None = Field(
         None,
         description="Properties that must be stored on this relationship, not on entity nodes.",
     )
     # Deprecated — kept for backward compatibility with stored GraphInstructions JSON
-    store_as_edge_property: Optional[List[str]] = Field(
+    store_as_edge_property: list[str] | None = Field(
         None,
         description="Deprecated. Use `properties` instead.",
     )
@@ -271,7 +312,7 @@ RelationshipRule = RelationshipTypeDefinition
 class GraphInstructions(BaseModel):
     """Graph-scoped extraction instructions — persisted on the Graph node."""
 
-    domain: Optional[str] = Field(
+    domain: str | None = Field(
         None,
         description="Domain hint for the LLM extractor, e.g. 'HR org chart', 'pharmaceutical research'.",
     )
@@ -279,11 +320,11 @@ class GraphInstructions(BaseModel):
         ExtractionDensity.BALANCED,
         description="Controls how aggressively entities are extracted.",
     )
-    entity_types: Optional[List[EntityTypeDefinition]] = Field(
+    entity_types: list[EntityTypeDefinition] | None = Field(
         None,
         description="Preferred entity types. When provided: ontology-guided mode. When absent: free-form.",
     )
-    relationship_types: Optional[List[RelationshipTypeDefinition]] = Field(
+    relationship_types: list[RelationshipTypeDefinition] | None = Field(
         None,
         description="Preferred relationship types with edge-property rules.",
     )
@@ -291,23 +332,23 @@ class GraphInstructions(BaseModel):
         OntologyValidationMode.WARN,
         description="How strictly to enforce ontology during extraction.",
     )
-    edge_property_fields: Optional[List[str]] = Field(
+    edge_property_fields: list[str] | None = Field(
         None,
         description="Global list of property names that must ALWAYS be stored on relationships, not nodes.",
     )
-    focus_areas: Optional[List[str]] = Field(
+    focus_areas: list[str] | None = Field(
         None,
         description="Free-text hints about what to focus on.",
     )
-    ignore_patterns: Optional[List[str]] = Field(
+    ignore_patterns: list[str] | None = Field(
         None,
         description="Entity names or patterns to ignore during extraction.",
     )
-    language: Optional[str] = Field(
+    language: str | None = Field(
         "en",
         description="Primary language of source documents. ISO 639-1 code.",
     )
-    custom_prompt_suffix: Optional[str] = Field(
+    custom_prompt_suffix: str | None = Field(
         None,
         max_length=2000,
         description="Free-text instruction appended verbatim to the LLM extraction prompt.",
@@ -317,19 +358,19 @@ class GraphInstructions(BaseModel):
 class IngestionOverrides(BaseModel):
     """Per-ingestion overrides that supplement (not replace) graph-level instructions."""
 
-    additional_focus: Optional[str] = Field(
+    additional_focus: str | None = Field(
         None,
         description="One-time focus hint for this specific document.",
     )
-    override_density: Optional[ExtractionDensity] = Field(
+    override_density: ExtractionDensity | None = Field(
         None,
         description="Override extraction density for this job only.",
     )
-    extra_entity_types: Optional[List[EntityTypeDefinition]] = Field(
+    extra_entity_types: list[EntityTypeDefinition] | None = Field(
         None,
         description="Additional entity types to extract beyond graph defaults.",
     )
-    schema_evolution_hint: Optional[str] = Field(
+    schema_evolution_hint: str | None = Field(
         None,
         description="Instruction about how schema should evolve from this document.",
     )
@@ -344,11 +385,13 @@ class GraphInstructionsResponse(BaseModel):
 
 # ==================== ONTOLOGY REQUEST/RESPONSE MODELS ====================
 
+
 class OntologyResponse(BaseModel):
     """Ontology configuration retrieved from a graph."""
+
     graph_id: UUID
-    entity_types: List[EntityTypeDefinition]
-    relationship_types: List[RelationshipTypeDefinition]
+    entity_types: list[EntityTypeDefinition]
+    relationship_types: list[RelationshipTypeDefinition]
     ontology_mode: OntologyValidationMode
     version: int
     updated_at: datetime
@@ -356,10 +399,11 @@ class OntologyResponse(BaseModel):
 
 class OntologySetRequest(BaseModel):
     """Set (replace) the ontology on a graph."""
-    entity_types: List[EntityTypeDefinition] = Field(
+
+    entity_types: list[EntityTypeDefinition] = Field(
         ..., description="Allowed entity type definitions."
     )
-    relationship_types: Optional[List[RelationshipTypeDefinition]] = Field(
+    relationship_types: list[RelationshipTypeDefinition] | None = Field(
         None, description="Allowed relationship type definitions."
     )
     ontology_mode: OntologyValidationMode = Field(
@@ -370,30 +414,32 @@ class OntologySetRequest(BaseModel):
 
 class OntologyPatchRequest(BaseModel):
     """Partial update for the ontology — add/remove individual types."""
-    add_entity_types: Optional[List[EntityTypeDefinition]] = Field(
+
+    add_entity_types: list[EntityTypeDefinition] | None = Field(
         None, description="Entity types to add or replace (matched by name)."
     )
-    remove_entity_types: Optional[List[str]] = Field(
+    remove_entity_types: list[str] | None = Field(
         None, description="Entity type names to remove."
     )
-    add_relationship_types: Optional[List[RelationshipTypeDefinition]] = Field(
+    add_relationship_types: list[RelationshipTypeDefinition] | None = Field(
         None, description="Relationship types to add or replace (matched by name)."
     )
-    remove_relationship_types: Optional[List[str]] = Field(
+    remove_relationship_types: list[str] | None = Field(
         None, description="Relationship type names to remove."
     )
-    ontology_mode: Optional[OntologyValidationMode] = Field(
+    ontology_mode: OntologyValidationMode | None = Field(
         None, description="Update the enforcement mode."
     )
 
 
 class OntologyValidationReport(BaseModel):
     """Dry-run Cypher scan result — no graph modifications."""
+
     graph_id: UUID
     scanned_entities: int
     violation_count: int
     coercion_candidates: int
-    violations: List[Dict[str, Any]] = Field(
+    violations: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Sample of violating entities (name, label, element_id).",
     )
@@ -401,6 +447,7 @@ class OntologyValidationReport(BaseModel):
 
 class RetroactiveApplyRequest(BaseModel):
     """Request to apply the current ontology to already-ingested nodes."""
+
     dry_run: bool = Field(
         True,
         description="When True, scan only — no writes. When False, apply enforcement.",
@@ -409,13 +456,14 @@ class RetroactiveApplyRequest(BaseModel):
 
 class RetroactiveApplyResponse(BaseModel):
     """Result of a retroactive ontology apply operation."""
+
     graph_id: UUID
     dry_run: bool
     mode: OntologyValidationMode
     violations_found: int
     coercions_applied: int
     deletions_applied: int
-    celery_task_id: Optional[str] = Field(
+    celery_task_id: str | None = Field(
         None,
         description="Set when the operation was dispatched as a Celery background task (>10k nodes).",
     )
@@ -423,11 +471,17 @@ class RetroactiveApplyResponse(BaseModel):
 
 # ==================== GRAPH CRUD MODELS ====================
 
+
 class GraphCreate(BaseModel):
     """Schema for creating a new knowledge graph"""
-    name: str = Field(..., min_length=1, max_length=255, examples=["Company Knowledge Base"])
-    description: Optional[str] = Field(None, max_length=1000, examples=["Internal org chart and company relationships"])
-    schema_config: Optional[Dict[str, Any]] = Field(None)
+
+    name: str = Field(
+        ..., min_length=1, max_length=255, examples=["Company Knowledge Base"]
+    )
+    description: str | None = Field(
+        None, max_length=1000, examples=["Internal org chart and company relationships"]
+    )
+    schema_config: dict[str, Any] | None = Field(None)
 
     model_config = {
         "json_schema_extra": {
@@ -438,54 +492,105 @@ class GraphCreate(BaseModel):
         }
     }
 
+
 class GraphUpdate(BaseModel):
     """Schema for updating a knowledge graph"""
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
-    description: Optional[str] = Field(None, max_length=1000)
-    schema_config: Optional[Dict[str, Any]] = Field(None)
-    federatable: Optional[bool] = Field(None, description="Enable this graph for cross-graph federation queries")
-    federation_group: Optional[str] = Field(None, max_length=255, description="Optional named federation group tag")
-    auto_snapshot_on_ingestion: Optional[bool] = Field(None, description="Auto-snapshot after each ingestion (max 1 per 24h)")
-    snapshot_strategy: Optional[str] = Field(None, description="Snapshot strategy (placeholder — materialized snapshots deferred to Phase 4)")
+
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=1000)
+    schema_config: dict[str, Any] | None = Field(None)
+    federatable: bool | None = Field(
+        None, description="Enable this graph for cross-graph federation queries"
+    )
+    federation_group: str | None = Field(
+        None, max_length=255, description="Optional named federation group tag"
+    )
+    auto_snapshot_on_ingestion: bool | None = Field(
+        None, description="Auto-snapshot after each ingestion (max 1 per 24h)"
+    )
+    snapshot_strategy: str | None = Field(
+        None,
+        description="Snapshot strategy (placeholder — materialized snapshots deferred to Phase 4)",
+    )
+
 
 class GraphResponse(BaseModel):
     """Schema for knowledge graph response"""
 
     id: UUID
     name: str
-    description: Optional[str]
+    description: str | None
     user_id: UUID
-    schema_config: Optional[Dict[str, Any]]
+    schema_config: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
     node_count: int
     relationship_count: int
     status: str
-    last_optimized: Optional[datetime] = Field(default=None, description="When this graph was last optimized")
-    optimization_count: int = Field(default=0, description="Number of optimizations performed")
-    last_optimization_type: Optional[str] = Field(default=None, description="Type of last optimization")
-    has_instructions: bool = Field(default=False, description="Whether graph-level extraction instructions are configured")
-    instructions_version: Optional[int] = Field(default=None, description="Current instructions version")
-    federatable: bool = Field(default=False, description="Whether this graph is enabled for cross-graph federation")
-    federation_group: Optional[str] = Field(default=None, description="Named federation group tag")
-    auto_snapshot_on_ingestion: bool = Field(default=False, description="Auto-snapshot after each ingestion (max 1 per 24h)")
-    snapshot_strategy: Optional[str] = Field(default=None, description="Snapshot strategy placeholder (materialized snapshots deferred to Phase 4)")
+    last_optimized: datetime | None = Field(
+        default=None, description="When this graph was last optimized"
+    )
+    optimization_count: int = Field(
+        default=0, description="Number of optimizations performed"
+    )
+    last_optimization_type: str | None = Field(
+        default=None, description="Type of last optimization"
+    )
+    has_instructions: bool = Field(
+        default=False,
+        description="Whether graph-level extraction instructions are configured",
+    )
+    instructions_version: int | None = Field(
+        default=None, description="Current instructions version"
+    )
+    federatable: bool = Field(
+        default=False,
+        description="Whether this graph is enabled for cross-graph federation",
+    )
+    federation_group: str | None = Field(
+        default=None, description="Named federation group tag"
+    )
+    auto_snapshot_on_ingestion: bool = Field(
+        default=False, description="Auto-snapshot after each ingestion (max 1 per 24h)"
+    )
+    snapshot_strategy: str | None = Field(
+        default=None,
+        description="Snapshot strategy placeholder (materialized snapshots deferred to Phase 4)",
+    )
 
     class Config:
         from_attributes = True
 
+
 class SchemaLearnRequest(BaseModel):
     """Request for learning schema from text"""
-    text_sample: str = Field(..., min_length=50, description="Sample text to learn schema from")
-    domain_context: Optional[str] = Field(None, description="Domain context (e.g., 'medical', 'legal')")
-    evolution_mode: Optional[str] = Field("guided", description="Schema evolution mode: strict, guided, permissive")
-    max_entities: Optional[int] = Field(20, description="Maximum number of entity types")
-    max_relationships: Optional[int] = Field(15, description="Maximum number of relationship types")
+
+    text_sample: str = Field(
+        ..., min_length=50, description="Sample text to learn schema from"
+    )
+    domain_context: str | None = Field(
+        None, description="Domain context (e.g., 'medical', 'legal')"
+    )
+    evolution_mode: str | None = Field(
+        "guided", description="Schema evolution mode: strict, guided, permissive"
+    )
+    max_entities: int | None = Field(20, description="Maximum number of entity types")
+    max_relationships: int | None = Field(
+        15, description="Maximum number of relationship types"
+    )
+
 
 class IngestDataRequest(BaseModel):
     """Enhanced request for data ingestion with schema evolution"""
-    content: str = Field(..., min_length=10, description="Text content to ingest and extract entities from")
-    source_type: str = Field(default="text", description="Content type: text, pdf, url, api")
+
+    content: str = Field(
+        ...,
+        min_length=10,
+        description="Text content to ingest and extract entities from",
+    )
+    source_type: str = Field(
+        default="text", description="Content type: text, pdf, url, api"
+    )
     mode: IngestMode = Field(
         default=IngestMode.INCREMENTAL,
         description=(
@@ -494,28 +599,36 @@ class IngestDataRequest(BaseModel):
             "'upsert' processes all chunks without deleting."
         ),
     )
-    graph_schema: Optional[Dict[str, List[str]]] = None
+    graph_schema: dict[str, list[str]] | None = None
 
     # Per-job extraction overrides (preferred)
-    overrides: Optional[IngestionOverrides] = Field(
+    overrides: IngestionOverrides | None = Field(
         None,
         description="Per-job extraction overrides merged with graph-level instructions.",
     )
 
     # Per-job temporal context — pins world-time bounds for all facts in this document
-    temporal_context: Optional[TemporalContext] = Field(
+    temporal_context: TemporalContext | None = Field(
         None,
         description="World-time bounds for facts in this document. Overrides LLM-extracted valid_from/valid_to.",
     )
 
     # DEPRECATED — kept for backwards compat only; wrapped to overrides.additional_focus
-    instructions: Optional[str] = Field(None, description="Deprecated. Use overrides.additional_focus instead.")
+    instructions: str | None = Field(
+        None, description="Deprecated. Use overrides.additional_focus instead."
+    )
 
     # Schema evolution parameters
-    evolution_mode: Optional[str] = Field("guided", description="Schema evolution mode: strict, guided, permissive")
-    max_entities: Optional[int] = Field(20, description="Maximum entity types allowed")
-    max_relationships: Optional[int] = Field(15, description="Maximum relationship types allowed")
-    allow_schema_evolution: Optional[bool] = Field(True, description="Allow schema to evolve during ingestion")
+    evolution_mode: str | None = Field(
+        "guided", description="Schema evolution mode: strict, guided, permissive"
+    )
+    max_entities: int | None = Field(20, description="Maximum entity types allowed")
+    max_relationships: int | None = Field(
+        15, description="Maximum relationship types allowed"
+    )
+    allow_schema_evolution: bool | None = Field(
+        True, description="Allow schema to evolve during ingestion"
+    )
 
     # Relationship property enforcement
     enforce_relationship_properties: bool = Field(
@@ -530,8 +643,8 @@ class IngestDataRequest(BaseModel):
                 "source_type": "text",
                 "overrides": {
                     "additional_focus": "Focus on executive roles and acquisition details",
-                    "override_density": "dense"
-                }
+                    "override_density": "dense",
+                },
             }
         }
     }
@@ -542,6 +655,7 @@ class IngestDataRequest(BaseModel):
         if only deprecated `instructions` is set, wrap it as additional_focus.
         """
         import warnings
+
         if self.overrides is not None:
             return self.overrides
         if self.instructions is not None:
@@ -553,142 +667,178 @@ class IngestDataRequest(BaseModel):
             return IngestionOverrides(additional_focus=self.instructions)
         return None
 
+
 class IngestionJobResponse(BaseModel):
     """Schema for ingestion job response"""
+
     id: UUID
     graph_id: UUID
-    source_type: Optional[str]
+    source_type: str | None
     status: str
     progress: int
-    error_message: Optional[str] = None
+    error_message: str | None = None
     extracted_entities: int
     extracted_relationships: int
     processed_chunks: int = 0
     similarity_relationships: int = 0
     communities_detected: int = 0
-    property_violations_detected: int = Field(default=0, description="Banned node properties found during extraction")
-    property_violations_migrated: int = Field(default=0, description="Banned properties moved to relationships")
-    ontology_violations: int = Field(default=0, description="Entities that violated the ontology during extraction")
-    ontology_coercions: int = Field(default=0, description="Entities coerced to a closer ontology type during extraction")
+    property_violations_detected: int = Field(
+        default=0, description="Banned node properties found during extraction"
+    )
+    property_violations_migrated: int = Field(
+        default=0, description="Banned properties moved to relationships"
+    )
+    ontology_violations: int = Field(
+        default=0, description="Entities that violated the ontology during extraction"
+    )
+    ontology_coercions: int = Field(
+        default=0,
+        description="Entities coerced to a closer ontology type during extraction",
+    )
     created_at: datetime
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
     class Config:
         from_attributes = True
 
+
 class HealthResponse(BaseModel):
     """Health check response schema"""
+
     status: str
     service: str
     version: str
     timestamp: datetime
-    dependencies: Dict[str, Any]
+    dependencies: dict[str, Any]
+
 
 class SchemaValidationRequest(BaseModel):
     """Request for validating a schema"""
-    entities: List[str] = Field(..., description="List of entity types")
-    relationships: List[str] = Field(..., description="List of relationship types")
+
+    entities: list[str] = Field(..., description="List of entity types")
+    relationships: list[str] = Field(..., description="List of relationship types")
+
 
 class SchemaValidationResponse(BaseModel):
     """Response for schema validation"""
+
     valid: bool
     entities_count: int
     relationships_count: int
-    warnings: List[str] = []
-    errors: List[str] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+
 
 class SchemaEvolutionSettings(BaseModel):
     """Settings for schema evolution"""
+
     mode: str = Field("guided", description="Evolution mode")
     max_entities: int = Field(20, description="Maximum entities")
     max_relationships: int = Field(15, description="Maximum relationships")
-    evolution_threshold: float = Field(0.3, description="Threshold for triggering evolution")
-    auto_consolidate: bool = Field(True, description="Automatically consolidate similar entities")
+    evolution_threshold: float = Field(
+        0.3, description="Threshold for triggering evolution"
+    )
+    auto_consolidate: bool = Field(
+        True, description="Automatically consolidate similar entities"
+    )
+
 
 class GraphConfiguration(BaseModel):
     """Complete graph configuration"""
-    graph_schema: Dict[str, List[str]]
+
+    graph_schema: dict[str, list[str]]
     evolution_settings: SchemaEvolutionSettings
-    domain_context: Optional[str] = None
-    custom_instructions: Optional[str] = None
+    domain_context: str | None = None
+    custom_instructions: str | None = None
+
 
 # ==================== COMMUNITY DETECTION SCHEMAS ====================
 
+
 class CommunityDetectRequest(BaseModel):
-    force_rebuild: bool = Field(False, description="Force re-detection even if status is active")
+    force_rebuild: bool = Field(
+        False, description="Force re-detection even if status is active"
+    )
     levels: int = Field(3, ge=1, le=5, description="Number of hierarchy levels")
-    min_entities: Optional[int] = Field(None, description="Override minimum entity threshold")
+    min_entities: int | None = Field(
+        None, description="Override minimum entity threshold"
+    )
 
 
 class CommunityDetectResponse(BaseModel):
     job_id: str
     graph_id: str
     status: str
-    estimated_entities: Optional[int] = None
+    estimated_entities: int | None = None
 
 
 class CommunityItem(BaseModel):
     community_id: str
     level: int
     entity_count: int
-    weight: Optional[float] = None
-    summary: Optional[str] = None
-    parent_id: Optional[str] = None
+    weight: float | None = None
+    summary: str | None = None
+    parent_id: str | None = None
     status: str
 
 
 class CommunityListResponse(BaseModel):
-    communities: List[CommunityItem]
+    communities: list[CommunityItem]
     total: int
     detection_status: str
-    last_detected_at: Optional[str] = None
+    last_detected_at: str | None = None
 
 
 class CommunityMember(BaseModel):
     entity_id: str
-    entity_name: Optional[str] = None
-    entity_type: Optional[str] = None
+    entity_name: str | None = None
+    entity_type: str | None = None
 
 
 class CommunityDetailResponse(BaseModel):
     community_id: str
     level: int
-    summary: Optional[str] = None
+    summary: str | None = None
     entity_count: int
-    algorithm: Optional[str] = None
-    status: Optional[str] = None
-    parent_community: Optional[Dict[str, Any]] = None
-    child_communities: List[Dict[str, Any]] = []
-    members: List[CommunityMember] = []
-    created_at: Optional[Any] = None
-    last_updated: Optional[Any] = None
+    algorithm: str | None = None
+    status: str | None = None
+    parent_community: dict[str, Any] | None = None
+    child_communities: list[dict[str, Any]] = []
+    members: list[CommunityMember] = []
+    created_at: Any | None = None
+    last_updated: Any | None = None
 
 
 class CommunityStatusResponse(BaseModel):
     status: str
-    last_detected_at: Optional[str] = None
-    communities_by_level: Dict[str, int] = {}
+    last_detected_at: str | None = None
+    communities_by_level: dict[str, int] = {}
     entity_count_at_detection: int = 0
     current_entity_count: int = 0
 
 
 # ==================== VERSIONING SCHEMAS ====================
 
+
 class VersionCreateRequest(BaseModel):
-    label: Optional[str] = Field(None, max_length=200, description="Human-readable label, e.g. 'pre-Q4-ingestion'")
-    description: Optional[str] = Field(None, max_length=1000)
+    label: str | None = Field(
+        None,
+        max_length=200,
+        description="Human-readable label, e.g. 'pre-Q4-ingestion'",
+    )
+    description: str | None = Field(None, max_length=1000)
 
 
 class VersionResponse(BaseModel):
     version_id: str
     graph_id: str
     version_number: int
-    label: Optional[str] = None
-    description: Optional[str] = None
+    label: str | None = None
+    description: str | None = None
     captured_at: Any  # Neo4j datetime — serialised to str by endpoint
     created_by: str
-    parent_version_id: Optional[str] = None
+    parent_version_id: str | None = None
     is_auto: bool = False
     entity_count: int = 0
     relationship_count: int = 0
@@ -696,7 +846,7 @@ class VersionResponse(BaseModel):
 
 
 class VersionListResponse(BaseModel):
-    versions: List[VersionResponse]
+    versions: list[VersionResponse]
     total: int
 
 
@@ -709,20 +859,22 @@ class DiffSummary(BaseModel):
 
 
 class DiffChange(BaseModel):
-    type: str  # entity_added | entity_deleted | relationship_added | relationship_deleted
-    entity_id: Optional[str] = None
-    rel_id: Optional[str] = None
-    name: Optional[str] = None
-    entity_type: Optional[str] = None
-    subject: Optional[str] = None
-    predicate: Optional[str] = None
-    object: Optional[str] = None
-    timestamp: Optional[Any] = None
+    type: (
+        str  # entity_added | entity_deleted | relationship_added | relationship_deleted
+    )
+    entity_id: str | None = None
+    rel_id: str | None = None
+    name: str | None = None
+    entity_type: str | None = None
+    subject: str | None = None
+    predicate: str | None = None
+    object: str | None = None
+    timestamp: Any | None = None
 
 
 class DiffVersionInfo(BaseModel):
     version_id: str
-    label: Optional[str] = None
+    label: str | None = None
     captured_at: Any
 
 
@@ -730,7 +882,7 @@ class VersionDiffResponse(BaseModel):
     from_version: DiffVersionInfo
     to_version: DiffVersionInfo
     summary: DiffSummary
-    changes: List[DiffChange] = []
+    changes: list[DiffChange] = []
     offset: int = 0
     limit: int = 100
     has_more: bool = False
@@ -738,11 +890,13 @@ class VersionDiffResponse(BaseModel):
 
 class RollbackRequest(BaseModel):
     confirm: bool = Field(False, description="Must be true to execute rollback")
-    create_checkpoint: bool = Field(True, description="Auto-snapshot current state before rolling back")
+    create_checkpoint: bool = Field(
+        True, description="Auto-snapshot current state before rolling back"
+    )
 
 
 class RollbackResponse(BaseModel):
-    checkpoint_version_id: Optional[str] = None
+    checkpoint_version_id: str | None = None
     entities_restored: int = 0
     entities_soft_deleted: int = 0
     relationships_restored: int = 0
@@ -753,6 +907,7 @@ class RollbackResponse(BaseModel):
 
 class AsyncRollbackResponse(BaseModel):
     """Returned when rollback is dispatched asynchronously (graph > 10K nodes)."""
+
     rollback_job_id: str
     status: str  # always "pending" at dispatch time
     message: str
@@ -769,11 +924,11 @@ class RollbackJobResponse(BaseModel):
     entities_soft_deleted: int = 0
     relationships_restored: int = 0
     relationships_soft_deleted: int = 0
-    checkpoint_version_id: Optional[str] = None
-    error_message: Optional[str] = None
+    checkpoint_version_id: str | None = None
+    error_message: str | None = None
     performed_by: str
-    scope: Optional[Dict[str, Any]] = None
-    celery_task_id: Optional[str] = None
-    started_at: Optional[Any] = None
-    completed_at: Optional[Any] = None
-    created_at: Optional[Any] = None
+    scope: dict[str, Any] | None = None
+    celery_task_id: str | None = None
+    started_at: Any | None = None
+    completed_at: Any | None = None
+    created_at: Any | None = None

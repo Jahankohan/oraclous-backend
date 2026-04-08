@@ -12,20 +12,20 @@ Both endpoints follow the same pattern as the existing text ingest endpoint:
 """
 
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id, get_database, verify_graph_access
+from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.models.graph import IngestionJob
 from app.schemas.multimodal import MultiModalJobResponse, PDFExtractor, VisionModel
 from app.services.background_job_service import background_job_service
 from app.services.graph_node_service import GraphNodeService
-from app.core.logging import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -45,11 +45,12 @@ _ALLOWED_IMAGE_MIME = {
     "image/webp",
     "image/gif",
 }
-_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024   # 50 MB
-_MAX_IMAGE_BYTES    = 20 * 1024 * 1024   # 20 MB
+_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024  # 50 MB
+_MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _save_upload(graph_id: str, job_id: str, upload: UploadFile, data: bytes) -> str:
     """Write uploaded bytes to an isolated temp path and return the absolute path."""
@@ -69,10 +70,13 @@ async def _verify_graph(graph_id: UUID) -> None:
         )
     graph_service = GraphNodeService(neo4j_client.sync_driver)
     if not graph_service.get_graph(str(graph_id)):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
+        )
 
 
 # ── Document endpoint ─────────────────────────────────────────────────────────
+
 
 @router.post(
     "/graphs/{graph_id}/ingest/document",
@@ -90,7 +94,9 @@ async def ingest_document(
     graph_id: UUID,
     file: UploadFile = File(..., description="PDF or DOCX file (max 50 MB)"),
     context: str = Form("", description="Domain hint for extraction (optional)"),
-    extractor: PDFExtractor = Form(PDFExtractor.AUTO, description="PDF extraction backend"),
+    extractor: PDFExtractor = Form(
+        PDFExtractor.AUTO, description="PDF extraction backend"
+    ),
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
 ):
@@ -114,7 +120,11 @@ async def ingest_document(
     content_type = file.content_type or ""
     filename = file.filename or "document"
     ext = Path(filename).suffix.lower()
-    if content_type not in _ALLOWED_DOCUMENT_MIME and ext not in {".pdf", ".docx", ".doc"}:
+    if content_type not in _ALLOWED_DOCUMENT_MIME and ext not in {
+        ".pdf",
+        ".docx",
+        ".doc",
+    }:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -123,20 +133,26 @@ async def ingest_document(
             ),
         )
 
-    source_type = "pdf" if (content_type == "application/pdf" or ext == ".pdf") else "docx"
+    source_type = (
+        "pdf" if (content_type == "application/pdf" or ext == ".pdf") else "docx"
+    )
 
     # ── Persist job record ────────────────────────────────────────────────────
     job_id = uuid4()
     file_path = _save_upload(str(graph_id), str(job_id), file, data)
 
     # Encode context in effective_instructions so the worker can read it
-    effective_instructions = {"context": context, "extractor": extractor.value} if context else {"extractor": extractor.value}
+    effective_instructions = (
+        {"context": context, "extractor": extractor.value}
+        if context
+        else {"extractor": extractor.value}
+    )
 
     job = IngestionJob(
         id=job_id,
         graph_id=graph_id,
         source_type=source_type,
-        source_content=file_path,    # worker reads from this path
+        source_content=file_path,  # worker reads from this path
         status="pending",
         ingest_mode="incremental",
         effective_instructions=effective_instructions,
@@ -153,19 +169,22 @@ async def ingest_document(
             detail="Failed to start document ingestion job",
         )
 
-    logger.info(f"Queued document ingestion job {job.id} (type={source_type}) for graph {graph_id}")
+    logger.info(
+        f"Queued document ingestion job {job.id} (type={source_type}) for graph {graph_id}"
+    )
 
     return MultiModalJobResponse(
-        job_id=job.id,          # type: ignore[arg-type]
+        job_id=job.id,  # type: ignore[arg-type]
         graph_id=job.graph_id,  # type: ignore[arg-type]
-        status=job.status,      # type: ignore[arg-type]
+        status=job.status,  # type: ignore[arg-type]
         source_type=source_type,
         filename=filename,
-        created_at=job.created_at or datetime.now(timezone.utc),  # type: ignore[arg-type]
+        created_at=job.created_at or datetime.now(UTC),  # type: ignore[arg-type]
     )
 
 
 # ── Image endpoint ────────────────────────────────────────────────────────────
+
 
 @router.post(
     "/graphs/{graph_id}/ingest/image",
@@ -206,7 +225,13 @@ async def ingest_image(
     content_type = file.content_type or ""
     filename = file.filename or "image"
     ext = Path(filename).suffix.lower()
-    if content_type not in _ALLOWED_IMAGE_MIME and ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+    if content_type not in _ALLOWED_IMAGE_MIME and ext not in {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+    }:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -245,13 +270,15 @@ async def ingest_image(
             detail="Failed to start image ingestion job",
         )
 
-    logger.info(f"Queued image ingestion job {job.id} (model={vision_model}) for graph {graph_id}")
+    logger.info(
+        f"Queued image ingestion job {job.id} (model={vision_model}) for graph {graph_id}"
+    )
 
     return MultiModalJobResponse(
-        job_id=job.id,          # type: ignore[arg-type]
+        job_id=job.id,  # type: ignore[arg-type]
         graph_id=job.graph_id,  # type: ignore[arg-type]
-        status=job.status,      # type: ignore[arg-type]
+        status=job.status,  # type: ignore[arg-type]
         source_type="image",
         filename=filename,
-        created_at=job.created_at or datetime.now(timezone.utc),  # type: ignore[arg-type]
+        created_at=job.created_at or datetime.now(UTC),  # type: ignore[arg-type]
     )

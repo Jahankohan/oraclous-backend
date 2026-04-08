@@ -6,16 +6,13 @@ Neo4j is NOT required for these tests — connectors use PostgreSQL for metadata
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
@@ -34,7 +31,9 @@ MOCK_TOKEN = "test-connector-token"
 async def db_session():
     """Task-scoped async database session for test setup/teardown."""
     engine = create_async_engine(settings.POSTGRES_URL, poolclass=NullPool, future=True)
-    session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    session_maker = async_sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
     async with session_maker() as session:
         yield session
     await engine.dispose()
@@ -43,8 +42,8 @@ async def db_session():
 @pytest_asyncio.fixture
 async def client():
     """Async HTTP client with mocked auth returning TEST_USER_ID."""
-    from app.main import app
     from app.api.dependencies import get_current_user_id
+    from app.main import app
 
     async def _mock_user_id() -> str:
         return TEST_USER_ID
@@ -54,12 +53,16 @@ async def client():
     # Also mock verify_graph_access so we don't need Neo4j
     from app.api.dependencies import verify_graph_access
 
-    async def _mock_verify_graph_access(graph_id: str, required_level: str, user_id: str) -> str:
+    async def _mock_verify_graph_access(
+        graph_id: str, required_level: str, user_id: str
+    ) -> str:
         return graph_id
 
     app.dependency_overrides[verify_graph_access] = _mock_verify_graph_access
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         yield c
 
     app.dependency_overrides.clear()
@@ -69,12 +72,16 @@ async def client():
 # Cleanup helper
 # ---------------------------------------------------------------------------
 
+
 async def _delete_test_connectors(db: AsyncSession) -> None:
     from sqlalchemy import delete
+
     from app.models.graph import Connector, ConnectorSyncLog, WebhookEvent
 
     result = await db.execute(
-        __import__("sqlalchemy").select(Connector).where(
+        __import__("sqlalchemy")
+        .select(Connector)
+        .where(
             Connector.graph_id == TEST_GRAPH_ID,
             Connector.user_id == TEST_USER_ID,
         )
@@ -85,7 +92,9 @@ async def _delete_test_connectors(db: AsyncSession) -> None:
             delete(WebhookEvent).where(WebhookEvent.connector_id == connector.id)
         )
         await db.execute(
-            delete(ConnectorSyncLog).where(ConnectorSyncLog.connector_id == connector.id)
+            delete(ConnectorSyncLog).where(
+                ConnectorSyncLog.connector_id == connector.id
+            )
         )
         await db.delete(connector)
     await db.commit()
@@ -94,6 +103,7 @@ async def _delete_test_connectors(db: AsyncSession) -> None:
 # ---------------------------------------------------------------------------
 # Connector template tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -131,9 +141,12 @@ async def test_get_unknown_template_returns_404(client: AsyncClient) -> None:
 # Connector CRUD
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_register_and_list_connector(client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_register_and_list_connector(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
     """Register a connector and verify it appears in the list."""
     await _delete_test_connectors(db_session)
 
@@ -169,7 +182,9 @@ async def test_register_and_list_connector(client: AsyncClient, db_session: Asyn
         assert connector_id in ids
 
         # Get by ID
-        get_resp = await client.get(f"/api/v1/graphs/{TEST_GRAPH_ID}/connectors/{connector_id}")
+        get_resp = await client.get(
+            f"/api/v1/graphs/{TEST_GRAPH_ID}/connectors/{connector_id}"
+        )
         assert get_resp.status_code == 200
         assert get_resp.json()["id"] == connector_id
     finally:
@@ -277,6 +292,7 @@ async def test_delete_connector(client: AsyncClient, db_session: AsyncSession) -
 # Webhook receiver tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_webhook_accepted_with_valid_hmac(
@@ -284,8 +300,6 @@ async def test_webhook_accepted_with_valid_hmac(
 ) -> None:
     """Valid HMAC-signed webhook payload is accepted and event stored."""
     await _delete_test_connectors(db_session)
-
-    hmac_secret = "test-webhook-secret"
 
     # Register webhook_receiver connector (no HMAC secret ID for simplicity — skip verification in test)
     payload = {
@@ -306,7 +320,9 @@ async def test_webhook_accepted_with_valid_hmac(
     connector_id = create_resp.json()["id"]
 
     try:
-        raw_body = json.dumps({"action": "opened", "repository": {"full_name": "org/repo"}}).encode()
+        raw_body = json.dumps(
+            {"action": "opened", "repository": {"full_name": "org/repo"}}
+        ).encode()
 
         # Patch HMAC credential resolution to skip real broker call
         with patch(
@@ -448,6 +464,7 @@ async def test_non_webhook_connector_returns_404_on_webhook_endpoint(
 # Manual sync trigger
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_trigger_sync_enqueues_celery_task(
@@ -478,7 +495,11 @@ async def test_trigger_sync_enqueues_celery_task(
         with patch(
             "app.services.connector_service.connector_service.trigger_sync",
             new_callable=AsyncMock,
-            return_value={"connector_id": connector_id, "task_id": "mock-celery-task-id", "status": "queued"},
+            return_value={
+                "connector_id": connector_id,
+                "task_id": "mock-celery-task-id",
+                "status": "queued",
+            },
         ):
             sync_resp = await client.post(
                 f"/api/v1/graphs/{TEST_GRAPH_ID}/connectors/{connector_id}/sync"
@@ -527,6 +548,7 @@ async def test_trigger_sync_on_webhook_receiver_returns_400(
 # Multi-tenancy isolation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_connectors_scoped_to_graph(
@@ -546,7 +568,9 @@ async def test_connectors_scoped_to_graph(
             "entity_mapping": {"extraction_mode": "llm"},
         },
     }
-    create_resp = await client.post(f"/api/v1/graphs/{graph_a}/connectors", json=payload)
+    create_resp = await client.post(
+        f"/api/v1/graphs/{graph_a}/connectors", json=payload
+    )
     assert create_resp.status_code == 201
     connector_id = create_resp.json()["id"]
 

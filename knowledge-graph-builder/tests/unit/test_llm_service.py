@@ -4,15 +4,17 @@ Unit tests for LLMService.
 Tests provider abstraction (OpenAI / Anthropic / Google), fallback behavior,
 schema configuration, and initialization state — all external LLM calls mocked.
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.llm_service import LLMService
+import pytest
 
+from app.services.llm_service import LLMService
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_service() -> LLMService:
     return LLMService()
@@ -21,6 +23,7 @@ def _make_service() -> LLMService:
 # ---------------------------------------------------------------------------
 # Tests: initialization state
 # ---------------------------------------------------------------------------
+
 
 class TestLLMServiceInit:
     @pytest.mark.unit
@@ -37,17 +40,22 @@ class TestLLMServiceInit:
 # Tests: initialize_llm — OpenAI provider
 # ---------------------------------------------------------------------------
 
+
 class TestInitializeLLMOpenAI:
     @pytest.mark.unit
     async def test_openai_init_uses_user_credential_first(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.ChatOpenAI") as mock_openai, \
-             patch("app.services.llm_service.LLMGraphTransformer"):
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.ChatOpenAI") as mock_openai,
+            patch("app.services.llm_service.LLMGraphTransformer"),
+        ):
             mock_creds.get_openai_token = AsyncMock(return_value="user-key-123")
             mock_openai.return_value = MagicMock()
 
-            result = await svc.initialize_llm("user-1", provider="openai", model="gpt-4o")
+            result = await svc.initialize_llm(
+                "user-1", provider="openai", model="gpt-4o"
+            )
 
         assert result is True
         call_kwargs = mock_openai.call_args[1]
@@ -56,10 +64,12 @@ class TestInitializeLLMOpenAI:
     @pytest.mark.unit
     async def test_openai_init_falls_back_to_settings_key(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.ChatOpenAI") as mock_openai, \
-             patch("app.services.llm_service.LLMGraphTransformer"), \
-             patch("app.services.llm_service.settings") as mock_settings:
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.ChatOpenAI") as mock_openai,
+            patch("app.services.llm_service.LLMGraphTransformer"),
+            patch("app.services.llm_service.settings") as mock_settings,
+        ):
             mock_creds.get_openai_token = AsyncMock(return_value=None)
             mock_settings.OPENAI_API_KEY = "settings-key"
             mock_openai.return_value = MagicMock()
@@ -73,8 +83,10 @@ class TestInitializeLLMOpenAI:
     @pytest.mark.unit
     async def test_openai_init_returns_false_when_no_key(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.settings") as mock_settings:
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.settings") as mock_settings,
+        ):
             mock_creds.get_openai_token = AsyncMock(return_value=None)
             mock_settings.OPENAI_API_KEY = None
 
@@ -85,9 +97,11 @@ class TestInitializeLLMOpenAI:
     @pytest.mark.unit
     async def test_openai_init_sets_provider_and_model(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.ChatOpenAI") as mock_openai, \
-             patch("app.services.llm_service.LLMGraphTransformer"):
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.ChatOpenAI") as mock_openai,
+            patch("app.services.llm_service.LLMGraphTransformer"),
+        ):
             mock_creds.get_openai_token = AsyncMock(return_value="k")
             mock_openai.return_value = MagicMock()
 
@@ -99,9 +113,11 @@ class TestInitializeLLMOpenAI:
     @pytest.mark.unit
     async def test_openai_init_creates_graph_transformer(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.ChatOpenAI") as mock_openai, \
-             patch("app.services.llm_service.LLMGraphTransformer") as mock_gt:
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.ChatOpenAI") as mock_openai,
+            patch("app.services.llm_service.LLMGraphTransformer") as mock_gt,
+        ):
             mock_creds.get_openai_token = AsyncMock(return_value="k")
             mock_openai.return_value = MagicMock()
             mock_gt.return_value = MagicMock()
@@ -116,17 +132,22 @@ class TestInitializeLLMOpenAI:
 # Tests: initialize_llm — Anthropic provider
 # ---------------------------------------------------------------------------
 
+
 class TestInitializeLLMAnthropic:
     @pytest.mark.unit
     async def test_anthropic_init_success(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.ChatAnthropic") as mock_anthropic, \
-             patch("app.services.llm_service.LLMGraphTransformer"):
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.ChatAnthropic") as mock_anthropic,
+            patch("app.services.llm_service.LLMGraphTransformer"),
+        ):
             mock_creds.get_anthropic_token = AsyncMock(return_value="anthropic-key")
             mock_anthropic.return_value = MagicMock()
 
-            result = await svc.initialize_llm("u", provider="anthropic", model="claude-3-haiku-20240307")
+            result = await svc.initialize_llm(
+                "u", provider="anthropic", model="claude-3-haiku-20240307"
+            )
 
         assert result is True
         assert svc.current_provider == "anthropic"
@@ -134,9 +155,11 @@ class TestInitializeLLMAnthropic:
     @pytest.mark.unit
     async def test_anthropic_init_falls_back_to_default_claude_model(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.ChatAnthropic") as mock_anthropic, \
-             patch("app.services.llm_service.LLMGraphTransformer"):
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.ChatAnthropic") as mock_anthropic,
+            patch("app.services.llm_service.LLMGraphTransformer"),
+        ):
             mock_creds.get_anthropic_token = AsyncMock(return_value="k")
             mock_anthropic.return_value = MagicMock()
 
@@ -149,8 +172,10 @@ class TestInitializeLLMAnthropic:
     @pytest.mark.unit
     async def test_anthropic_init_returns_false_when_no_key(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.settings") as mock_settings:
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.settings") as mock_settings,
+        ):
             mock_creds.get_anthropic_token = AsyncMock(return_value=None)
             mock_settings.ANTHROPIC_API_KEY = None
 
@@ -163,17 +188,24 @@ class TestInitializeLLMAnthropic:
 # Tests: initialize_llm — Google provider
 # ---------------------------------------------------------------------------
 
+
 class TestInitializeLLMGoogle:
     @pytest.mark.unit
     async def test_google_init_success(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.ChatGoogleGenerativeAI") as mock_google, \
-             patch("app.services.llm_service.LLMGraphTransformer"):
-            mock_creds.get_user_credentials = AsyncMock(return_value={"access_token": "google-key"})
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.ChatGoogleGenerativeAI") as mock_google,
+            patch("app.services.llm_service.LLMGraphTransformer"),
+        ):
+            mock_creds.get_user_credentials = AsyncMock(
+                return_value={"access_token": "google-key"}
+            )
             mock_google.return_value = MagicMock()
 
-            result = await svc.initialize_llm("u", provider="google", model="gemini-1.5-flash")
+            result = await svc.initialize_llm(
+                "u", provider="google", model="gemini-1.5-flash"
+            )
 
         assert result is True
         assert svc.current_provider == "google"
@@ -181,13 +213,19 @@ class TestInitializeLLMGoogle:
     @pytest.mark.unit
     async def test_google_init_uses_gemini_model_fallback(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.ChatGoogleGenerativeAI") as mock_google, \
-             patch("app.services.llm_service.LLMGraphTransformer"):
-            mock_creds.get_user_credentials = AsyncMock(return_value={"access_token": "k"})
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.ChatGoogleGenerativeAI") as mock_google,
+            patch("app.services.llm_service.LLMGraphTransformer"),
+        ):
+            mock_creds.get_user_credentials = AsyncMock(
+                return_value={"access_token": "k"}
+            )
             mock_google.return_value = MagicMock()
 
-            await svc.initialize_llm("u", provider="google", model="gpt-4o")  # non-gemini model
+            await svc.initialize_llm(
+                "u", provider="google", model="gpt-4o"
+            )  # non-gemini model
 
         call_kwargs = mock_google.call_args[1]
         assert call_kwargs["model"] == "gemini-1.5-flash"
@@ -207,6 +245,7 @@ class TestInitializeLLMGoogle:
 # Tests: unsupported provider
 # ---------------------------------------------------------------------------
 
+
 class TestUnsupportedProvider:
     @pytest.mark.unit
     async def test_unsupported_provider_returns_false(self):
@@ -220,12 +259,15 @@ class TestUnsupportedProvider:
 # Tests: exception handling
 # ---------------------------------------------------------------------------
 
+
 class TestInitializeLLMExceptionHandling:
     @pytest.mark.unit
     async def test_returns_false_on_unexpected_exception(self):
         svc = _make_service()
-        with patch("app.services.llm_service.credential_service") as mock_creds, \
-             patch("app.services.llm_service.ChatOpenAI") as mock_openai:
+        with (
+            patch("app.services.llm_service.credential_service") as mock_creds,
+            patch("app.services.llm_service.ChatOpenAI") as mock_openai,
+        ):
             mock_creds.get_openai_token = AsyncMock(return_value="k")
             mock_openai.side_effect = Exception("Unexpected crash")
 
@@ -239,6 +281,7 @@ class TestInitializeLLMExceptionHandling:
 # Tests: set_schema
 # ---------------------------------------------------------------------------
 
+
 class TestSetSchema:
     @pytest.mark.unit
     def test_set_schema_updates_allowed_nodes_and_relationships(self):
@@ -247,7 +290,9 @@ class TestSetSchema:
         svc.graph_transformer = mock_transformer
         svc.llm = MagicMock()
 
-        svc.set_schema({"entities": ["Person", "Company"], "relationships": ["WORKS_AT"]})
+        svc.set_schema(
+            {"entities": ["Person", "Company"], "relationships": ["WORKS_AT"]}
+        )
 
         assert mock_transformer.allowed_nodes == ["Person", "Company"]
         assert mock_transformer.allowed_relationships == ["WORKS_AT"]
@@ -272,6 +317,7 @@ class TestSetSchema:
 # Tests: set_dynamic_schema
 # ---------------------------------------------------------------------------
 
+
 class TestSetDynamicSchema:
     @pytest.mark.unit
     def test_set_dynamic_schema_rebuilds_transformer(self):
@@ -280,10 +326,9 @@ class TestSetDynamicSchema:
 
         with patch("app.services.llm_service.LLMGraphTransformer") as mock_gt:
             mock_gt.return_value = MagicMock()
-            svc.set_dynamic_schema({
-                "entities": ["Person", "Company"],
-                "relationships": ["WORKS_AT"]
-            })
+            svc.set_dynamic_schema(
+                {"entities": ["Person", "Company"], "relationships": ["WORKS_AT"]}
+            )
 
         mock_gt.assert_called_once()
         call_kwargs = mock_gt.call_args[1]
@@ -314,6 +359,7 @@ class TestSetDynamicSchema:
 # ---------------------------------------------------------------------------
 # Tests: is_initialized
 # ---------------------------------------------------------------------------
+
 
 class TestIsInitialized:
     @pytest.mark.unit

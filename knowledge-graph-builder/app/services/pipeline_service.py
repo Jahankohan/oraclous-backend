@@ -22,16 +22,14 @@ import asyncio
 import difflib
 import hashlib
 from dataclasses import dataclass
-from dataclasses import field as dataclass_field
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from datetime import UTC, datetime
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import BackgroundTasks, HTTPException, status
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
 from neo4j_graphrag.experimental.components.types import DocumentInfo, Neo4jGraph
 from neo4j_graphrag.llm import OpenAILLM
-from opentelemetry import trace as otel_trace
 
 from app.components.entity_resolver import MultiTenantEntityDeduplicator
 from app.components.multi_tenant_components import (
@@ -53,8 +51,6 @@ from app.schemas.graph_schemas import (
     TemporalFilter,
 )
 from app.services.instructions_service import (
-    InstructionsCompiler,
-    InstructionsResolver,
     ResolvedInstructions,
     instructions_compiler,
     instructions_resolver,
@@ -267,7 +263,7 @@ class MultiTenantGraphRAGPipeline:
     - Simple factory pattern for clean initialization
     """
 
-    def __init__(self, graph_id: str, user_id: Optional[str] = None):
+    def __init__(self, graph_id: str, user_id: str | None = None):
         """
         Initialize multi-tenant pipeline wrapper.
 
@@ -331,7 +327,7 @@ class MultiTenantGraphRAGPipeline:
                 )
 
             # Initialize OpenAI LLM with conditional response format
-            model_params: Dict[str, Any] = {
+            model_params: dict[str, Any] = {
                 "temperature": self.config.llm_temperature,
                 "max_tokens": self.config.llm_max_tokens,
             }
@@ -370,13 +366,13 @@ class MultiTenantGraphRAGPipeline:
 
     async def process_documents(
         self,
-        documents: List[Dict[str, Any]],
-        background_tasks: Optional[BackgroundTasks] = None,
-        overrides: Optional[IngestionOverrides] = None,
-        temporal_context: Optional[TemporalContext] = None,
+        documents: list[dict[str, Any]],
+        background_tasks: BackgroundTasks | None = None,
+        overrides: IngestionOverrides | None = None,
+        temporal_context: TemporalContext | None = None,
         mode: IngestMode = IngestMode.INCREMENTAL,
-        job_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Process documents through Neo4j GraphRAG pipeline with multi-tenant isolation.
 
@@ -451,12 +447,12 @@ class MultiTenantGraphRAGPipeline:
 
     async def _process_documents_sync(
         self,
-        documents: List[Dict[str, Any]],
-        resolved: Optional[ResolvedInstructions] = None,
-        temporal_context: Optional[TemporalContext] = None,
+        documents: list[dict[str, Any]],
+        resolved: ResolvedInstructions | None = None,
+        temporal_context: TemporalContext | None = None,
         mode: IngestMode = IngestMode.INCREMENTAL,
-        job_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
         """Process documents synchronously using Neo4j GraphRAG pipeline."""
 
         # Create multi-tenant KG writer
@@ -530,25 +526,17 @@ class MultiTenantGraphRAGPipeline:
         text: str,
         source: str,
         kg_writer: MultiTenantKGWriter,
-        resolved: Optional[ResolvedInstructions] = None,
-        temporal_context: Optional[TemporalContext] = None,
+        resolved: ResolvedInstructions | None = None,
+        temporal_context: TemporalContext | None = None,
         mode: IngestMode = IngestMode.INCREMENTAL,
-        job_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Process a single document using Neo4j GraphRAG components.
 
         This processes chunks independently which can create duplicate entities.
         The solution is to add proper entity resolution after extraction.
         """
-        from neo4j_graphrag.experimental.components.embedder import TextChunkEmbedder
-        from neo4j_graphrag.experimental.components.entity_relation_extractor import (
-            LLMEntityRelationExtractor,
-            OnError,
-        )
-        from neo4j_graphrag.experimental.components.text_splitters.fixed_size_splitter import (
-            FixedSizeSplitter,
-        )
 
         with _pipeline_tracer.start_as_current_span("pipeline.document") as doc_span:
             doc_span.set_attribute("graph_id", self.graph_id)
@@ -573,8 +561,8 @@ class MultiTenantGraphRAGPipeline:
         resolved: Optional["ResolvedInstructions"] = None,
         temporal_context: Optional["TemporalContext"] = None,
         mode: "IngestMode" = IngestMode.INCREMENTAL,
-        job_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
         from neo4j_graphrag.experimental.components.embedder import TextChunkEmbedder
         from neo4j_graphrag.experimental.components.entity_relation_extractor import (
             LLMEntityRelationExtractor,
@@ -621,7 +609,7 @@ class MultiTenantGraphRAGPipeline:
         # ── STAGE 1.5: Chunk-level delta (incremental mode only) ──────────────────
         chunk_list = getattr(chunks, "chunks", [])
         # Build uid → SHA1(text) map for provenance tracking and delta comparison
-        chunk_content_hashes: Dict[str, str] = {
+        chunk_content_hashes: dict[str, str] = {
             c.uid: hashlib.sha1(
                 (getattr(c, "text", "") or "").encode("utf-8")
             ).hexdigest()
@@ -629,10 +617,10 @@ class MultiTenantGraphRAGPipeline:
         }
 
         if mode == IngestMode.INCREMENTAL:
-            existing_hashes: Set[str] = await self._get_existing_chunk_content_hashes(
+            existing_hashes: set[str] = await self._get_existing_chunk_content_hashes(
                 source
             )
-            new_hashes: Set[str] = set(chunk_content_hashes.values())
+            new_hashes: set[str] = set(chunk_content_hashes.values())
             added_hashes = new_hashes - existing_hashes
             removed_hashes = existing_hashes - new_hashes
 
@@ -737,8 +725,8 @@ class MultiTenantGraphRAGPipeline:
                 f"Raw extraction: {len(graph.nodes)} nodes, {len(graph.relationships)} relationships"
             )
 
-            entity_types: Dict[str, int] = {}
-            entity_names: List[str] = []
+            entity_types: dict[str, int] = {}
+            entity_names: list[str] = []
             for node in graph.nodes:
                 node_label = getattr(node, "label", "Unknown")
                 entity_types[node_label] = entity_types.get(node_label, 0) + 1
@@ -814,7 +802,7 @@ class MultiTenantGraphRAGPipeline:
             )
 
         # 4.7. Entity-level delta classification (INCREMENTAL mode only — Spec ORA-49)
-        entity_delta_stats: Dict[str, Any] = {
+        entity_delta_stats: dict[str, Any] = {
             "new": 0,
             "updated": 0,
             "unchanged": 0,
@@ -938,14 +926,13 @@ class MultiTenantGraphRAGPipeline:
         This solves the chunk overlap issue where the same entity appears in multiple
         chunks with different IDs (e.g., chunk_1:Alex Thompson vs chunk_2:Alex Thompson).
         """
-        from typing import Any, Dict
 
         if not graph or not graph.nodes:
             return graph
 
         # Step 1: Create mapping from entity names to canonical IDs
-        entity_name_to_canonical_id: Dict[str, str] = {}
-        old_id_to_new_id: Dict[str, str] = {}
+        entity_name_to_canonical_id: dict[str, str] = {}
+        old_id_to_new_id: dict[str, str] = {}
         original_entity_count = len(graph.nodes)
 
         # Track what we're merging for debugging
@@ -992,7 +979,7 @@ class MultiTenantGraphRAGPipeline:
             if len(entities) > 1
         }
         if entities_to_merge:
-            logger.info(f"🔄 Entities being merged due to same name:")
+            logger.info("🔄 Entities being merged due to same name:")
             for entity_name, entity_variations in entities_to_merge.items():
                 logger.info(
                     f"  📍 '{entity_name}': {len(entity_variations)} variations"
@@ -1050,7 +1037,7 @@ class MultiTenantGraphRAGPipeline:
         self,
         graph: "Neo4jGraph",
         resolved: "ResolvedInstructions",
-    ) -> Tuple["Neo4jGraph", "_EnforcementReport"]:
+    ) -> tuple["Neo4jGraph", "_EnforcementReport"]:
         """
         Enforce the graph ontology against extracted nodes.
 
@@ -1140,7 +1127,7 @@ class MultiTenantGraphRAGPipeline:
 
     def compile_temporal_filter(
         self, temporal_filter: TemporalFilter
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any]]:
         """
         Compile a TemporalFilter into a Cypher WHERE clause fragment and a
         params dict for use with the Neo4j driver's parameterized `.run()`.
@@ -1154,8 +1141,8 @@ class MultiTenantGraphRAGPipeline:
         if temporal_filter.current_only:
             return "r.valid_to IS NULL", {}
 
-        clauses: List[str] = []
-        params: Dict[str, Any] = {}
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
 
         if temporal_filter.point_in_time:
             params["tf_pit"] = temporal_filter.point_in_time.isoformat()
@@ -1179,7 +1166,7 @@ class MultiTenantGraphRAGPipeline:
     async def _detect_temporal_contradictions(
         self,
         graph: "Neo4jGraph",
-        temporal_context: Optional[TemporalContext],
+        temporal_context: TemporalContext | None,
     ) -> int:
         """
         Inline contradiction check: before writing, scan for existing relationships
@@ -1281,7 +1268,7 @@ class MultiTenantGraphRAGPipeline:
             return False
 
     async def _set_document_provenance(
-        self, source: str, content_hash: str, mode: "IngestMode", job_id: Optional[str]
+        self, source: str, content_hash: str, mode: "IngestMode", job_id: str | None
     ) -> None:
         """Set contentHash, lastJobId, lastIngestedAt, ingestMode on the Document node (upsert)."""
         try:
@@ -1305,7 +1292,7 @@ class MultiTenantGraphRAGPipeline:
         except Exception as e:
             logger.warning(f"Could not set document provenance for '{source}': {e}")
 
-    async def _get_existing_chunk_content_hashes(self, source: str) -> Set[str]:
+    async def _get_existing_chunk_content_hashes(self, source: str) -> set[str]:
         """Return the set of SHA1 contentHash values for chunks already in the graph for this document."""
         try:
             query = """
@@ -1324,7 +1311,7 @@ class MultiTenantGraphRAGPipeline:
             return set()
 
     async def _soft_delete_stale_chunks(
-        self, content_hashes: List[str], source: str, job_id: Optional[str]
+        self, content_hashes: list[str], source: str, job_id: str | None
     ) -> None:
         """Mark removed chunks as stale by setting staleAt / staleJobId (soft-delete)."""
         try:
@@ -1347,7 +1334,7 @@ class MultiTenantGraphRAGPipeline:
             logger.warning(f"Could not soft-delete stale chunks for '{source}': {e}")
 
     async def _set_chunk_provenance(
-        self, chunk_content_hashes: Dict[str, str], job_id: Optional[str]
+        self, chunk_content_hashes: dict[str, str], job_id: str | None
     ) -> None:
         """
         Set contentHash and jobId on newly-written Chunk nodes.
@@ -1384,7 +1371,7 @@ class MultiTenantGraphRAGPipeline:
             )
 
     async def _set_entity_provenance(
-        self, entity_ids: List[str], job_id: Optional[str]
+        self, entity_ids: list[str], job_id: str | None
     ) -> None:
         """
         Set lastJobId, ingestedAt (first-seen only), and updatedAt on extracted entity nodes.
@@ -1418,7 +1405,7 @@ class MultiTenantGraphRAGPipeline:
 
     def _strip_banned_node_properties(
         self, graph: Neo4jGraph
-    ) -> Tuple[Neo4jGraph, int, int]:
+    ) -> tuple[Neo4jGraph, int, int]:
         """
         Remove banned properties from entity nodes.
 
@@ -1450,8 +1437,8 @@ class MultiTenantGraphRAGPipeline:
     # ── Entity-level delta (Spec ORA-49) ──────────────────────────────────────
 
     async def _bulk_fingerprint_lookup(
-        self, fingerprints: List[str]
-    ) -> Dict[str, Dict[str, Any]]:
+        self, fingerprints: list[str]
+    ) -> dict[str, dict[str, Any]]:
         """
         Single round-trip lookup: returns {fingerprint → {prop_hash, description}}.
 
@@ -1477,7 +1464,7 @@ class MultiTenantGraphRAGPipeline:
         self,
         graph: "Neo4jGraph",
         source: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Entity-level delta classification for INCREMENTAL mode.
 
@@ -1506,9 +1493,7 @@ class MultiTenantGraphRAGPipeline:
             return {"new": 0, "updated": 0, "unchanged": 0, "entity_ids_updated": []}
 
         # Compute fingerprint + prop_hash for every extracted entity
-        fp_map: Dict[str, "Neo4jGraphNode"] = (
-            {}
-        )  # fingerprint → node (first occurrence wins)
+        fp_map: dict[str, Any] = {}  # fingerprint → node (first occurrence wins)
         for node in entity_nodes:
             props = node.properties or {}
             name = props.get("name") or node.id or ""
@@ -1526,13 +1511,13 @@ class MultiTenantGraphRAGPipeline:
             fp_map[fp] = node
 
         # Single round-trip to Neo4j
-        existing: Dict[str, str] = await self._bulk_fingerprint_lookup(
+        existing: dict[str, str] = await self._bulk_fingerprint_lookup(
             list(fp_map.keys())
         )
 
         new_count = updated_count = unchanged_count = 0
         unchanged_fps: set = set()
-        updated_ids: List[str] = []
+        updated_ids: list[str] = []
 
         for fp, node in fp_map.items():
             if fp not in existing:
@@ -1579,7 +1564,7 @@ class MultiTenantGraphRAGPipeline:
             "entity_ids_updated": updated_ids,
         }
 
-    async def _apply_updated_merge_rules(self, updated_ids: List[str]) -> None:
+    async def _apply_updated_merge_rules(self, updated_ids: list[str]) -> None:
         """
         After kg_writer has written the UPDATED entities, apply property-level merge rules:
         - description: keep the longer value
@@ -1677,8 +1662,8 @@ class MultiTenantGraphRAGPipeline:
 
     async def _process_documents_background(
         self,
-        documents: List[Dict[str, Any]],
-        resolved: Optional[ResolvedInstructions] = None,
+        documents: list[dict[str, Any]],
+        resolved: ResolvedInstructions | None = None,
     ):
         """Background processing for large document sets."""
         try:
@@ -1697,7 +1682,7 @@ class MultiTenantGraphRAGPipeline:
         except Exception as e:
             logger.error(f"Background processing failed for graph {self.graph_id}: {e}")
 
-    async def get_processing_status(self) -> Dict[str, Any]:
+    async def get_processing_status(self) -> dict[str, Any]:
         """Get current processing status and statistics."""
         try:
             await self._initialize_components()
@@ -1747,13 +1732,13 @@ class PipelineService:
 
     def __init__(self):
         """Initialize pipeline service."""
-        self._pipeline_cache: Dict[str, MultiTenantGraphRAGPipeline] = (
+        self._pipeline_cache: dict[str, MultiTenantGraphRAGPipeline] = (
             {}
         )  # Cache pipelines per graph_id
         logger.info("PipelineService initialized")
 
     def get_pipeline(
-        self, graph_id: UUID, user_id: Optional[str] = None
+        self, graph_id: UUID, user_id: str | None = None
     ) -> MultiTenantGraphRAGPipeline:
         """
         Get or create multi-tenant pipeline for graph_id.
@@ -1776,15 +1761,15 @@ class PipelineService:
 
     async def process_documents(
         self,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         graph_id: UUID,
-        user_id: Optional[str] = None,
-        background_tasks: Optional[BackgroundTasks] = None,
-        overrides: Optional[IngestionOverrides] = None,
-        temporal_context: Optional[TemporalContext] = None,
+        user_id: str | None = None,
+        background_tasks: BackgroundTasks | None = None,
+        overrides: IngestionOverrides | None = None,
+        temporal_context: TemporalContext | None = None,
         mode: IngestMode = IngestMode.INCREMENTAL,
-        job_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Process documents through multi-tenant pipeline.
 
@@ -1824,7 +1809,7 @@ class PipelineService:
             )
 
     async def _auto_checkpoint_if_needed(
-        self, graph_id: UUID, user_id: Optional[str]
+        self, graph_id: UUID, user_id: str | None
     ) -> None:
         """
         Create an auto-checkpoint version before bulk ingestion if the graph has existing data.
@@ -1841,11 +1826,11 @@ class PipelineService:
             if entity_count == 0:
                 return  # Nothing to checkpoint
 
-            from datetime import datetime, timezone
+            from datetime import datetime
 
             from app.services.background_jobs import create_graph_snapshot
 
-            label = f"pre-ingest-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+            label = f"pre-ingest-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}"
             create_graph_snapshot.delay(
                 graph_id=str(graph_id),
                 label=label,
@@ -1859,7 +1844,7 @@ class PipelineService:
         except Exception as exc:
             logger.warning(f"Auto-checkpoint skipped for graph {graph_id}: {exc}")
 
-    async def get_pipeline_status(self, graph_id: UUID) -> Dict[str, Any]:
+    async def get_pipeline_status(self, graph_id: UUID) -> dict[str, Any]:
         """Get processing status for a specific graph."""
         try:
             pipeline = self.get_pipeline(graph_id)
@@ -1869,7 +1854,7 @@ class PipelineService:
             logger.error(f"Failed to get pipeline status for {graph_id}: {e}")
             return {"graph_id": str(graph_id), "status": "error", "error": str(e)}
 
-    def clear_pipeline_cache(self, graph_id: Optional[UUID] = None):
+    def clear_pipeline_cache(self, graph_id: UUID | None = None):
         """Clear pipeline cache for memory management."""
         if graph_id:
             cache_key = f"pipeline_{graph_id}"

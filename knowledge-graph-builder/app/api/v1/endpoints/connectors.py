@@ -5,7 +5,7 @@ All endpoints enforce graph-level ownership via verify_graph_access (ReBAC).
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
@@ -30,12 +30,13 @@ router = APIRouter()
 # Connector templates
 # ---------------------------------------------------------------------------
 
+
 @router.get(
     "/connector-templates",
-    response_model=Dict[str, ConnectorTemplate],
+    response_model=dict[str, ConnectorTemplate],
     summary="List built-in connector templates",
 )
-async def list_connector_templates() -> Dict[str, ConnectorTemplate]:
+async def list_connector_templates() -> dict[str, ConnectorTemplate]:
     return CONNECTOR_TEMPLATES
 
 
@@ -58,6 +59,7 @@ async def get_connector_template(connector_type: str) -> ConnectorTemplate:
 # Connector CRUD
 # ---------------------------------------------------------------------------
 
+
 @router.post(
     "/graphs/{graph_id}/connectors",
     response_model=ConnectorResponse,
@@ -70,7 +72,9 @@ async def register_connector(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
 ) -> ConnectorResponse:
-    await verify_graph_access(graph_id=graph_id, required_level="write", user_id=user_id)
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
     return await connector_service.register_connector(db, graph_id, user_id, request)
 
 
@@ -116,8 +120,12 @@ async def update_connector(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
 ) -> ConnectorResponse:
-    await verify_graph_access(graph_id=graph_id, required_level="write", user_id=user_id)
-    return await connector_service.update_connector(db, graph_id, user_id, connector_id, request)
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
+    return await connector_service.update_connector(
+        db, graph_id, user_id, connector_id, request
+    )
 
 
 @router.delete(
@@ -132,7 +140,9 @@ async def delete_connector(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
 ):
-    await verify_graph_access(graph_id=graph_id, required_level="write", user_id=user_id)
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
     await connector_service.delete_connector(db, graph_id, user_id, connector_id)
 
 
@@ -140,9 +150,10 @@ async def delete_connector(
 # Sync operations
 # ---------------------------------------------------------------------------
 
+
 @router.post(
     "/graphs/{graph_id}/connectors/{connector_id}/sync",
-    response_model=Dict[str, Any],
+    response_model=dict[str, Any],
     summary="Trigger manual connector sync",
 )
 async def trigger_sync(
@@ -150,8 +161,10 @@ async def trigger_sync(
     connector_id: str,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
-) -> Dict[str, Any]:
-    await verify_graph_access(graph_id=graph_id, required_level="write", user_id=user_id)
+) -> dict[str, Any]:
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
     return await connector_service.trigger_sync(db, graph_id, user_id, connector_id)
 
 
@@ -169,5 +182,7 @@ async def list_sync_logs(
     db: AsyncSession = Depends(get_database),
 ) -> SyncLogListResponse:
     await verify_graph_access(graph_id=graph_id, required_level="read", user_id=user_id)
-    result = await connector_service.list_sync_logs(db, graph_id, user_id, connector_id, limit, offset)
+    result = await connector_service.list_sync_logs(
+        db, graph_id, user_id, connector_id, limit, offset
+    )
     return SyncLogListResponse(**result)

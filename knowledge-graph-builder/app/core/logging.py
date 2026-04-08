@@ -20,12 +20,31 @@ class _JsonFormatter(logging.Formatter):
     """Emit one JSON object per log record, enriched with OTel trace context."""
 
     # Standard LogRecord attributes we don't want to double-emit
-    _SKIP = frozenset({
-        "args", "msg", "message", "exc_info", "exc_text",
-        "stack_info", "lineno", "funcName", "filename", "module",
-        "pathname", "created", "msecs", "relativeCreated", "thread",
-        "threadName", "processName", "process", "levelno", "levelname", "name",
-    })
+    _SKIP = frozenset(
+        {
+            "args",
+            "msg",
+            "message",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "lineno",
+            "funcName",
+            "filename",
+            "module",
+            "pathname",
+            "created",
+            "msecs",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "processName",
+            "process",
+            "levelno",
+            "levelname",
+            "name",
+        }
+    )
 
     def format(self, record: logging.LogRecord) -> str:
         from app.core.config import settings as _settings  # avoid circular import
@@ -41,6 +60,7 @@ class _JsonFormatter(logging.Formatter):
         # Inject OTel trace context when available
         try:
             from app.core.telemetry import current_trace_context
+
             payload.update(current_trace_context())
         except Exception:
             pass
@@ -60,10 +80,10 @@ class ColoredFormatter(logging.Formatter):
     """Human-readable colored formatter for local development."""
 
     COLORS = {
-        "DEBUG":    "\033[36m",
-        "INFO":     "\033[32m",
-        "WARNING":  "\033[33m",
-        "ERROR":    "\033[31m",
+        "DEBUG": "\033[36m",
+        "INFO": "\033[32m",
+        "WARNING": "\033[33m",
+        "ERROR": "\033[31m",
         "CRITICAL": "\033[35m",
     }
     RESET = "\033[0m"
@@ -86,7 +106,8 @@ def setup_logging() -> None:
     else:
         text_format = "[%(asctime)s] %(levelname)s in %(name)s: %(message)s"
         formatter = (
-            ColoredFormatter(text_format) if sys.stdout.isatty()
+            ColoredFormatter(text_format)
+            if sys.stdout.isatty()
             else logging.Formatter(text_format)
         )
 

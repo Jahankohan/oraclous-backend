@@ -4,20 +4,23 @@ Unit tests for DocumentProcessor.
 Tests text processing, validation, unsupported type handling,
 and edge cases — no external deps required.
 """
+
 import pytest
 from fastapi import HTTPException
 
 from app.services.document_processor import DocumentProcessor, document_processor
 
-
 # ---------------------------------------------------------------------------
 # Tests: process_document routing
 # ---------------------------------------------------------------------------
 
+
 class TestProcessDocumentRouting:
     @pytest.mark.unit
     def test_text_type_routes_to_process_text(self):
-        result = DocumentProcessor.process_document("Hello world, this is test content.", source_type="text")
+        result = DocumentProcessor.process_document(
+            "Hello world, this is test content.", source_type="text"
+        )
         assert result["success"] is True
         assert "text" in result
 
@@ -25,19 +28,25 @@ class TestProcessDocumentRouting:
     def test_pdf_type_raises_422_for_bad_path(self):
         # PDF processing is now implemented; a non-existent path raises 422
         with pytest.raises(HTTPException) as exc_info:
-            DocumentProcessor.process_document("/nonexistent/path/file.pdf", source_type="pdf")
+            DocumentProcessor.process_document(
+                "/nonexistent/path/file.pdf", source_type="pdf"
+            )
         assert exc_info.value.status_code == 422
 
     @pytest.mark.unit
     def test_doc_type_raises_422_for_bad_path(self):
         with pytest.raises(HTTPException) as exc_info:
-            DocumentProcessor.process_document("/nonexistent/path/file.doc", source_type="doc")
+            DocumentProcessor.process_document(
+                "/nonexistent/path/file.doc", source_type="doc"
+            )
         assert exc_info.value.status_code == 422
 
     @pytest.mark.unit
     def test_docx_type_raises_422_for_bad_path(self):
         with pytest.raises(HTTPException) as exc_info:
-            DocumentProcessor.process_document("/nonexistent/path/file.docx", source_type="docx")
+            DocumentProcessor.process_document(
+                "/nonexistent/path/file.docx", source_type="docx"
+            )
         assert exc_info.value.status_code == 422
 
     @pytest.mark.unit
@@ -55,13 +64,16 @@ class TestProcessDocumentRouting:
 
     @pytest.mark.unit
     def test_default_source_type_is_text(self):
-        result = DocumentProcessor.process_document("Long enough content for processing.")
+        result = DocumentProcessor.process_document(
+            "Long enough content for processing."
+        )
         assert result["success"] is True
 
 
 # ---------------------------------------------------------------------------
 # Tests: _process_text
 # ---------------------------------------------------------------------------
+
 
 class TestProcessText:
     @pytest.mark.unit
@@ -89,7 +101,7 @@ class TestProcessText:
     def test_merges_provided_metadata(self):
         result = DocumentProcessor._process_text(
             "Some content here.",
-            metadata={"job_id": "job-123", "graph_id": "graph-abc"}
+            metadata={"job_id": "job-123", "graph_id": "graph-abc"},
         )
         assert result["metadata"]["job_id"] == "job-123"
         assert result["metadata"]["graph_id"] == "graph-abc"
@@ -134,6 +146,7 @@ class TestProcessText:
 # Tests: get_supported_types and validate_source_type
 # ---------------------------------------------------------------------------
 
+
 class TestSupportedTypes:
     @pytest.mark.unit
     def test_get_supported_types_returns_list(self):
@@ -170,6 +183,7 @@ class TestSupportedTypes:
 # Tests: global instance
 # ---------------------------------------------------------------------------
 
+
 class TestGlobalInstance:
     @pytest.mark.unit
     def test_global_document_processor_exists(self):
@@ -179,7 +193,6 @@ class TestGlobalInstance:
     @pytest.mark.unit
     def test_global_instance_works(self):
         result = document_processor.process_document(
-            "Global instance test content.",
-            source_type="text"
+            "Global instance test content.", source_type="text"
         )
         assert result["success"] is True

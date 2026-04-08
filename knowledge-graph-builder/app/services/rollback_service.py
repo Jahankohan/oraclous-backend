@@ -15,14 +15,14 @@ Architecture rules:
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.neo4j_client import neo4j_client
 from app.core.logging import get_logger
+from app.core.neo4j_client import neo4j_client
 from app.services.snapshot_service import snapshot_service
 
 logger = get_logger(__name__)
@@ -47,7 +47,7 @@ class RollbackService:
         graph_id: str,
         version_id: str,
         performed_by: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a pending GraphRollbackJob record in PostgreSQL."""
         from app.models.graph import GraphRollbackJob
 
@@ -66,7 +66,7 @@ class RollbackService:
 
     async def get_rollback_job(
         self, db: AsyncSession, graph_id: str, job_id: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Fetch a rollback job by id, scoped to graph_id for multi-tenancy."""
         from app.models.graph import GraphRollbackJob
 
@@ -95,7 +95,7 @@ class RollbackService:
         version_id: str,
         performed_by: str,
         create_checkpoint: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Roll back a graph to the state captured at version_id.
 
@@ -111,14 +111,15 @@ class RollbackService:
             raise ValueError(f"Snapshot {version_id} not found")
 
         from app.services.snapshot_service import _snapshot_ts
-        captured_at = _snapshot_ts(version)
-        now_iso = datetime.now(timezone.utc).isoformat()
 
-        checkpoint_vid: Optional[str] = None
+        captured_at = _snapshot_ts(version)
+        now_iso = datetime.now(UTC).isoformat()
+
+        checkpoint_vid: str | None = None
         if create_checkpoint:
             chk = await snapshot_service.create_snapshot(
                 graph_id=graph_id,
-                label=f"pre-rollback-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}",
+                label=f"pre-rollback-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}",
                 description=f"Auto-checkpoint before rollback to snapshot {version_id}",
                 created_by=performed_by,
                 is_auto=True,
@@ -126,7 +127,9 @@ class RollbackService:
             )
             checkpoint_vid = chk["version_id"]
 
-        return await self._full_rollback(graph_id, captured_at, performed_by, now_iso, checkpoint_vid)
+        return await self._full_rollback(
+            graph_id, captured_at, performed_by, now_iso, checkpoint_vid
+        )
 
     async def _full_rollback(
         self,
@@ -134,8 +137,8 @@ class RollbackService:
         captured_at: str,
         performed_by: str,
         now_iso: str,
-        checkpoint_vid: Optional[str],
-    ) -> Dict[str, Any]:
+        checkpoint_vid: str | None,
+    ) -> dict[str, Any]:
         params = {
             "graph_id": graph_id,
             "captured_at": captured_at,
@@ -220,7 +223,7 @@ class RollbackService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _job_to_dict(job: Any) -> Dict[str, Any]:
+    def _job_to_dict(job: Any) -> dict[str, Any]:
         return {
             "rollback_job_id": str(job.id),
             "graph_id": str(job.graph_id),

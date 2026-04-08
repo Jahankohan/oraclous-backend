@@ -10,10 +10,11 @@ This test verifies that:
 No live services (Neo4j, Oraclous API) are required — this is a structural
 smoke test to catch import failures and missing registrations early.
 """
+
 from __future__ import annotations
 
-import importlib
 import os
+
 import pytest
 
 os.environ.setdefault("ORACLOUS_API_KEY", "test-integration-key")
@@ -47,8 +48,9 @@ def test_mcp_module_imports_cleanly():
 
 def test_fastmcp_instance_exists():
     """A FastMCP instance named `mcp` must be present in the module."""
-    import app.mcp.server as srv
     from mcp.server.fastmcp import FastMCP
+
+    import app.mcp.server as srv
 
     assert hasattr(srv, "mcp"), "Module must expose a `mcp` attribute"
     assert isinstance(srv.mcp, FastMCP), "`mcp` must be a FastMCP instance"
@@ -75,9 +77,9 @@ def test_all_expected_tools_registered():
     if not registered:
         # Fallback: check that the expected functions exist and are decorated
         for tool_name in EXPECTED_TOOLS:
-            assert hasattr(srv, tool_name), (
-                f"Tool function `{tool_name}` not found in mcp.server module"
-            )
+            assert hasattr(
+                srv, tool_name
+            ), f"Tool function `{tool_name}` not found in mcp.server module"
         return  # structural check passed
 
     missing = EXPECTED_TOOLS - registered
@@ -107,18 +109,21 @@ def test_all_expected_resources_registered():
             "resource_graph_nodes",
         }
         for fn_name in resource_fn_names:
-            assert hasattr(srv, fn_name), (
-                f"Resource handler `{fn_name}` not found in mcp.server module"
-            )
+            assert hasattr(
+                srv, fn_name
+            ), f"Resource handler `{fn_name}` not found in mcp.server module"
         return  # structural check passed
 
     for uri in EXPECTED_RESOURCES:
-        assert uri in registered, f"MCP resource {uri!r} not registered. Found: {registered}"
+        assert (
+            uri in registered
+        ), f"MCP resource {uri!r} not registered. Found: {registered}"
 
 
 def test_main_function_exists():
     """The `main()` entry point must exist for use as a CLI command."""
     import app.mcp.server as srv
+
     assert callable(srv.main), "`main` must be a callable function"
 
 
