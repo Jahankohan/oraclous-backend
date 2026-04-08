@@ -1,11 +1,19 @@
 
 from fastapi import FastAPI
-from app.routes import oauth_routes
-from app.routes import auth_routes 
-from app.core.lifespan import lifespan
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
+from app.core.lifespan import lifespan
+from app.core.rate_limiter import limiter
+from app.routes import auth_routes, oauth_routes
 
 app = FastAPI(lifespan=lifespan)
+
+# Register the slowapi limiter so decorators can find it
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

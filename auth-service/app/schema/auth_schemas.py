@@ -26,7 +26,8 @@ class Token(BaseModel):
     token_type: str
 
 class TokenData(BaseModel):
-    email: Optional[EmailStr] = None
+    user_id: Optional[str] = None
+    is_superuser: bool = False
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str

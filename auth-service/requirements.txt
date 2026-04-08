@@ -12,3 +12,5 @@ aiofiles
 pydantic
 asyncpg==0.29.0
 sqlalchemy==1.4.27
+slowapi==0.1.9
+redis[hiredis]>=5.0.0

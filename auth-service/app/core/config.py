@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     EMAIL_PASSWORD: str
     FRONTEND_URL: str = "http://localhost:8080"
     INTERNAL_SERVICE_KEY: str = "your_internal_service_key"
+    REDIS_URL: str = "redis://redis:6379"
 
     class Config:
         env_file = ".env"
