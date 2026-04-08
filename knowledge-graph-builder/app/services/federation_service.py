@@ -12,6 +12,8 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from neo4j import AsyncDriver
+from neo4j_graphrag.embeddings import OpenAIEmbeddings
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.federation_schemas import (
     CrossGraphLink,
@@ -47,6 +49,10 @@ class FederationService:
     def __init__(self, async_driver: AsyncDriver, neo4j_database: str = "neo4j"):
         self._driver = async_driver
         self._database = neo4j_database
+        self._embedder = OpenAIEmbeddings(
+            model=settings.EMBEDDING_MODEL or "text-embedding-3-large",
+            api_key=settings.OPENAI_API_KEY,
+        )
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -137,9 +143,14 @@ class FederationService:
         # Over-fetch to compensate for post-filter recall loss (ORA-41 §4.1)
         candidate_count = int(top_k * len(graph_ids) * _VECTOR_OVERFETCH_MULTIPLIER)
 
+        # Generate embedding in a thread pool — embed_query is synchronous (ORA-103)
+        query_vector: List[float] = await asyncio.to_thread(
+            self._embedder.embed_query, query_text
+        )
+
         results = await self._execute_vector_search(
             graph_ids=graph_ids,
-            query_text=query_text,
+            query_vector=query_vector,
             candidate_count=candidate_count,
             similarity_threshold=similarity_threshold,
         )
@@ -290,12 +301,11 @@ class FederationService:
     async def _execute_vector_search(
         self,
         graph_ids: List[str],
-        query_text: str,
+        query_vector: List[float],
         candidate_count: int,
         similarity_threshold: float,
     ) -> List[Dict[str, Any]]:
         """Vector search using the shared chunk-embedding index with graph_id post-filter."""
-        # Use the shared vector index; post-filter by graph_ids (user-validated)
         query = """
         CALL db.index.vector.queryNodes('chunk-embedding-index', $candidate_count, $query_vector)
         YIELD node AS chunk, score
@@ -312,21 +322,13 @@ class FederationService:
         ORDER BY score DESC
         LIMIT $result_limit
         """
-        # For now we use a text embedding; in production inject the vector from LLM service
-        # This query is intentionally left as-is — vector embedding generation is handled
-        # by the caller (endpoint) before invoking this method.
         params = {
             "graph_ids": graph_ids,
+            "query_vector": query_vector,
             "candidate_count": candidate_count,
             "similarity_threshold": similarity_threshold,
             "result_limit": MAX_RESULTS_PER_GRAPH,
-            # query_vector must be injected by caller; placeholder shows contract
-            "query_vector": [],
         }
-        logger.warning(
-            "federated_vector_search called without a real query vector; "
-            "integrate with llm_service.get_embedding() before shipping"
-        )
         async with self._driver.session(database=self._database) as session:
             result = await session.run(query, params)
             return await result.data()

@@ -15,6 +15,18 @@ from app.services.federation_service import FederationError, FederationService
 from app.schemas.federation_schemas import FederatedQueryOptions, FederatedEntity
 
 
+# Patch OpenAIEmbeddings for the entire test module — no real API key needed
+@pytest.fixture(autouse=True)
+def mock_embedder(monkeypatch):
+    mock = MagicMock()
+    mock.embed_query.return_value = [0.1] * 1536
+    monkeypatch.setattr(
+        "app.services.federation_service.OpenAIEmbeddings",
+        lambda **kwargs: mock,
+    )
+    return mock
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _make_async_driver(rows: list):
@@ -351,3 +363,90 @@ def test_federated_query_request_rejects_too_many_graphs():
     too_many = [f"g{i}" for i in range(MAX_GRAPH_IDS + 1)]
     with pytest.raises(ValidationError):
         FederatedQueryRequest(graph_ids=too_many, query="test")
+
+
+# ─── ORA-103 regression tests — vector search uses real embedding ─────────────
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_vector_search_calls_embed_query_with_query_text(mock_embedder):
+    """federated_vector_search must call embed_query(query_text), never pass [] (ORA-103)."""
+    user_id = "user-1"
+    graph_ids = ["graph-a", "graph-b"]
+    validation_rows = [_owned_federatable(gid, user_id) for gid in graph_ids]
+    vector_rows = [
+        {
+            "chunk_id": "c1", "text": "hello world", "score": 0.92,
+            "source_graph_id": "graph-a", "entity_name": None, "entity_type": None,
+        }
+    ]
+
+    call_count = 0
+    mock_result = AsyncMock()
+
+    async def side_effect_data():
+        nonlocal call_count
+        call_count += 1
+        return validation_rows if call_count == 1 else vector_rows
+
+    mock_result.data = side_effect_data
+    mock_session = MagicMock()
+    mock_session.run = AsyncMock(return_value=mock_result)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    driver = MagicMock()
+    driver.session.return_value = mock_session
+
+    svc = FederationService(async_driver=driver)
+    await svc.federated_vector_search(
+        user_id=user_id,
+        graph_ids=graph_ids,
+        query_text="machine learning",
+        top_k=5,
+    )
+
+    # embed_query must have been called with the exact query text
+    mock_embedder.embed_query.assert_called_once_with("machine learning")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_vector_search_passes_real_vector_to_neo4j(mock_embedder):
+    """The Neo4j session must receive the real embedding vector, not [] (ORA-103)."""
+    FAKE_VECTOR = [0.42] * 1536
+    mock_embedder.embed_query.return_value = FAKE_VECTOR
+
+    user_id = "user-1"
+    graph_ids = ["graph-a", "graph-b"]
+    validation_rows = [_owned_federatable(gid, user_id) for gid in graph_ids]
+
+    call_count = 0
+    mock_result = AsyncMock()
+
+    async def side_effect_data():
+        nonlocal call_count
+        call_count += 1
+        return validation_rows if call_count == 1 else []
+
+    mock_result.data = side_effect_data
+    mock_session = MagicMock()
+    mock_session.run = AsyncMock(return_value=mock_result)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    driver = MagicMock()
+    driver.session.return_value = mock_session
+
+    svc = FederationService(async_driver=driver)
+    await svc.federated_vector_search(
+        user_id=user_id,
+        graph_ids=graph_ids,
+        query_text="some query",
+        top_k=5,
+    )
+
+    # Second session.run call is the vector search — check it received the real vector
+    vector_search_call = mock_session.run.call_args_list[1]
+    vector_params = vector_search_call.args[1]
+    assert vector_params["query_vector"] == FAKE_VECTOR, (
+        "Neo4j must receive the real embedding vector, not an empty list"
+    )
