@@ -281,7 +281,7 @@ class VersioningService:
             RETURN 'entity_added' AS type,
                    coalesce(e.entity_id, elementId(e)) AS id,
                    coalesce(e.name, '') AS name,
-                   coalesce(e.type, '') AS entity_type,
+                   coalesce([l IN labels(e) WHERE l <> '__Entity__' AND l <> '__KGBuilder__'][0], '') AS entity_type,
                    '' AS subject, '' AS predicate, '' AS object,
                    e.transaction_time AS ts
             UNION ALL
@@ -291,7 +291,7 @@ class VersioningService:
             RETURN 'entity_deleted' AS type,
                    coalesce(e.entity_id, elementId(e)) AS id,
                    coalesce(e.name, '') AS name,
-                   coalesce(e.type, '') AS entity_type,
+                   coalesce([l IN labels(e) WHERE l <> '__Entity__' AND l <> '__KGBuilder__'][0], '') AS entity_type,
                    '' AS subject, '' AS predicate, '' AS object,
                    e.invalidated_at AS ts
             UNION ALL

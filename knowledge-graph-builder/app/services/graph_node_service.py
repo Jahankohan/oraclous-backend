@@ -55,9 +55,9 @@ class GraphNodeService:
         "FOR (g:Graph) ON (g.federatable)",
         "CREATE INDEX graph_federation_group_idx IF NOT EXISTS "
         "FOR (g:Graph) ON (g.federation_group)",
-        # Cross-graph entity deduplication — name+type lookup
-        "CREATE INDEX entity_name_type_idx IF NOT EXISTS "
-        "FOR (e:__Entity__) ON (e.name, e.type)",
+        # Cross-graph entity deduplication — name lookup (type is a label, not a property)
+        "CREATE INDEX entity_name_idx IF NOT EXISTS "
+        "FOR (e:__Entity__) ON (e.name)",
     ]
 
     def create_graph(

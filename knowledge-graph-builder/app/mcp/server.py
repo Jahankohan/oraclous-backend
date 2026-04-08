@@ -490,12 +490,13 @@ async def search_nodes(
         "       AND toLower(e.description) CONTAINS toLower($query)) "
     )
     if entity_type:
-        cypher += "AND e.type = $entity_type "
+        cypher += "AND $entity_type IN labels(e) "
         params["entity_type"] = entity_type
 
     cypher += (
         "RETURN e.entity_id AS entity_id, e.name AS name, "
-        "       e.type AS type, e.description AS description "
+        "       [l IN labels(e) WHERE l <> '__Entity__' AND l <> '__KGBuilder__'][0] AS type, "
+        "       e.description AS description "
         "ORDER BY e.name "
         "LIMIT $limit"
     )
@@ -534,7 +535,8 @@ async def get_node(graph_id: str, entity_name: str) -> dict:
     cypher = (
         "MATCH (e:__Entity__ {graph_id: $graph_id}) "
         "WHERE toLower(e.name) = toLower($name) "
-        "RETURN e LIMIT 1"
+        "RETURN e, [l IN labels(e) WHERE l <> '__Entity__' AND l <> '__KGBuilder__'][0] AS type "
+        "LIMIT 1"
     )
     with driver.session() as session:
         record = session.run(
@@ -550,6 +552,7 @@ async def get_node(graph_id: str, entity_name: str) -> dict:
 
     node = dict(record["e"])
     node.pop("embedding", None)  # strip large vector field
+    node["type"] = record["type"] or ""
     return node
 
 
@@ -709,7 +712,9 @@ async def resource_graph_nodes(graph_id: str) -> str:
 
     cypher = (
         "MATCH (e:__Entity__ {graph_id: $graph_id}) "
-        "RETURN e.name AS name, e.type AS type, e.description AS description "
+        "RETURN e.name AS name, "
+        "       [l IN labels(e) WHERE l <> '__Entity__' AND l <> '__KGBuilder__'][0] AS type, "
+        "       e.description AS description "
         "ORDER BY e.name LIMIT 50"
     )
     lines = [f"# Entities in graph `{graph_id}`\n"]
