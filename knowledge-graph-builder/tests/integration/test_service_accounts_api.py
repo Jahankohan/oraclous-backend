@@ -12,7 +12,7 @@ All tests use mocked Neo4j, auth-service, and service layer — no live services
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,7 +29,7 @@ TARGET_GRAPH_ID = str(uuid.uuid4())
 TENANT_ID = str(uuid.uuid4())
 TENANT_B_ID = str(uuid.uuid4())
 
-_NOW = datetime(2026, 4, 8, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+_NOW = datetime(2026, 4, 8, 12, 0, 0, tzinfo=UTC).isoformat()
 
 # Minimal user principal returned by auth_service.verify_token for a human user
 FAKE_USER = {
@@ -641,8 +641,6 @@ class TestCrossTenantIsolation:
     @pytest.mark.api
     async def test_user_cannot_get_sa_from_another_tenant(self, async_client):
         """User A cannot fetch SA metadata belonging to tenant B → 403."""
-        # SA belongs to tenant B
-        sa_tenant_b = {**_SA_RECORD, "tenant_id": TENANT_B_ID}
         mock_driver = _make_mock_driver()
         ep_p, deps_p = _patch_neo4j(mock_driver)
         auth_p = _patch_auth(FAKE_USER)  # User A, tenant A
