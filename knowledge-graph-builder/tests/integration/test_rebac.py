@@ -9,15 +9,15 @@ Security cases covered:
   7. No 404 leak — unauthorized graph request returns 403, not 404
   8. No error message leak — 403 body never includes graph data
 """
-import pytest
-import pytest_asyncio
-from datetime import datetime, timezone, timedelta
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+import pytest_asyncio
 from fastapi import HTTPException
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def mock_async_driver():
@@ -49,12 +49,15 @@ def mock_redis():
 
 # ── ReBACService unit-level tests ─────────────────────────────────────────
 
+
 @pytest.mark.unit
 class TestReBACPermissionCheck:
     """Tests for check_graph_permission() logic."""
 
     @pytest.mark.asyncio
-    async def test_authorized_user_with_direct_grant(self, mock_async_driver, mock_redis):
+    async def test_authorized_user_with_direct_grant(
+        self, mock_async_driver, mock_redis
+    ):
         """Security case 1 partial: authorized user passes check."""
         from app.services.rebac_service import ReBACService
 
@@ -121,7 +124,9 @@ class TestReBACPermissionCheck:
         assert authorized is False
 
     @pytest.mark.asyncio
-    async def test_write_level_denied_for_read_only_user(self, mock_async_driver, mock_redis):
+    async def test_write_level_denied_for_read_only_user(
+        self, mock_async_driver, mock_redis
+    ):
         """Security case 3: read user cannot get write authorization."""
         from app.services.rebac_service import ReBACService
 
@@ -154,7 +159,9 @@ class TestReBACPermissionCheck:
         assert set(_ACCEPTABLE_LEVELS["admin"]) == {"admin"}
 
     @pytest.mark.asyncio
-    async def test_cypher_query_uses_parameterized_variables(self, mock_async_driver, mock_redis):
+    async def test_cypher_query_uses_parameterized_variables(
+        self, mock_async_driver, mock_redis
+    ):
         """Verify the Cypher query never interpolates user_id or graph_id as strings."""
         from app.services.rebac_service import ReBACService
 
@@ -207,7 +214,9 @@ class TestReBACPermissionCheck:
         session.run.assert_not_called()  # Neo4j was NOT queried
 
     @pytest.mark.asyncio
-    async def test_neo4j_error_returns_false_not_exception(self, mock_async_driver, mock_redis):
+    async def test_neo4j_error_returns_false_not_exception(
+        self, mock_async_driver, mock_redis
+    ):
         """Verify Neo4j failures fail-closed (deny, don't raise)."""
         from app.services.rebac_service import ReBACService
 
@@ -230,6 +239,7 @@ class TestReBACPermissionCheck:
 
 # ── verify_graph_access dependency tests ─────────────────────────────────
 
+
 @pytest.mark.unit
 class TestVerifyGraphAccessDependency:
     """Tests for the verify_graph_access() FastAPI dependency."""
@@ -241,8 +251,10 @@ class TestVerifyGraphAccessDependency:
         from app.core.neo4j_client import neo4j_client
 
         mock_driver = AsyncMock()
-        with patch.object(neo4j_client, "async_driver", mock_driver), \
-             patch("app.api.dependencies.rebac_service") as mock_svc:
+        with (
+            patch.object(neo4j_client, "async_driver", mock_driver),
+            patch("app.api.dependencies.rebac_service") as mock_svc,
+        ):
             mock_svc.check_graph_permission = AsyncMock(return_value=True)
             result = await verify_graph_access("graph-1", "read", "user-a")
 
@@ -255,8 +267,10 @@ class TestVerifyGraphAccessDependency:
         from app.core.neo4j_client import neo4j_client
 
         mock_driver = AsyncMock()
-        with patch.object(neo4j_client, "async_driver", mock_driver), \
-             patch("app.api.dependencies.rebac_service") as mock_svc:
+        with (
+            patch.object(neo4j_client, "async_driver", mock_driver),
+            patch("app.api.dependencies.rebac_service") as mock_svc,
+        ):
             mock_svc.check_graph_permission = AsyncMock(return_value=False)
 
             with pytest.raises(HTTPException) as exc_info:
@@ -271,8 +285,10 @@ class TestVerifyGraphAccessDependency:
         from app.core.neo4j_client import neo4j_client
 
         mock_driver = AsyncMock()
-        with patch.object(neo4j_client, "async_driver", mock_driver), \
-             patch("app.api.dependencies.rebac_service") as mock_svc:
+        with (
+            patch.object(neo4j_client, "async_driver", mock_driver),
+            patch("app.api.dependencies.rebac_service") as mock_svc,
+        ):
             mock_svc.check_graph_permission = AsyncMock(return_value=False)
 
             with pytest.raises(HTTPException) as exc_info:
@@ -290,8 +306,10 @@ class TestVerifyGraphAccessDependency:
         from app.core.neo4j_client import neo4j_client
 
         mock_driver = AsyncMock()
-        with patch.object(neo4j_client, "async_driver", mock_driver), \
-             patch("app.api.dependencies.rebac_service") as mock_svc:
+        with (
+            patch.object(neo4j_client, "async_driver", mock_driver),
+            patch("app.api.dependencies.rebac_service") as mock_svc,
+        ):
             # Even for a non-existent graph_id, ReBAC returns False (not found = denied)
             mock_svc.check_graph_permission = AsyncMock(return_value=False)
 
@@ -304,6 +322,7 @@ class TestVerifyGraphAccessDependency:
 
 
 # ── Schema migration tests ─────────────────────────────────────────────────
+
 
 @pytest.mark.unit
 class TestReBACSchemaInit:
@@ -378,7 +397,7 @@ class TestReBACSchemaInit:
 
         queries = [call[0][0] for call in session.run.call_args_list]
         for q in queries:
-            assert '__system__' in q
+            assert "__system__" in q
 
 
 # ── TRUE Integration Tests — real Neo4j, NO mocks ─────────────────────────
@@ -386,6 +405,7 @@ class TestReBACSchemaInit:
 # These tests connect to the Neo4j instance configured via TEST_NEO4J_URI.
 # They are skipped automatically if Neo4j is unreachable.
 # Run with: pytest -m integration tests/integration/test_rebac.py
+
 
 @pytest.mark.integration
 class TestReBACIntegration:
@@ -403,7 +423,8 @@ class TestReBACIntegration:
             // Clean any leftover test nodes
             MATCH (n {_test_rebac: true}) DETACH DELETE n
         """)
-        await self._run("""
+        await self._run(
+            """
             MERGE (ua:User {user_id: 'rebac-user-a', graph_id: '__system__'})
               SET ua._test_rebac = true, ua.status = 'active', ua.created_at = $now
             MERGE (ub:User {user_id: 'rebac-user-b', graph_id: '__system__'})
@@ -428,9 +449,12 @@ class TestReBACIntegration:
             MERGE (ua)-[rc:CAN_ACCESS]->(gc)
               SET rc.level = 'write', rc.granted_by = 'rebac-user-b', rc.granted_at = $now,
                   rc.expires_at = datetime('2000-01-01T00:00:00Z')
-        """, {"now": now, "future": future})
+        """,
+            {"now": now, "future": future},
+        )
 
         from app.services.rebac_service import ReBACService
+
         self.svc = ReBACService()
         self.svc._redis = _NullRedis()
 
@@ -502,23 +526,30 @@ class TestReBACIntegration:
     @pytest.mark.asyncio
     async def test_case7_verify_dependency_raises_403_not_404(self):
         """Case 7: verify_graph_access() FastAPI dependency raises HTTP 403."""
-        from app.api.dependencies import verify_graph_access
-        import sys, types
+        import sys
+        import types
+
+
         # Inject a stub neo4j_client so the dependency can reach the driver
         fake_module = types.ModuleType("app.core.neo4j_client")
         fake_module.neo4j_client = types.SimpleNamespace(async_driver=self.driver)
         orig = sys.modules.get("app.core.neo4j_client")
         sys.modules["app.core.neo4j_client"] = fake_module
         try:
-            from fastapi import HTTPException
             import pytest
+            from fastapi import HTTPException
+
             with pytest.raises(HTTPException) as exc_info:
                 # rebac-user-b has no grant on graph-a (user-a's graph)
-                from app.api.dependencies import verify_graph_access as vga
-
                 # Patch rebac_service inside dependencies to use our real driver
                 import app.api.dependencies as deps_mod
-                orig_svc = deps_mod.rebac_service if hasattr(deps_mod, "rebac_service") else None
+                from app.api.dependencies import verify_graph_access as vga
+
+                orig_svc = (
+                    deps_mod.rebac_service
+                    if hasattr(deps_mod, "rebac_service")
+                    else None
+                )
                 deps_mod.rebac_service = self.svc
                 try:
                     await vga("rebac-graph-a", "read", "rebac-user-b")
@@ -539,8 +570,9 @@ class TestReBACIntegration:
     @pytest.mark.asyncio
     async def test_case8_403_body_is_access_denied_only(self):
         """Case 8: 403 detail is exactly 'Access denied' — no graph data."""
-        import app.api.dependencies as deps_mod
         from fastapi import HTTPException
+
+        import app.api.dependencies as deps_mod
 
         orig_neo4j = deps_mod  # we'll patch inline
         orig_svc = getattr(deps_mod, "rebac_service", None)
@@ -549,6 +581,7 @@ class TestReBACIntegration:
         try:
             with pytest.raises(HTTPException) as exc_info:
                 from app.core.neo4j_client import neo4j_client as real_client
+
                 real_client.async_driver = self.driver
                 await deps_mod.verify_graph_access(
                     "rebac-graph-a", "read", "rebac-user-b"

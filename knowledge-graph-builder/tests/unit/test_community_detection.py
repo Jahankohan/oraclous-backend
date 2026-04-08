@@ -15,13 +15,17 @@ Covers:
 All external deps (Neo4j, Celery, Postgres) are mocked.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
-from app.tasks.community_tasks import make_community_id, make_summary_hash, _build_hierarchy
-from app.services.analytics_service import GraphAnalyticsService
+import pytest
 
+from app.services.analytics_service import GraphAnalyticsService
+from app.tasks.community_tasks import (
+    _build_hierarchy,
+    make_community_id,
+    make_summary_hash,
+)
 
 TEST_GRAPH_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 GRAPH_ID_STR = str(TEST_GRAPH_ID)
@@ -30,6 +34,7 @@ GRAPH_ID_STR = str(TEST_GRAPH_ID)
 # ---------------------------------------------------------------------------
 # make_community_id — determinism
 # ---------------------------------------------------------------------------
+
 
 class TestMakeCommunityId:
 
@@ -41,7 +46,9 @@ class TestMakeCommunityId:
     @pytest.mark.unit
     def test_deterministic_same_inputs(self):
         cid1 = make_community_id("graph-1", 1, 1.0, ["e1", "e2", "e3"])
-        cid2 = make_community_id("graph-1", 1, 1.0, ["e3", "e1", "e2"])  # different order
+        cid2 = make_community_id(
+            "graph-1", 1, 1.0, ["e3", "e1", "e2"]
+        )  # different order
         assert cid1 == cid2, "IDs must be order-independent (sorted members)"
 
     @pytest.mark.unit
@@ -59,14 +66,19 @@ class TestMakeCommunityId:
     @pytest.mark.unit
     def test_idempotent_merge_key(self):
         # Calling twice with same inputs must return same ID (MERGE idempotency)
-        cid1 = make_community_id(GRAPH_ID_STR, 2, 2.0, ["entity-A", "entity-B", "entity-C"])
-        cid2 = make_community_id(GRAPH_ID_STR, 2, 2.0, ["entity-A", "entity-B", "entity-C"])
+        cid1 = make_community_id(
+            GRAPH_ID_STR, 2, 2.0, ["entity-A", "entity-B", "entity-C"]
+        )
+        cid2 = make_community_id(
+            GRAPH_ID_STR, 2, 2.0, ["entity-A", "entity-B", "entity-C"]
+        )
         assert cid1 == cid2
 
 
 # ---------------------------------------------------------------------------
 # make_summary_hash — determinism
 # ---------------------------------------------------------------------------
+
 
 class TestMakeSummaryHash:
 
@@ -86,6 +98,7 @@ class TestMakeSummaryHash:
 # ---------------------------------------------------------------------------
 # _build_hierarchy — parent_id assignment
 # ---------------------------------------------------------------------------
+
 
 class TestBuildHierarchy:
 
@@ -123,6 +136,7 @@ class TestBuildHierarchy:
 # ---------------------------------------------------------------------------
 # GraphAnalyticsService.get_community_context — reads persisted nodes
 # ---------------------------------------------------------------------------
+
 
 class TestGetCommunityContext:
 
@@ -182,12 +196,15 @@ class TestGetCommunityContext:
             await svc.get_community_context(entities, TEST_GRAPH_ID)
 
         call_args = mock_client.execute_query.call_args
-        assert "graph_id" in call_args[0][1], "graph_id must be in Cypher params (multi-tenant)"
+        assert (
+            "graph_id" in call_args[0][1]
+        ), "graph_id must be in Cypher params (multi-tenant)"
 
 
 # ---------------------------------------------------------------------------
 # GraphAnalyticsService.detect_communities_async
 # ---------------------------------------------------------------------------
+
 
 class TestDetectCommunitiesAsync:
 
@@ -198,15 +215,24 @@ class TestDetectCommunitiesAsync:
         mock_task_result = MagicMock()
         mock_task_result.id = "test-celery-task-id"
 
-        with patch("app.services.analytics_service.GraphAnalyticsService.get_community_status",
-                   new_callable=AsyncMock, return_value={"status": "not_detected"}):
-            with patch("app.tasks.community_tasks.detect_communities_task") as mock_task:
+        with patch(
+            "app.services.analytics_service.GraphAnalyticsService.get_community_status",
+            new_callable=AsyncMock,
+            return_value={"status": "not_detected"},
+        ):
+            with patch(
+                "app.tasks.community_tasks.detect_communities_task"
+            ) as mock_task:
                 mock_task.apply_async.return_value = mock_task_result
 
                 # Patch the import inside analytics_service
-                with patch("app.services.analytics_service.GraphAnalyticsService.detect_communities_async",
-                           wraps=svc.detect_communities_async):
-                    with patch("app.tasks.community_tasks.detect_communities_task") as mock_celery_task:
+                with patch(
+                    "app.services.analytics_service.GraphAnalyticsService.detect_communities_async",
+                    wraps=svc.detect_communities_async,
+                ):
+                    with patch(
+                        "app.tasks.community_tasks.detect_communities_task"
+                    ) as mock_celery_task:
                         mock_celery_task.apply_async.return_value = mock_task_result
 
                         result = await svc.detect_communities_async(
@@ -222,6 +248,7 @@ class TestDetectCommunitiesAsync:
 # ---------------------------------------------------------------------------
 # GraphAnalyticsService.get_community_status
 # ---------------------------------------------------------------------------
+
 
 class TestGetCommunityStatus:
 
@@ -257,6 +284,7 @@ class TestGetCommunityStatus:
 # GraphAnalyticsService.get_communities_list
 # ---------------------------------------------------------------------------
 
+
 class TestGetCommunitiesList:
 
     @pytest.mark.unit
@@ -264,17 +292,37 @@ class TestGetCommunitiesList:
         svc = GraphAnalyticsService()
 
         with patch("app.services.analytics_service.neo4j_client") as mock_client:
-            mock_client.execute_query = AsyncMock(side_effect=[
-                [{"total": 2}],  # count query
-                [  # list query
-                    {"community_id": "c1", "level": 1, "entity_count": 5, "weight": 0.1,
-                     "parent_id": None, "status": "active", "summary": "Test"},
-                    {"community_id": "c2", "level": 1, "entity_count": 3, "weight": 0.06,
-                     "parent_id": None, "status": "active", "summary": "Test 2"},
-                ],
-            ])
-            with patch.object(svc, "get_community_status", new_callable=AsyncMock,
-                               return_value={"status": "active", "last_detected_at": None}):
+            mock_client.execute_query = AsyncMock(
+                side_effect=[
+                    [{"total": 2}],  # count query
+                    [  # list query
+                        {
+                            "community_id": "c1",
+                            "level": 1,
+                            "entity_count": 5,
+                            "weight": 0.1,
+                            "parent_id": None,
+                            "status": "active",
+                            "summary": "Test",
+                        },
+                        {
+                            "community_id": "c2",
+                            "level": 1,
+                            "entity_count": 3,
+                            "weight": 0.06,
+                            "parent_id": None,
+                            "status": "active",
+                            "summary": "Test 2",
+                        },
+                    ],
+                ]
+            )
+            with patch.object(
+                svc,
+                "get_community_status",
+                new_callable=AsyncMock,
+                return_value={"status": "active", "last_detected_at": None},
+            ):
                 result = await svc.get_communities_list(
                     graph_id=TEST_GRAPH_ID,
                     level=1,
@@ -291,12 +339,18 @@ class TestGetCommunitiesList:
         svc = GraphAnalyticsService()
 
         with patch("app.services.analytics_service.neo4j_client") as mock_client:
-            mock_client.execute_query = AsyncMock(side_effect=[
-                [{"total": 0}],
-                [],
-            ])
-            with patch.object(svc, "get_community_status", new_callable=AsyncMock,
-                               return_value={"status": "not_detected", "last_detected_at": None}):
+            mock_client.execute_query = AsyncMock(
+                side_effect=[
+                    [{"total": 0}],
+                    [],
+                ]
+            )
+            with patch.object(
+                svc,
+                "get_community_status",
+                new_callable=AsyncMock,
+                return_value={"status": "not_detected", "last_detected_at": None},
+            ):
                 await svc.get_communities_list(graph_id=TEST_GRAPH_ID)
 
         for call in mock_client.execute_query.call_args_list:
@@ -308,6 +362,7 @@ class TestGetCommunitiesList:
 # Staleness: adding 11% new entities marks communities stale
 # ---------------------------------------------------------------------------
 
+
 class TestStalenessLogic:
 
     @pytest.mark.unit
@@ -316,7 +371,6 @@ class TestStalenessLogic:
         If entity_delta_since_detection / entity_count_at_detection > 0.10
         the communities should be marked stale.
         """
-        from app.tasks.community_tasks import make_summary_hash
 
         # 10 entities at detection, 2 new = 20% → stale
         entity_count_at_detection = 10

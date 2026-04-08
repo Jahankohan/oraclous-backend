@@ -11,18 +11,18 @@ All tests use InMemorySpanExporter so no running Jaeger / OTLP endpoint is neede
 OTEL_ENABLED is patched to True for the duration of each test.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry import trace as otel_trace
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_provider_with_exporter() -> tuple[TracerProvider, InMemorySpanExporter]:
     """Create an isolated TracerProvider backed by an in-memory exporter."""
@@ -35,6 +35,7 @@ def _make_provider_with_exporter() -> tuple[TracerProvider, InMemorySpanExporter
 # ---------------------------------------------------------------------------
 # Test 1 — Neo4j read query emits neo4j.query span
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 async def test_neo4j_execute_query_emits_span():
@@ -80,6 +81,7 @@ async def test_neo4j_execute_query_emits_span():
 # Test 2 — Neo4j write query emits neo4j.write_query span
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 async def test_neo4j_execute_write_query_emits_span():
     """
@@ -120,6 +122,7 @@ async def test_neo4j_execute_write_query_emits_span():
 # Test 3 — Chat query emits chat.query span with result attributes
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 async def test_chat_search_emits_span():
     """
@@ -142,12 +145,19 @@ async def test_chat_search_emits_span():
 
     from neo4j_graphrag.generation.types import RagResultModel
     from neo4j_graphrag.types import RetrieverResult, RetrieverResultItem
+
     mock_result = RagResultModel(
         answer="Paris is the capital of France.",
-        retriever_result=RetrieverResult(items=[
-            RetrieverResultItem(content="France capital: Paris", metadata={"score": 0.95}),
-            RetrieverResultItem(content="Paris city facts", metadata={"score": 0.88}),
-        ]),
+        retriever_result=RetrieverResult(
+            items=[
+                RetrieverResultItem(
+                    content="France capital: Paris", metadata={"score": 0.95}
+                ),
+                RetrieverResultItem(
+                    content="Paris city facts", metadata={"score": 0.88}
+                ),
+            ]
+        ),
     )
     service.rag.search = MagicMock(return_value=mock_result)
 
@@ -155,7 +165,9 @@ async def test_chat_search_emits_span():
 
     spans = exporter.get_finished_spans()
     chat_spans = [s for s in spans if s.name == "chat.query"]
-    assert len(chat_spans) == 1, f"Expected 1 chat.query span, got {[s.name for s in spans]}"
+    assert (
+        len(chat_spans) == 1
+    ), f"Expected 1 chat.query span, got {[s.name for s in spans]}"
 
     span = chat_spans[0]
     assert span.attributes["graph_id"] == graph_id
@@ -169,6 +181,7 @@ async def test_chat_search_emits_span():
 # ---------------------------------------------------------------------------
 # Test 4 — Failed Neo4j query marks span as ERROR
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 async def test_neo4j_query_failure_records_error_span():

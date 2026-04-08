@@ -6,11 +6,13 @@ All tests use mock drivers — no live Neo4j required.
 
 Marked @pytest.mark.unit.
 """
-import pytest
+
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
 
 def _make_driver(single_return=None, iter_return=None):
     """
@@ -25,7 +27,7 @@ def _make_driver(single_return=None, iter_return=None):
     result.single = AsyncMock(return_value=single_return)
 
     async def _aiter(self):
-        for row in (iter_return or []):
+        for row in iter_return or []:
             yield MagicMock(**row, __getitem__=lambda s, k: row[k])
 
     result.__aiter__ = _aiter
@@ -50,6 +52,7 @@ def _null_redis():
 
 # ── T9 — graph_id validation ───────────────────────────────────────────────
 
+
 @pytest.mark.unit
 class TestGraphIdValidation:
     """T9: Any permission check missing graph_id raises ValueError."""
@@ -57,6 +60,7 @@ class TestGraphIdValidation:
     @pytest.mark.asyncio
     async def test_check_permission_raises_without_graph_id(self):
         from app.services.rebac_service import ReBACService
+
         svc = ReBACService()
         svc._redis = _null_redis()
         driver, _, _ = _make_driver()
@@ -66,6 +70,7 @@ class TestGraphIdValidation:
     @pytest.mark.asyncio
     async def test_grant_role_raises_without_graph_id(self):
         from app.services.rebac_service import ReBACService
+
         svc = ReBACService()
         driver, _, _ = _make_driver()
         with pytest.raises(ValueError):
@@ -74,6 +79,7 @@ class TestGraphIdValidation:
     @pytest.mark.asyncio
     async def test_revoke_role_raises_without_graph_id(self):
         from app.services.rebac_service import ReBACService
+
         svc = ReBACService()
         driver, _, _ = _make_driver()
         with pytest.raises(ValueError):
@@ -82,6 +88,7 @@ class TestGraphIdValidation:
     @pytest.mark.asyncio
     async def test_list_members_raises_without_graph_id(self):
         from app.services.rebac_service import ReBACService
+
         svc = ReBACService()
         driver, _, _ = _make_driver()
         with pytest.raises(ValueError):
@@ -90,6 +97,7 @@ class TestGraphIdValidation:
     @pytest.mark.asyncio
     async def test_create_subgraph_raises_without_graph_id(self):
         from app.services.rebac_service import ReBACService
+
         svc = ReBACService()
         driver, _, _ = _make_driver()
         with pytest.raises(ValueError):
@@ -97,6 +105,7 @@ class TestGraphIdValidation:
 
 
 # ── T1/T2 — owner read / viewer no write ──────────────────────────────────
+
 
 @pytest.mark.unit
 class TestPermissionCheckPhaseB:
@@ -134,14 +143,18 @@ class TestPermissionCheckPhaseB:
     async def test_t1_owner_can_read(self):
         """T1: Graph owner with graph:read permission returns True."""
         svc, driver = self._svc_with_phase_b(True)
-        result = await svc.check_graph_permission(driver, "owner-user", "graph-1", "read")
+        result = await svc.check_graph_permission(
+            driver, "owner-user", "graph-1", "read"
+        )
         assert result is True
 
     @pytest.mark.asyncio
     async def test_t2_viewer_cannot_write(self):
         """T2: Viewer without graph:write permission returns False."""
         svc, driver = self._svc_with_phase_b(False)
-        result = await svc.check_graph_permission(driver, "viewer-user", "graph-1", "write")
+        result = await svc.check_graph_permission(
+            driver, "viewer-user", "graph-1", "write"
+        )
         assert result is False
 
     @pytest.mark.asyncio
@@ -172,7 +185,9 @@ class TestPermissionCheckPhaseB:
         driver = MagicMock()
         driver.session.return_value = cm
 
-        result = await svc.check_graph_permission(driver, "legacy-user", "graph-1", "read")
+        result = await svc.check_graph_permission(
+            driver, "legacy-user", "graph-1", "read"
+        )
         assert result is True  # Phase A fallback authorized
 
     @pytest.mark.asyncio
@@ -204,7 +219,9 @@ class TestPermissionCheckPhaseB:
 
         for call in session.run.call_args_list:
             query = call[0][0]
-            assert injection not in query, "Injection string must never appear in query text"
+            assert (
+                injection not in query
+            ), "Injection string must never appear in query text"
             assert "$user_id" in query or "$acceptable" in query or "graph_id" in query
 
     @pytest.mark.asyncio
@@ -246,6 +263,7 @@ class TestPermissionCheckPhaseB:
 
 # ── bootstrap_graph_roles ─────────────────────────────────────────────────
 
+
 @pytest.mark.unit
 class TestBootstrapGraphRoles:
     """T8: New graph must get 5 system roles + HAS_PERMISSION + HAS_ROLE for owner."""
@@ -253,7 +271,7 @@ class TestBootstrapGraphRoles:
     @pytest.mark.asyncio
     async def test_bootstrap_calls_run_for_each_role(self):
         """Bootstrap runs at least 5 MERGE role queries."""
-        from app.services.rebac_service import ReBACService, _SYSTEM_ROLES
+        from app.services.rebac_service import _SYSTEM_ROLES, ReBACService
 
         svc = ReBACService()
         svc._redis = _null_redis()
@@ -294,7 +312,9 @@ class TestBootstrapGraphRoles:
         driver = MagicMock()
         driver.session.return_value = cm
 
-        await svc.bootstrap_graph_roles(driver, "test-graph-123", owner_user_id="user-a")
+        await svc.bootstrap_graph_roles(
+            driver, "test-graph-123", owner_user_id="user-a"
+        )
 
         for call in session.run.call_args_list:
             params = call[0][1] if len(call[0]) > 1 else {}
@@ -303,6 +323,7 @@ class TestBootstrapGraphRoles:
 
 
 # ── grant_role / revoke_role ───────────────────────────────────────────────
+
 
 @pytest.mark.unit
 class TestRoleManagement:
@@ -381,6 +402,7 @@ class TestRoleManagement:
 
 # ── list_graph_members ─────────────────────────────────────────────────────
 
+
 @pytest.mark.unit
 class TestListGraphMembers:
 
@@ -410,6 +432,7 @@ class TestListGraphMembers:
 
 
 # ── SubGraph management ───────────────────────────────────────────────────
+
 
 @pytest.mark.unit
 class TestSubGraphManagement:
@@ -457,6 +480,7 @@ class TestSubGraphManagement:
 
 
 # ── Acceptable levels (Phase A backward compat) ────────────────────────────
+
 
 @pytest.mark.unit
 class TestAcceptableLevels:

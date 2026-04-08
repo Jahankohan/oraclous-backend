@@ -5,12 +5,13 @@ Tests community detection mocking, centrality calculation, statistics caching,
 pure helper methods, and multi-tenant isolation (graph_id filtering).
 All external deps (Neo4j) mocked.
 """
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
-from app.services.analytics_service import GraphAnalyticsService
+import pytest
 
+from app.services.analytics_service import GraphAnalyticsService
 
 TEST_GRAPH_ID = UUID("12345678-1234-5678-1234-567812345678")
 
@@ -26,6 +27,7 @@ def _make_entity(entity_id: str, name: str, labels=None) -> dict:
 # ---------------------------------------------------------------------------
 # Tests: _generate_community_id (pure logic)
 # ---------------------------------------------------------------------------
+
 
 class TestGenerateCommunityId:
     @pytest.mark.unit
@@ -82,6 +84,7 @@ class TestGenerateCommunityId:
 # Tests: _generate_community_summary (pure logic)
 # ---------------------------------------------------------------------------
 
+
 class TestGenerateCommunitySummary:
     @pytest.mark.unit
     def test_two_members_listed_by_name(self):
@@ -111,8 +114,7 @@ class TestGenerateCommunitySummary:
     def test_four_members_uses_and_others(self):
         svc = _make_service()
         members = [
-            {"entity_name": f"Entity{i}", "entity_labels": ["Person"]}
-            for i in range(4)
+            {"entity_name": f"Entity{i}", "entity_labels": ["Person"]} for i in range(4)
         ]
         summary = svc._generate_community_summary(members)
         assert "others" in summary
@@ -159,6 +161,7 @@ class TestGenerateCommunitySummary:
 # Tests: get_community_context — early returns and fallback
 # ---------------------------------------------------------------------------
 
+
 class TestGetCommunityContext:
     @pytest.mark.unit
     async def test_empty_entities_returns_empty_communities(self):
@@ -169,14 +172,17 @@ class TestGetCommunityContext:
     @pytest.mark.unit
     async def test_gds_failure_falls_back_to_simple(self):
         svc = _make_service()
-        svc.get_simple_community_context = AsyncMock(return_value={"communities": ["fallback"]})
+        svc.get_simple_community_context = AsyncMock(
+            return_value={"communities": ["fallback"]}
+        )
 
         with patch("app.services.analytics_service.neo4j_client") as mock_client:
-            mock_client.execute_query = AsyncMock(side_effect=Exception("GDS not installed"))
+            mock_client.execute_query = AsyncMock(
+                side_effect=Exception("GDS not installed")
+            )
 
             result = await svc.get_community_context(
-                [_make_entity("e1", "Alice")],
-                TEST_GRAPH_ID
+                [_make_entity("e1", "Alice")], TEST_GRAPH_ID
             )
 
         svc.get_simple_community_context.assert_awaited_once()
@@ -197,18 +203,20 @@ class TestGetCommunityContext:
             mock_client.execute_query = AsyncMock(side_effect=capture_execute)
 
             await svc.get_community_context(
-                [_make_entity("e1", "Alice")],
-                TEST_GRAPH_ID
+                [_make_entity("e1", "Alice")], TEST_GRAPH_ID
             )
 
         # At least one call should contain graph_id
         assert any("graph_id" in p for p in captured_params)
-        assert any(str(TEST_GRAPH_ID) in str(p.get("graph_id", "")) for p in captured_params)
+        assert any(
+            str(TEST_GRAPH_ID) in str(p.get("graph_id", "")) for p in captured_params
+        )
 
 
 # ---------------------------------------------------------------------------
 # Tests: get_simple_community_context
 # ---------------------------------------------------------------------------
+
 
 class TestGetSimpleCommunityContext:
     @pytest.mark.unit
@@ -231,8 +239,7 @@ class TestGetSimpleCommunityContext:
             mock_client.execute_query = AsyncMock(side_effect=capture_execute)
 
             await svc.get_simple_community_context(
-                [_make_entity("e1", "Alice")],
-                TEST_GRAPH_ID
+                [_make_entity("e1", "Alice")], TEST_GRAPH_ID
             )
 
         assert len(captured_params) > 0
@@ -269,7 +276,7 @@ class TestGetSimpleCommunityContext:
             {
                 "entity_name": "Alice",
                 "hub_name": "Acme Corp",
-                "community_members": [{"id": "e2", "name": "Bob"}]
+                "community_members": [{"id": "e2", "name": "Bob"}],
             }
         ]
 
@@ -277,8 +284,7 @@ class TestGetSimpleCommunityContext:
             mock_client.execute_query = AsyncMock(return_value=mock_result)
 
             result = await svc.get_simple_community_context(
-                [_make_entity("e1", "Alice")],
-                TEST_GRAPH_ID
+                [_make_entity("e1", "Alice")], TEST_GRAPH_ID
             )
 
         assert len(result["communities"]) == 1
@@ -289,6 +295,7 @@ class TestGetSimpleCommunityContext:
 # ---------------------------------------------------------------------------
 # Tests: cached statistics
 # ---------------------------------------------------------------------------
+
 
 class TestCachedStatistics:
     @pytest.mark.unit
@@ -307,7 +314,9 @@ class TestCachedStatistics:
     @pytest.mark.unit
     async def test_precompute_caches_statistics(self):
         svc = _make_service()
-        svc.get_graph_statistics = AsyncMock(return_value={"node_count": 10, "relationship_count": 5})
+        svc.get_graph_statistics = AsyncMock(
+            return_value={"node_count": 10, "relationship_count": 5}
+        )
 
         await svc.precompute_and_cache_statistics(TEST_GRAPH_ID)
 
@@ -345,6 +354,7 @@ class TestCachedStatistics:
 # ---------------------------------------------------------------------------
 # Tests: comprehensive_graph_analysis structure
 # ---------------------------------------------------------------------------
+
 
 class TestComprehensiveGraphAnalysis:
     @pytest.mark.unit
@@ -387,7 +397,7 @@ class TestComprehensiveGraphAnalysis:
         await svc.comprehensive_graph_analysis(
             [_make_entity("e1", "Alice")],  # only 1 entity
             TEST_GRAPH_ID,
-            include_pathways=True
+            include_pathways=True,
         )
 
         svc.get_pathway_context.assert_not_awaited()
@@ -403,7 +413,7 @@ class TestComprehensiveGraphAnalysis:
         await svc.comprehensive_graph_analysis(
             [_make_entity("e1", "A"), _make_entity("e2", "B")],
             TEST_GRAPH_ID,
-            include_communities=False
+            include_communities=False,
         )
 
         svc.get_community_context.assert_not_awaited()
@@ -425,6 +435,7 @@ class TestComprehensiveGraphAnalysis:
 # Tests: multi-tenant isolation
 # ---------------------------------------------------------------------------
 
+
 class TestMultiTenantIsolation:
     @pytest.mark.unit
     async def test_get_community_context_always_passes_graph_id(self):
@@ -440,8 +451,7 @@ class TestMultiTenantIsolation:
 
             specific_graph = UUID("deadbeef-dead-beef-dead-beefdeadbeef")
             await svc.get_simple_community_context(
-                [_make_entity("e1", "Alice")],
-                specific_graph
+                [_make_entity("e1", "Alice")], specific_graph
             )
 
         assert any(str(specific_graph) in str(gid) for gid in graph_id_used)

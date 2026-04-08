@@ -10,17 +10,20 @@ Covers:
 - X-Trace-Id header is injected into HTTP responses when a trace is active
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_valid_span_context(trace_id=0x1234ABCD1234ABCD1234ABCD1234ABCD,
-                              span_id=0xABCD1234ABCD1234):
+
+def _make_valid_span_context(
+    trace_id=0x1234ABCD1234ABCD1234ABCD1234ABCD, span_id=0xABCD1234ABCD1234
+):
     from opentelemetry.trace import SpanContext, TraceFlags
+
     return SpanContext(
         trace_id=trace_id,
         span_id=span_id,
@@ -32,6 +35,7 @@ def _make_valid_span_context(trace_id=0x1234ABCD1234ABCD1234ABCD1234ABCD,
 # ---------------------------------------------------------------------------
 # current_trace_context
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_current_trace_context_returns_empty_when_no_active_span():
@@ -45,8 +49,8 @@ def test_current_trace_context_returns_empty_when_no_active_span():
 @pytest.mark.unit
 def test_current_trace_context_returns_ids_when_span_is_active():
     """With a valid active span, trace_id and span_id are returned as hex strings."""
-    from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
+
     from app.core.telemetry import current_trace_context
 
     provider = TracerProvider()
@@ -62,9 +66,10 @@ def test_current_trace_context_returns_ids_when_span_is_active():
 # get_tracer / get_meter
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_get_tracer_returns_tracer():
-    from opentelemetry.trace import Tracer
+
     from app.core.telemetry import get_tracer
 
     tracer = get_tracer("test.tracer")
@@ -73,7 +78,7 @@ def test_get_tracer_returns_tracer():
 
 @pytest.mark.unit
 def test_get_meter_returns_meter():
-    from opentelemetry.metrics import Meter
+
     from app.core.telemetry import get_meter
 
     meter = get_meter("test.meter")
@@ -84,9 +89,11 @@ def test_get_meter_returns_meter():
 # setup_telemetry — no-op when OTEL_ENABLED=False
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_setup_telemetry_is_noop_when_disabled(caplog):
     import logging
+
     from app.core import telemetry as tel_module
 
     # Reset module state
@@ -105,13 +112,17 @@ def test_setup_telemetry_is_noop_when_disabled(caplog):
 # Neo4j query span creation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 async def test_execute_query_creates_neo4j_span():
     """execute_query must open a neo4j.query span with db.system=neo4j."""
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
     import app.core.neo4j_client as neo4j_module
 
     exporter = InMemorySpanExporter()
@@ -151,10 +162,13 @@ async def test_execute_query_creates_neo4j_span():
 @pytest.mark.unit
 async def test_execute_write_query_creates_neo4j_write_span():
     """execute_write_query must open a neo4j.write_query span."""
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
     import app.core.neo4j_client as neo4j_module
 
     exporter = InMemorySpanExporter()
@@ -186,10 +200,13 @@ async def test_execute_write_query_creates_neo4j_write_span():
 @pytest.mark.unit
 async def test_execute_query_span_records_exception_on_failure():
     """A failed query must record the exception on the span and re-raise."""
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
     import app.core.neo4j_client as neo4j_module
 
     exporter = InMemorySpanExporter()
@@ -215,12 +232,14 @@ async def test_execute_query_span_records_exception_on_failure():
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     from opentelemetry.trace import StatusCode
+
     assert spans[0].status.status_code == StatusCode.ERROR
 
 
 # ---------------------------------------------------------------------------
 # X-Trace-Id response header (middleware)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_current_trace_context_is_empty_without_active_span():
@@ -235,6 +254,7 @@ def test_current_trace_context_is_empty_without_active_span():
 def test_current_trace_context_has_trace_id_with_active_span():
     """Ensure trace_id is a 32-char hex string when span is active."""
     from opentelemetry.sdk.trace import TracerProvider
+
     from app.core.telemetry import current_trace_context
 
     provider = TracerProvider()

@@ -17,21 +17,22 @@ Acceptance criteria (from ORA-150):
   [x] No regressions in existing temporal tests
   [x] Multi-tenant isolation: graph_id enforced alongside temporal filter
 """
-import asyncio
-import time
+
 import statistics
+import time
 import uuid
-from datetime import datetime, timezone, timedelta
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
 
 try:
     from app.core.neo4j_client import neo4j_client
-    from app.services.snapshot_service import snapshot_service
-    from app.services.pipeline_service import MultiTenantGraphRAGPipeline
     from app.schemas.graph_schemas import TemporalFilter
+    from app.services.pipeline_service import MultiTenantGraphRAGPipeline
+    from app.services.snapshot_service import snapshot_service
+
     _IMPORTS_OK = True
 except Exception as _import_err:
     neo4j_client = None
@@ -59,6 +60,7 @@ if not _IMPORTS_OK:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest_asyncio.fixture(scope="module")
 async def neo4j():
     """Connect to Neo4j and ensure indexes, yield driver, then disconnect."""
@@ -77,8 +79,7 @@ async def test_graph_id(neo4j) -> AsyncGenerator[str, None]:
     yield graph_id
     # Cleanup: remove all test nodes and relationships
     await neo4j.execute_query(
-        "MATCH (n {graph_id: $gid}) DETACH DELETE n",
-        {"gid": graph_id}
+        "MATCH (n {graph_id: $gid}) DETACH DELETE n", {"gid": graph_id}
     )
 
 
@@ -98,16 +99,22 @@ async def _seed_temporal_graph(neo4j, graph_id: str, n_rels: int = 10_000) -> No
         params_list = []
         for i in range(batch_start, batch_end):
             year_offset = i % 20  # 20-year spread
-            vf = datetime(base_year + year_offset, 1, 1, tzinfo=timezone.utc)
+            vf = datetime(base_year + year_offset, 1, 1, tzinfo=UTC)
             # 70% have valid_to (closed window), 30% still-ongoing (valid_to=NULL)
-            vt = datetime(vf.year + 2, 12, 31, tzinfo=timezone.utc) if i % 10 != 0 else None
-            params_list.append({
-                "graph_id": graph_id,
-                "src_id": f"src-{i}",
-                "tgt_id": f"tgt-{i}",
-                "valid_from": vf.isoformat(),
-                "valid_to": vt.isoformat() if vt else None,
-            })
+            vt = (
+                datetime(vf.year + 2, 12, 31, tzinfo=UTC)
+                if i % 10 != 0
+                else None
+            )
+            params_list.append(
+                {
+                    "graph_id": graph_id,
+                    "src_id": f"src-{i}",
+                    "tgt_id": f"tgt-{i}",
+                    "valid_from": vf.isoformat(),
+                    "valid_to": vt.isoformat() if vt else None,
+                }
+            )
 
         # Batch MERGE in a single transaction
         await neo4j.execute_query(
@@ -124,13 +131,14 @@ async def _seed_temporal_graph(neo4j, graph_id: str, n_rels: int = 10_000) -> No
                 transaction_time: datetime()
             }]->(t)
             """,
-            {"rows": params_list}
+            {"rows": params_list},
         )
 
 
 # ---------------------------------------------------------------------------
 # Suite 1: Index presence and state
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 @pytest.mark.neo4j
@@ -139,8 +147,7 @@ class TestIndexPresence:
 
     async def test_rel_temporal_idx_exists(self, neo4j):
         result = await neo4j.execute_query(
-            "SHOW INDEXES WHERE name = 'rel_temporal_idx'",
-            {}
+            "SHOW INDEXES WHERE name = 'rel_temporal_idx'", {}
         )
         assert len(result) > 0, (
             "rel_temporal_idx not found in Neo4j schema — "
@@ -149,24 +156,24 @@ class TestIndexPresence:
 
     async def test_rel_temporal_idx_is_online(self, neo4j):
         result = await neo4j.execute_query(
-            "SHOW INDEXES WHERE name = 'rel_temporal_idx'",
-            {}
+            "SHOW INDEXES WHERE name = 'rel_temporal_idx'", {}
         )
         assert len(result) == 1
         state = result[0].get("state", "").upper()
-        assert state == "ONLINE", (
-            f"rel_temporal_idx state is {state!r}, expected ONLINE"
-        )
+        assert (
+            state == "ONLINE"
+        ), f"rel_temporal_idx state is {state!r}, expected ONLINE"
 
     async def test_rel_temporal_idx_covers_correct_properties(self, neo4j):
         result = await neo4j.execute_query(
-            "SHOW INDEXES WHERE name = 'rel_temporal_idx'",
-            {}
+            "SHOW INDEXES WHERE name = 'rel_temporal_idx'", {}
         )
         assert len(result) == 1
         props = result[0].get("properties", [])
         assert "graph_id" in props, f"graph_id missing from index properties: {props}"
-        assert "valid_from" in props, f"valid_from missing from index properties: {props}"
+        assert (
+            "valid_from" in props
+        ), f"valid_from missing from index properties: {props}"
         assert "valid_to" in props, f"valid_to missing from index properties: {props}"
 
     async def test_all_versioning_indexes_still_present(self, neo4j):
@@ -179,14 +186,11 @@ class TestIndexPresence:
             "rel_version_composite_idx",
         ]
         result = await neo4j.execute_query(
-            "SHOW INDEXES WHERE name IN $names",
-            {"names": required}
+            "SHOW INDEXES WHERE name IN $names", {"names": required}
         )
         found = {r["name"] for r in result}
         missing = set(required) - found
-        assert not missing, (
-            f"Pre-existing indexes removed (regression): {missing}"
-        )
+        assert not missing, f"Pre-existing indexes removed (regression): {missing}"
 
     async def test_standalone_rel_temporal_indexes_present(self, neo4j):
         """ORA-138: standalone rel_valid_from_idx and rel_valid_to_idx must be ONLINE.
@@ -197,8 +201,7 @@ class TestIndexPresence:
         """
         required = ["rel_valid_from_idx", "rel_valid_to_idx"]
         result = await neo4j.execute_query(
-            "SHOW INDEXES WHERE name IN $names",
-            {"names": required}
+            "SHOW INDEXES WHERE name IN $names", {"names": required}
         )
         found = {r["name"] for r in result}
         missing = set(required) - found
@@ -208,14 +211,15 @@ class TestIndexPresence:
         )
         for row in result:
             state = row.get("state", "").upper()
-            assert state == "ONLINE", (
-                f"Index {row['name']!r} is {state!r}, expected ONLINE"
-            )
+            assert (
+                state == "ONLINE"
+            ), f"Index {row['name']!r} is {state!r}, expected ONLINE"
 
 
 # ---------------------------------------------------------------------------
 # Suite 2: Query execution plan — index seek validation
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 @pytest.mark.neo4j
@@ -239,7 +243,7 @@ class TestIndexSeek:
               AND (r.valid_to IS NULL OR r.valid_to > datetime($pit))
             RETURN s, r, t
             """,
-            {"graph_id": test_graph_id, "pit": pit}
+            {"graph_id": test_graph_id, "pit": pit},
         )
         # EXPLAIN returns a plan summary; verify no full RelationshipScan in hot path
         plan_str = str(plan)
@@ -259,7 +263,7 @@ class TestIndexSeek:
               AND r.valid_to IS NULL
             RETURN s, r, t
             """,
-            {"graph_id": test_graph_id}
+            {"graph_id": test_graph_id},
         )
         # NULL check on an indexed property should use the index
         plan_str = str(plan)
@@ -272,6 +276,7 @@ class TestIndexSeek:
 # ---------------------------------------------------------------------------
 # Suite 3: P95 latency benchmark (< 300ms on 10k relationships)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 @pytest.mark.neo4j
@@ -287,7 +292,7 @@ class TestTemporalQueryLatency:
     async def _ensure_seeded(self, neo4j, graph_id: str):
         count_result = await neo4j.execute_query(
             "MATCH ()-[r:RELATES_TO {graph_id: $gid}]->() RETURN count(r) AS cnt",
-            {"gid": graph_id}
+            {"gid": graph_id},
         )
         cnt = count_result[0]["cnt"] if count_result else 0
         if cnt < 10_000:
@@ -311,7 +316,7 @@ class TestTemporalQueryLatency:
                   AND (r.valid_to IS NULL OR r.valid_to > datetime($pit))
                 RETURN count(r) AS cnt
                 """,
-                {"graph_id": graph_id, "pit": pit}
+                {"graph_id": graph_id, "pit": pit},
             )
             latencies.append((time.monotonic() - start) * 1000)
 
@@ -341,16 +346,14 @@ class TestTemporalQueryLatency:
                   AND r.valid_to IS NULL
                 RETURN count(r) AS cnt
                 """,
-                {"graph_id": graph_id}
+                {"graph_id": graph_id},
             )
             latencies.append((time.monotonic() - start) * 1000)
 
         latencies.sort()
         p95 = latencies[int(0.95 * N_SAMPLES)]
 
-        assert p95 < 300, (
-            f"current_only P95 latency {p95:.1f}ms exceeds 300ms SLA"
-        )
+        assert p95 < 300, f"current_only P95 latency {p95:.1f}ms exceeds 300ms SLA"
 
     async def test_range_filter_p95_under_300ms(self, neo4j):
         graph_id = "perf-test-ora138-range"
@@ -369,21 +372,20 @@ class TestTemporalQueryLatency:
                   AND (r.valid_to IS NULL OR r.valid_to <= datetime('2015-12-31T00:00:00'))
                 RETURN count(r) AS cnt
                 """,
-                {"graph_id": graph_id}
+                {"graph_id": graph_id},
             )
             latencies.append((time.monotonic() - start) * 1000)
 
         latencies.sort()
         p95 = latencies[int(0.95 * N_SAMPLES)]
 
-        assert p95 < 300, (
-            f"range_filter P95 latency {p95:.1f}ms exceeds 300ms SLA"
-        )
+        assert p95 < 300, f"range_filter P95 latency {p95:.1f}ms exceeds 300ms SLA"
 
 
 # ---------------------------------------------------------------------------
 # Suite 4: Multi-tenant isolation alongside temporal filter
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 @pytest.mark.neo4j
@@ -409,7 +411,7 @@ class TestMultiTenantTemporalIsolation:
                     valid_to: null
                 }]->(t)
                 """,
-                {"gid": graph_a}
+                {"gid": graph_a},
             )
             # Seed graph_b with a similar relationship — must not appear in graph_a queries
             await neo4j.execute_query(
@@ -422,7 +424,7 @@ class TestMultiTenantTemporalIsolation:
                     valid_to: null
                 }]->(t)
                 """,
-                {"gid": graph_b}
+                {"gid": graph_b},
             )
 
             # Query graph_a with point_in_time — must return only graph_a rels
@@ -434,7 +436,7 @@ class TestMultiTenantTemporalIsolation:
                   AND (r.valid_to IS NULL OR r.valid_to > datetime('2015-01-01T00:00:00'))
                 RETURN r.graph_id AS gid
                 """,
-                {"graph_id": graph_a}
+                {"graph_id": graph_a},
             )
 
             graph_ids_returned = {row["gid"] for row in result}
@@ -446,8 +448,7 @@ class TestMultiTenantTemporalIsolation:
         finally:
             for gid in (graph_a, graph_b):
                 await neo4j.execute_query(
-                    "MATCH (n {graph_id: $gid}) DETACH DELETE n",
-                    {"gid": gid}
+                    "MATCH (n {graph_id: $gid}) DETACH DELETE n", {"gid": gid}
                 )
 
     async def test_current_only_filter_scoped_to_graph(self, neo4j):
@@ -462,7 +463,7 @@ class TestMultiTenantTemporalIsolation:
                     MERGE (t:__Entity__ {graph_id: $gid, entity_id: 'y'})
                     CREATE (s)-[r:LINKS {graph_id: $gid, valid_to: null}]->(t)
                     """,
-                    {"gid": gid}
+                    {"gid": gid},
                 )
 
             result = await neo4j.execute_query(
@@ -471,16 +472,15 @@ class TestMultiTenantTemporalIsolation:
                 WHERE r.graph_id = $graph_id AND r.valid_to IS NULL
                 RETURN r.graph_id AS gid
                 """,
-                {"graph_id": graph_a}
+                {"graph_id": graph_a},
             )
             ids = {row["gid"] for row in result}
-            assert ids == {graph_a}, (
-                f"current_only filter leaked cross-tenant data: {ids}"
-            )
+            assert ids == {
+                graph_a
+            }, f"current_only filter leaked cross-tenant data: {ids}"
 
         finally:
             for gid in (graph_a, graph_b):
                 await neo4j.execute_query(
-                    "MATCH (n {graph_id: $gid}) DETACH DELETE n",
-                    {"gid": gid}
+                    "MATCH (n {graph_id: $gid}) DETACH DELETE n", {"gid": gid}
                 )

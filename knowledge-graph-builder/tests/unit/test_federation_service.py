@@ -9,7 +9,7 @@ Verifies:
 - Schema validation: too few graph_ids, duplicates
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

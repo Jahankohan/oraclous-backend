@@ -12,19 +12,17 @@ Spec criteria from ORA-49:
 4. UNCHANGED skips writes — zero entity nodes remain in graph after filtering.
 5. graph_id isolation — two graphs with same entity names produce different fingerprints.
 """
-import hashlib
+
 import uuid
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.services.pipeline_service import (
+    MultiTenantGraphRAGPipeline,
     compute_entity_fingerprint,
     compute_prop_hash,
-    MultiTenantGraphRAGPipeline,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,7 +39,9 @@ def _make_pipeline(graph_id: str = GRAPH_ID) -> MultiTenantGraphRAGPipeline:
     return p
 
 
-def _make_node(name: str, label: str = "__Entity__", description: str = "desc") -> MagicMock:
+def _make_node(
+    name: str, label: str = "__Entity__", description: str = "desc"
+) -> MagicMock:
     node = MagicMock()
     node.id = f"node_{name}"
     node.label = label
@@ -61,6 +61,7 @@ def _make_graph(nodes, relationships=None):
 # ---------------------------------------------------------------------------
 # compute_entity_fingerprint
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_fingerprint_stability():
@@ -114,11 +115,22 @@ def test_fingerprint_excludes_mutable_props():
 # compute_prop_hash
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_prop_hash_excludes_system_fields():
     """System fields should not affect prop_hash."""
-    props_a = {"name": "Alice", "description": "CEO", "graph_id": GRAPH_ID, "embedding": [0.1, 0.2]}
-    props_b = {"name": "Alice", "description": "CEO", "graph_id": OTHER_GRAPH_ID, "embedding": [0.9]}
+    props_a = {
+        "name": "Alice",
+        "description": "CEO",
+        "graph_id": GRAPH_ID,
+        "embedding": [0.1, 0.2],
+    }
+    props_b = {
+        "name": "Alice",
+        "description": "CEO",
+        "graph_id": OTHER_GRAPH_ID,
+        "embedding": [0.9],
+    }
     assert compute_prop_hash(props_a) == compute_prop_hash(props_b)
 
 
@@ -140,6 +152,7 @@ def test_prop_hash_stable_across_calls():
 # _bulk_fingerprint_lookup
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_bulk_fingerprint_lookup_returns_dict():
@@ -147,9 +160,11 @@ async def test_bulk_fingerprint_lookup_returns_dict():
     fps = ["abc123", "def456"]
 
     with patch("app.services.pipeline_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(return_value=[
-            {"fp": "abc123", "prop_hash": "hash1", "description": "old desc"},
-        ])
+        mock_client.execute_query = AsyncMock(
+            return_value=[
+                {"fp": "abc123", "prop_hash": "hash1", "description": "old desc"},
+            ]
+        )
         result = await pipeline._bulk_fingerprint_lookup(fps)
 
     assert result == {"abc123": {"prop_hash": "hash1", "description": "old desc"}}
@@ -182,6 +197,7 @@ async def test_bulk_fingerprint_lookup_includes_graph_id():
 # _apply_entity_delta
 # ---------------------------------------------------------------------------
 
+
 def _fp(graph_id: str, name: str, label: str = "__Entity__") -> str:
     return compute_entity_fingerprint(graph_id, name, label)
 
@@ -207,7 +223,6 @@ async def test_apply_entity_delta_classifies_new():
     assert len(graph.nodes) == 1
 
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_apply_entity_delta_classifies_unchanged_and_removes():
@@ -219,9 +234,9 @@ async def test_apply_entity_delta_classifies_unchanged_and_removes():
     existing_ph = compute_prop_hash({"name": "Alice", "description": "CEO"})
 
     with patch("app.services.pipeline_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(return_value=[
-            {"fp": fp, "prop_hash": existing_ph, "description": "CEO"}
-        ])
+        mock_client.execute_query = AsyncMock(
+            return_value=[{"fp": fp, "prop_hash": existing_ph, "description": "CEO"}]
+        )
         stats = await pipeline._apply_entity_delta(graph, "doc.txt")
 
     assert stats["unchanged"] == 1
@@ -238,12 +253,14 @@ async def test_apply_entity_delta_classifies_updated():
     graph = _make_graph([node])
 
     fp = _fp(GRAPH_ID, "Alice")
-    old_ph = compute_prop_hash({"name": "Alice", "description": "CEO"})  # old hash differs
+    old_ph = compute_prop_hash(
+        {"name": "Alice", "description": "CEO"}
+    )  # old hash differs
 
     with patch("app.services.pipeline_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(return_value=[
-            {"fp": fp, "prop_hash": old_ph, "description": "CEO"}
-        ])
+        mock_client.execute_query = AsyncMock(
+            return_value=[{"fp": fp, "prop_hash": old_ph, "description": "CEO"}]
+        )
         stats = await pipeline._apply_entity_delta(graph, "doc.txt")
 
     assert stats["updated"] == 1
@@ -273,10 +290,16 @@ async def test_apply_entity_delta_mixed_batch():
     unchanged_ph_bob = compute_prop_hash({"name": "Bob", "description": "Engineer"})
 
     with patch("app.services.pipeline_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(return_value=[
-            {"fp": fp_alice, "prop_hash": old_ph_alice, "description": "CEO"},
-            {"fp": fp_bob, "prop_hash": unchanged_ph_bob, "description": "Engineer"},
-        ])
+        mock_client.execute_query = AsyncMock(
+            return_value=[
+                {"fp": fp_alice, "prop_hash": old_ph_alice, "description": "CEO"},
+                {
+                    "fp": fp_bob,
+                    "prop_hash": unchanged_ph_bob,
+                    "description": "Engineer",
+                },
+            ]
+        )
         stats = await pipeline._apply_entity_delta(graph, "doc.txt")
 
     assert stats["new"] == 1
@@ -309,6 +332,7 @@ async def test_apply_entity_delta_no_entities():
 # ---------------------------------------------------------------------------
 # _apply_updated_merge_rules — description-longer-wins
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio

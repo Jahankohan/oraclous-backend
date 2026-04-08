@@ -14,12 +14,12 @@ Covers Suite 1 (API Integration Tests) from the QA test plan:
 Auth is bypassed via patching auth_service.verify_token.
 Neo4j and DB operations are mocked so no live services are required.
 """
+
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -34,12 +34,13 @@ JOB_ID = str(uuid.uuid4())
 FAKE_USER_A = {"id": USER_A_ID, "email": "user-a@example.com"}
 FAKE_USER_B = {"id": USER_B_ID, "email": "user-b@example.com"}
 
-_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=UTC).isoformat()
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _neo4j_graph(graph_id: str, user_id: str, name: str = "Test Graph") -> dict:
     """Minimal Neo4j graph record as returned by GraphNodeService."""
@@ -72,14 +73,17 @@ def _auth_headers() -> dict:
 # Suite 1a — Health endpoint
 # ---------------------------------------------------------------------------
 
+
 class TestHealthEndpoint:
 
     @pytest.mark.integration
     @pytest.mark.api
     async def test_health_returns_200_when_all_healthy(self, async_client):
         """GET /health → 200 with overall status healthy."""
-        with patch("app.api.v1.endpoints.health.neo4j_client") as mock_neo4j, \
-             patch("app.api.v1.endpoints.health.check_db_health") as mock_pg:
+        with (
+            patch("app.api.v1.endpoints.health.neo4j_client") as mock_neo4j,
+            patch("app.api.v1.endpoints.health.check_db_health") as mock_pg,
+        ):
             mock_neo4j.health_check = AsyncMock(return_value={"status": "healthy"})
             mock_pg.return_value = {"status": "healthy"}
 
@@ -99,8 +103,10 @@ class TestHealthEndpoint:
     @pytest.mark.api
     async def test_health_returns_degraded_when_neo4j_down(self, async_client):
         """GET /health → 200 but status=degraded when Neo4j is unhealthy."""
-        with patch("app.api.v1.endpoints.health.neo4j_client") as mock_neo4j, \
-             patch("app.api.v1.endpoints.health.check_db_health") as mock_pg:
+        with (
+            patch("app.api.v1.endpoints.health.neo4j_client") as mock_neo4j,
+            patch("app.api.v1.endpoints.health.check_db_health") as mock_pg,
+        ):
             mock_neo4j.health_check = AsyncMock(return_value={"status": "unhealthy"})
             mock_pg.return_value = {"status": "healthy"}
 
@@ -114,8 +120,10 @@ class TestHealthEndpoint:
     @pytest.mark.api
     async def test_health_returns_degraded_when_postgres_down(self, async_client):
         """GET /health → 200 but status=degraded when Postgres is unhealthy."""
-        with patch("app.api.v1.endpoints.health.neo4j_client") as mock_neo4j, \
-             patch("app.api.v1.endpoints.health.check_db_health") as mock_pg:
+        with (
+            patch("app.api.v1.endpoints.health.neo4j_client") as mock_neo4j,
+            patch("app.api.v1.endpoints.health.check_db_health") as mock_pg,
+        ):
             mock_neo4j.health_check = AsyncMock(return_value={"status": "healthy"})
             mock_pg.return_value = {"status": "unhealthy"}
 
@@ -128,8 +136,10 @@ class TestHealthEndpoint:
     @pytest.mark.api
     async def test_health_no_auth_required(self, async_client):
         """Health endpoint must be accessible without a token."""
-        with patch("app.api.v1.endpoints.health.neo4j_client") as mock_neo4j, \
-             patch("app.api.v1.endpoints.health.check_db_health") as mock_pg:
+        with (
+            patch("app.api.v1.endpoints.health.neo4j_client") as mock_neo4j,
+            patch("app.api.v1.endpoints.health.check_db_health") as mock_pg,
+        ):
             mock_neo4j.health_check = AsyncMock(return_value={"status": "healthy"})
             mock_pg.return_value = {"status": "healthy"}
 
@@ -143,6 +153,7 @@ class TestHealthEndpoint:
 # Suite 1b — Graphs CRUD
 # ---------------------------------------------------------------------------
 
+
 class TestGraphsCRUD:
 
     # ---- CREATE ----
@@ -155,8 +166,10 @@ class TestGraphsCRUD:
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 service_instance = MockService.return_value
                 service_instance.create_graph.return_value = graph_record
@@ -233,12 +246,16 @@ class TestGraphsCRUD:
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.list_user_graphs.return_value = user_graphs
 
-                response = await async_client.get("/api/v1/graphs", headers=_auth_headers())
+                response = await async_client.get(
+                    "/api/v1/graphs", headers=_auth_headers()
+                )
         finally:
             auth_patch.stop()
 
@@ -255,12 +272,16 @@ class TestGraphsCRUD:
         """GET /graphs → empty list when user has no graphs."""
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.list_user_graphs.return_value = []
 
-                response = await async_client.get("/api/v1/graphs", headers=_auth_headers())
+                response = await async_client.get(
+                    "/api/v1/graphs", headers=_auth_headers()
+                )
         finally:
             auth_patch.stop()
 
@@ -277,8 +298,10 @@ class TestGraphsCRUD:
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
 
@@ -299,8 +322,10 @@ class TestGraphsCRUD:
         """GET /graphs/{unknown_id} → 404."""
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = None  # not found
 
@@ -320,10 +345,14 @@ class TestGraphsCRUD:
 
         auth_patch = _patch_auth(FAKE_USER_A)  # User A is calling
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
-                MockService.return_value.get_graph.return_value = graph_record  # belongs to User B
+                MockService.return_value.get_graph.return_value = (
+                    graph_record  # belongs to User B
+                )
 
                 response = await async_client.get(
                     f"/api/v1/graphs/{GRAPH_B_ID}", headers=_auth_headers()
@@ -344,8 +373,10 @@ class TestGraphsCRUD:
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 svc = MockService.return_value
                 svc.get_graph.return_value = existing
@@ -371,8 +402,10 @@ class TestGraphsCRUD:
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
 
@@ -392,8 +425,10 @@ class TestGraphsCRUD:
         """PUT /graphs/{unknown_id} → 404."""
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = None
 
@@ -412,6 +447,7 @@ class TestGraphsCRUD:
 # Suite 1c — Ingestion
 # ---------------------------------------------------------------------------
 
+
 class TestIngestEndpoint:
 
     @pytest.mark.integration
@@ -426,24 +462,32 @@ class TestIngestEndpoint:
         mock_job.status = "pending"
         mock_job.progress = 0
         mock_job.source_type = "text"
-        mock_job.created_at = datetime.now(timezone.utc)
+        mock_job.created_at = datetime.now(UTC)
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService, \
-                 patch("app.api.v1.endpoints.graphs.background_job_service") as mock_bg, \
-                 patch("app.api.v1.endpoints.graphs.get_database") as mock_db_dep:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch("app.api.v1.endpoints.graphs.background_job_service") as mock_bg,
+                patch("app.api.v1.endpoints.graphs.get_database") as mock_db_dep,
+            ):
 
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
-                mock_bg.start_ingestion_job.return_value = {"status": "started", "message": "ok"}
+                mock_bg.start_ingestion_job.return_value = {
+                    "status": "started",
+                    "message": "ok",
+                }
 
                 # Mock the database session
                 mock_session = AsyncMock()
                 mock_session.add = MagicMock()
                 mock_session.commit = AsyncMock()
-                mock_session.refresh = AsyncMock(side_effect=lambda job: setattr(job, 'id', uuid.UUID(JOB_ID)) or None)
+                mock_session.refresh = AsyncMock(
+                    side_effect=lambda job: setattr(job, "id", uuid.UUID(JOB_ID))
+                    or None
+                )
 
                 async def _db_gen():
                     yield mock_session
@@ -452,7 +496,9 @@ class TestIngestEndpoint:
 
                 response = await async_client.post(
                     f"/api/v1/graphs/{GRAPH_A_ID}/ingest",
-                    json={"content": "TechNova Corp was founded in 2015 by Alice Smith. It is headquartered in San Francisco."},
+                    json={
+                        "content": "TechNova Corp was founded in 2015 by Alice Smith. It is headquartered in San Francisco."
+                    },
                     headers=_auth_headers(),
                 )
         finally:
@@ -470,8 +516,10 @@ class TestIngestEndpoint:
         """POST /graphs/{unknown_id}/ingest → 404."""
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = None
 
@@ -493,8 +541,10 @@ class TestIngestEndpoint:
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
 
@@ -529,6 +579,7 @@ class TestIngestEndpoint:
 # Suite 1d — Graph Response Fields
 # ---------------------------------------------------------------------------
 
+
 class TestGraphResponseFields:
 
     @pytest.mark.integration
@@ -539,8 +590,10 @@ class TestGraphResponseFields:
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j, \
-                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService:
+            with (
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
 
@@ -553,9 +606,15 @@ class TestGraphResponseFields:
         assert response.status_code == 200
         data = response.json()
         required_fields = [
-            "id", "name", "description", "user_id",
-            "created_at", "updated_at", "node_count",
-            "relationship_count", "status",
+            "id",
+            "name",
+            "description",
+            "user_id",
+            "created_at",
+            "updated_at",
+            "node_count",
+            "relationship_count",
+            "status",
         ]
         for field in required_fields:
             assert field in data, f"Missing required field: {field}"

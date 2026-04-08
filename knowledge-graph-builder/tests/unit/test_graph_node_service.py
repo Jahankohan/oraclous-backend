@@ -4,27 +4,31 @@ Unit tests for GraphNodeService.
 Tests CRUD operations and multi-tenant isolation (user_id + graph_id scoping)
 against a mocked Neo4j sync driver.
 """
-import pytest
+
 from unittest.mock import MagicMock
+
+import pytest
 from neo4j.exceptions import Neo4jError
 
 from app.services.graph_node_service import GraphNodeService
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_driver(single_return=None, all_records=None):
     """Build a mock Neo4j sync driver whose session().run() returns controllable data."""
     mock_record = MagicMock()
-    mock_record.__getitem__ = MagicMock(side_effect=lambda key: single_return.get(key) if single_return else None)
+    mock_record.__getitem__ = MagicMock(
+        side_effect=lambda key: single_return.get(key) if single_return else None
+    )
 
     mock_result = MagicMock()
     mock_result.single.return_value = mock_record if single_return is not None else None
-    mock_result.__iter__ = MagicMock(return_value=iter(
-        [_wrap_record(r) for r in (all_records or [])]
-    ))
+    mock_result.__iter__ = MagicMock(
+        return_value=iter([_wrap_record(r) for r in (all_records or [])])
+    )
 
     mock_session = MagicMock()
     mock_session.run.return_value = mock_result
@@ -61,6 +65,7 @@ def _graph_node_data():
 # Tests: create_graph
 # ---------------------------------------------------------------------------
 
+
 class TestCreateGraph:
     @pytest.mark.unit
     def test_create_graph_success(self):
@@ -71,15 +76,21 @@ class TestCreateGraph:
             "name": "My Graph",
             "description": "A test graph",
             "user_id": "user-1",
-            "created_at": MagicMock(isoformat=MagicMock(return_value="2025-01-01T00:00:00")),
-            "updated_at": MagicMock(isoformat=MagicMock(return_value="2025-01-01T00:00:00")),
+            "created_at": MagicMock(
+                isoformat=MagicMock(return_value="2025-01-01T00:00:00")
+            ),
+            "updated_at": MagicMock(
+                isoformat=MagicMock(return_value="2025-01-01T00:00:00")
+            ),
             "node_count": 0,
             "relationship_count": 0,
             "status": "active",
         }
 
         # record["g"] returns a real dict so dict(record["g"]) works
-        mock_record.__getitem__ = MagicMock(side_effect=lambda k: real_graph_data if k == "g" else None)
+        mock_record.__getitem__ = MagicMock(
+            side_effect=lambda k: real_graph_data if k == "g" else None
+        )
         mock_result.single.return_value = mock_record
 
         svc = GraphNodeService(mock_driver)
@@ -123,12 +134,19 @@ class TestCreateGraph:
     def test_create_graph_passes_graph_id_in_query_params(self):
         mock_driver, mock_session, mock_result, mock_record = _make_driver()
         real_data = {
-            "graph_id": "g-123", "name": "N", "description": "", "user_id": "u",
+            "graph_id": "g-123",
+            "name": "N",
+            "description": "",
+            "user_id": "u",
             "created_at": MagicMock(isoformat=MagicMock(return_value="2025-01-01")),
             "updated_at": MagicMock(isoformat=MagicMock(return_value="2025-01-01")),
-            "node_count": 0, "relationship_count": 0, "status": "active",
+            "node_count": 0,
+            "relationship_count": 0,
+            "status": "active",
         }
-        mock_record.__getitem__ = MagicMock(side_effect=lambda k: real_data if k == "g" else None)
+        mock_record.__getitem__ = MagicMock(
+            side_effect=lambda k: real_data if k == "g" else None
+        )
 
         svc = GraphNodeService(mock_driver)
         try:
@@ -146,6 +164,7 @@ class TestCreateGraph:
 # Tests: get_graph
 # ---------------------------------------------------------------------------
 
+
 class TestGetGraph:
     @pytest.mark.unit
     def test_get_graph_returns_none_when_not_found(self):
@@ -159,7 +178,9 @@ class TestGetGraph:
     @pytest.mark.unit
     def test_get_graph_passes_graph_id_to_query(self):
         mock_driver, mock_session, mock_result, mock_record = _make_driver()
-        mock_record.__getitem__ = MagicMock(side_effect=lambda k: {"graph_id": "g-1"} if k == "graph" else None)
+        mock_record.__getitem__ = MagicMock(
+            side_effect=lambda k: {"graph_id": "g-1"} if k == "graph" else None
+        )
 
         svc = GraphNodeService(mock_driver)
         svc.get_graph("g-1")
@@ -191,6 +212,7 @@ class TestGetGraph:
 # ---------------------------------------------------------------------------
 # Tests: list_user_graphs
 # ---------------------------------------------------------------------------
+
 
 class TestListUserGraphs:
     @pytest.mark.unit
@@ -244,11 +266,14 @@ class TestListUserGraphs:
 # Tests: delete_graph
 # ---------------------------------------------------------------------------
 
+
 class TestDeleteGraph:
     @pytest.mark.unit
     def test_delete_graph_returns_true_when_deleted(self):
         mock_driver, mock_session, mock_result, mock_record = _make_driver()
-        mock_record.__getitem__ = MagicMock(side_effect=lambda k: 1 if k == "deleted_count" else None)
+        mock_record.__getitem__ = MagicMock(
+            side_effect=lambda k: 1 if k == "deleted_count" else None
+        )
         mock_result.single.return_value = mock_record
 
         svc = GraphNodeService(mock_driver)
@@ -258,7 +283,9 @@ class TestDeleteGraph:
     @pytest.mark.unit
     def test_delete_graph_returns_false_when_not_found(self):
         mock_driver, mock_session, mock_result, mock_record = _make_driver()
-        mock_record.__getitem__ = MagicMock(side_effect=lambda k: 0 if k == "deleted_count" else None)
+        mock_record.__getitem__ = MagicMock(
+            side_effect=lambda k: 0 if k == "deleted_count" else None
+        )
 
         svc = GraphNodeService(mock_driver)
         result = svc.delete_graph("g-none", "user-1")
@@ -296,11 +323,14 @@ class TestDeleteGraph:
 # Tests: graph_exists
 # ---------------------------------------------------------------------------
 
+
 class TestGraphExists:
     @pytest.mark.unit
     def test_graph_exists_returns_true(self):
         mock_driver, mock_session, mock_result, mock_record = _make_driver()
-        mock_record.__getitem__ = MagicMock(side_effect=lambda k: True if k == "exists" else None)
+        mock_record.__getitem__ = MagicMock(
+            side_effect=lambda k: True if k == "exists" else None
+        )
         mock_result.single.return_value = mock_record
 
         svc = GraphNodeService(mock_driver)
@@ -335,6 +365,7 @@ class TestGraphExists:
 # ---------------------------------------------------------------------------
 # Tests: update_graph
 # ---------------------------------------------------------------------------
+
 
 class TestUpdateGraph:
     @pytest.mark.unit
@@ -377,6 +408,7 @@ class TestUpdateGraph:
 # Tests: migrate_relationship_properties
 # ---------------------------------------------------------------------------
 
+
 class TestMigrateRelationshipProperties:
     """Tests for the 3-phase migration that moves contextual properties off nodes."""
 
@@ -410,16 +442,19 @@ class TestMigrateRelationshipProperties:
             r = MagicMock()
             r.__getitem__ = MagicMock(
                 side_effect=lambda k: {
-                    "entity_id": entity_id, "name": name, "type": entity_type, "props": props
+                    "entity_id": entity_id,
+                    "name": name,
+                    "type": entity_type,
+                    "props": props,
                 }.get(k)
             )
             return r
 
         call_results = [
-            _single_result({"transferred": transferred_job_title}),   # phase1a
+            _single_result({"transferred": transferred_job_title}),  # phase1a
             _single_result({"transferred": transferred_proficiency}),  # phase1b
             _iter_result([_make_orphan_record(**o) for o in orphan_records]),  # phase2
-            _single_result({"cleaned": cleaned}),                       # phase3
+            _single_result({"cleaned": cleaned}),  # phase3
         ]
         call_count = [0]
 
@@ -459,8 +494,18 @@ class TestMigrateRelationshipProperties:
     @pytest.mark.unit
     def test_orphans_detected_count(self):
         orphans = [
-            {"entity_id": "e-1", "name": "Alice", "entity_type": "Person", "props": ["job_title"]},
-            {"entity_id": "e-2", "name": "Bob", "entity_type": "Person", "props": ["job_title"]},
+            {
+                "entity_id": "e-1",
+                "name": "Alice",
+                "entity_type": "Person",
+                "props": ["job_title"],
+            },
+            {
+                "entity_id": "e-2",
+                "name": "Bob",
+                "entity_type": "Person",
+                "props": ["job_title"],
+            },
         ]
         driver = self._make_migration_driver(orphan_records=orphans)
         svc = GraphNodeService(driver)
@@ -470,7 +515,10 @@ class TestMigrateRelationshipProperties:
     @pytest.mark.unit
     def test_zero_violations_clean_graph(self):
         driver = self._make_migration_driver(
-            transferred_job_title=0, transferred_proficiency=0, orphan_records=[], cleaned=0
+            transferred_job_title=0,
+            transferred_proficiency=0,
+            orphan_records=[],
+            cleaned=0,
         )
         svc = GraphNodeService(driver)
         result = svc.migrate_relationship_properties("g-clean")
@@ -495,9 +543,9 @@ class TestMigrateRelationshipProperties:
         session = driver.session.return_value.__enter__.return_value
         for call in session.run.call_args_list:
             params = call[0][1] if len(call[0]) > 1 else call[1].get("parameters", {})
-            assert params.get("graph_id") == "target-graph", (
-                f"graph_id not passed in query: {call}"
-            )
+            assert (
+                params.get("graph_id") == "target-graph"
+            ), f"graph_id not passed in query: {call}"
 
     @pytest.mark.unit
     def test_wraps_neo4j_error(self):
@@ -506,6 +554,7 @@ class TestMigrateRelationshipProperties:
         mock_session.__enter__ = MagicMock(return_value=mock_session)
         mock_session.__exit__ = MagicMock(return_value=False)
         from neo4j.exceptions import Neo4jError
+
         mock_session.run.side_effect = Neo4jError("write failed")
         mock_driver.session.return_value = mock_session
 
@@ -514,12 +563,11 @@ class TestMigrateRelationshipProperties:
             svc.migrate_relationship_properties("g-1")
 
 
-from unittest.mock import patch
-
 
 # ---------------------------------------------------------------------------
 # Tests: _TEMPORAL_INDEX_STATEMENTS — ORA-138
 # ---------------------------------------------------------------------------
+
 
 class TestTemporalIndexStatements:
     """Verify the _TEMPORAL_INDEX_STATEMENTS class-level list includes all required indexes."""
@@ -546,9 +594,9 @@ class TestTemporalIndexStatements:
     def test_standalone_indexes_use_if_not_exists(self):
         """All index statements must be idempotent (IF NOT EXISTS)."""
         for stmt in GraphNodeService._TEMPORAL_INDEX_STATEMENTS:
-            assert "IF NOT EXISTS" in stmt, (
-                f"Index statement missing IF NOT EXISTS (not idempotent): {stmt!r}"
-            )
+            assert (
+                "IF NOT EXISTS" in stmt
+            ), f"Index statement missing IF NOT EXISTS (not idempotent): {stmt!r}"
 
     @pytest.mark.unit
     def test_ensure_temporal_indexes_calls_session_run_for_each_statement(self):
@@ -562,6 +610,6 @@ class TestTemporalIndexStatements:
         svc = GraphNodeService(mock_driver)
         svc._ensure_temporal_indexes()
 
-        assert mock_session.run.call_count == len(GraphNodeService._TEMPORAL_INDEX_STATEMENTS), (
-            "session.run() call count must match number of index statements"
-        )
+        assert mock_session.run.call_count == len(
+            GraphNodeService._TEMPORAL_INDEX_STATEMENTS
+        ), "session.run() call count must match number of index statements"

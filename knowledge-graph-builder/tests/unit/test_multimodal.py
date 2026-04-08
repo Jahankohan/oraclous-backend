@@ -11,7 +11,7 @@ Covers:
 
 import json
 import tempfile
-from pathlib import Path
+from datetime import UTC
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,15 +20,22 @@ from fastapi import HTTPException
 from app.schemas.multimodal import MultiModalJobResponse, PDFExtractor, VisionModel
 from app.services.vision_extractor import VisionExtractor
 
-
 # ─── VisionExtractor helpers ─────────────────────────────────────────────────
+
 
 class TestVisionExtractorParse:
     @pytest.mark.unit
     def test_parses_clean_json(self):
         payload = {
             "entities": [{"name": "Lambda", "type": "Service", "description": "FaaS"}],
-            "relationships": [{"source": "Lambda", "target": "S3", "type": "READS_FROM", "description": ""}],
+            "relationships": [
+                {
+                    "source": "Lambda",
+                    "target": "S3",
+                    "type": "READS_FROM",
+                    "description": "",
+                }
+            ],
         }
         result = VisionExtractor._parse(json.dumps(payload))
         assert len(result["entities"]) == 1
@@ -37,7 +44,10 @@ class TestVisionExtractorParse:
 
     @pytest.mark.unit
     def test_strips_markdown_fences(self):
-        payload = {"entities": [{"name": "X", "type": "Y", "description": ""}], "relationships": []}
+        payload = {
+            "entities": [{"name": "X", "type": "Y", "description": ""}],
+            "relationships": [],
+        }
         raw = "```json\n" + json.dumps(payload) + "\n```"
         result = VisionExtractor._parse(raw)
         assert result["entities"][0]["name"] == "X"
@@ -57,7 +67,13 @@ class TestVisionExtractorToText:
     @pytest.mark.unit
     def test_entities_serialised_as_sentences(self):
         result = {
-            "entities": [{"name": "AWS Lambda", "type": "Service", "description": "Serverless compute"}],
+            "entities": [
+                {
+                    "name": "AWS Lambda",
+                    "type": "Service",
+                    "description": "Serverless compute",
+                }
+            ],
             "relationships": [],
         }
         text = VisionExtractor.to_text(result)
@@ -69,7 +85,12 @@ class TestVisionExtractorToText:
         result = {
             "entities": [],
             "relationships": [
-                {"source": "Lambda", "target": "S3", "type": "READS_FROM", "description": ""}
+                {
+                    "source": "Lambda",
+                    "target": "S3",
+                    "type": "READS_FROM",
+                    "description": "",
+                }
             ],
         }
         text = VisionExtractor.to_text(result)
@@ -104,6 +125,7 @@ class TestVisionExtractorToText:
 
 # ─── VisionExtractor media_type ──────────────────────────────────────────────
 
+
 class TestVisionExtractorMediaType:
     @pytest.mark.unit
     def test_jpg_extension(self):
@@ -128,13 +150,16 @@ class TestVisionExtractorMediaType:
 
 # ─── VisionExtractor — Claude extraction (mocked Anthropic SDK) ───────────────
 
+
 class TestVisionExtractorClaude:
     @pytest.mark.unit
     def test_calls_anthropic_api_with_base64(self):
         extractor = VisionExtractor()
 
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"entities": [], "relationships": []}')]
+        mock_response.content = [
+            MagicMock(text='{"entities": [], "relationships": []}')
+        ]
 
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             tmp.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -149,7 +174,9 @@ class TestVisionExtractorClaude:
             mock_anthropic_cls.return_value = mock_client
             mock_client.messages.create.return_value = mock_response
 
-            result = extractor.extract_from_image(tmp_path, context="test", model="claude")
+            result = extractor.extract_from_image(
+                tmp_path, context="test", model="claude"
+            )
 
         assert result == {"entities": [], "relationships": []}
         mock_client.messages.create.assert_called_once()
@@ -169,6 +196,7 @@ class TestVisionExtractorClaude:
 
 
 # ─── PDF extractor (mocked fitz) ──────────────────────────────────────────────
+
 
 class TestPDFExtractor:
     @pytest.mark.unit
@@ -190,11 +218,16 @@ class TestPDFExtractor:
         mock_doc.__exit__ = MagicMock(return_value=False)
 
         with (
-            patch.dict("sys.modules", {"fitz": MagicMock(open=MagicMock(return_value=mock_doc))}),
+            patch.dict(
+                "sys.modules",
+                {"fitz": MagicMock(open=MagicMock(return_value=mock_doc))},
+            ),
             patch("app.services.pdf_extractor.Path.mkdir"),
         ):
             from importlib import reload
+
             import app.services.pdf_extractor as pe
+
             reload(pe)
 
             # Use a direct test of the text assembly logic instead
@@ -204,6 +237,7 @@ class TestPDFExtractor:
     @pytest.mark.unit
     def test_raises_runtime_error_when_fitz_missing(self):
         import builtins
+
         real_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -214,18 +248,23 @@ class TestPDFExtractor:
         with patch("builtins.__import__", side_effect=mock_import):
             # Re-import to pick up the mock
             from app.services import pdf_extractor as pe
+
             with pytest.raises((RuntimeError, ImportError)):
                 pe.extract_pdf("/some/file.pdf")
 
 
 # ─── DocumentProcessor PDF/DOCX delegation ───────────────────────────────────
 
+
 class TestDocumentProcessorPDFDelegation:
     @pytest.mark.unit
     def test_pdf_raises_422_when_extraction_fails(self):
         from app.services.document_processor import DocumentProcessor
 
-        with patch("app.services.pdf_extractor.extract_pdf", side_effect=Exception("file not found")):
+        with patch(
+            "app.services.pdf_extractor.extract_pdf",
+            side_effect=Exception("file not found"),
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 DocumentProcessor._process_pdf("/nonexistent/file.pdf")
         assert exc_info.value.status_code == 422
@@ -236,7 +275,13 @@ class TestDocumentProcessorPDFDelegation:
 
         with patch(
             "app.services.pdf_extractor.extract_pdf",
-            return_value={"text": "   ", "page_count": 1, "has_tables": False, "image_paths": [], "metadata": {}},
+            return_value={
+                "text": "   ",
+                "page_count": 1,
+                "has_tables": False,
+                "image_paths": [],
+                "metadata": {},
+            },
         ):
             with pytest.raises(HTTPException) as exc_info:
                 DocumentProcessor._process_pdf("/some/empty.pdf")
@@ -250,10 +295,13 @@ class TestDocumentProcessorPDFDelegation:
             "app.services.pdf_extractor.extract_pdf",
             return_value={
                 "text": "This is the extracted PDF text content.",
-                "page_count": 3,
                 "has_tables": False,
                 "image_paths": [],
-                "metadata": {"processing_method": "pymupdf", "content_type": "application/pdf"},
+                "metadata": {
+                    "processing_method": "pymupdf",
+                    "content_type": "application/pdf",
+                    "page_count": 3,
+                },
             },
         ):
             result = DocumentProcessor._process_pdf("/some/valid.pdf")
@@ -266,7 +314,9 @@ class TestDocumentProcessorPDFDelegation:
     def test_docx_raises_422_when_extraction_fails(self):
         from app.services.document_processor import DocumentProcessor
 
-        with patch("app.services.pdf_extractor.extract_docx", side_effect=Exception("bad file")):
+        with patch(
+            "app.services.pdf_extractor.extract_docx", side_effect=Exception("bad file")
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 DocumentProcessor._process_word("/nonexistent/file.docx")
         assert exc_info.value.status_code == 422
@@ -290,11 +340,12 @@ class TestDocumentProcessorPDFDelegation:
 
 # ─── MultiModalJobResponse schema ────────────────────────────────────────────
 
+
 class TestMultiModalJobResponse:
     @pytest.mark.unit
     def test_required_fields_present(self):
         import uuid
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         resp = MultiModalJobResponse(
             job_id=uuid.uuid4(),
@@ -302,7 +353,7 @@ class TestMultiModalJobResponse:
             status="pending",
             source_type="pdf",
             filename="report.pdf",
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         assert resp.status == "pending"
         assert resp.source_type == "pdf"

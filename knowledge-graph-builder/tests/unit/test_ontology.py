@@ -9,33 +9,28 @@ Tests cover:
 - _enforce_ontology() STRICT / WARN / COERCE modes
 - Graph without ontology extracts freely (no regression)
 """
+
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
-from uuid import uuid4
 
 from app.schemas.graph_schemas import (
     EntityTypeDefinition,
     EntityTypeRule,
-    RelationshipTypeDefinition,
-    RelationshipRule,
-    OntologyValidationMode,
     GraphInstructions,
-    OntologySetRequest,
-    OntologyPatchRequest,
-    OntologyResponse,
-    RetroactiveApplyRequest,
-    RetroactiveApplyResponse,
+    OntologyValidationMode,
+    RelationshipRule,
+    RelationshipTypeDefinition,
 )
 from app.services.instructions_service import (
     InstructionsCompiler,
     ResolvedInstructions,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_node(node_id: str, label: str, name: str = "test"):
     node = MagicMock()
@@ -64,6 +59,7 @@ def _make_graph(nodes=None, rels=None):
 # 1. Serialization round-trip: EntityTypeDefinition
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_entity_type_definition_round_trip():
     et = EntityTypeDefinition(
@@ -76,12 +72,16 @@ def test_entity_type_definition_round_trip():
     restored = EntityTypeDefinition(**dumped)
     assert restored.name == "Person"
     assert restored.description == "A human being"
-    assert restored.properties == {"age": "numeric age in years", "nationality": "ISO country code"}
+    assert restored.properties == {
+        "age": "numeric age in years",
+        "nationality": "ISO country code",
+    }
 
 
 # ---------------------------------------------------------------------------
 # 2. Serialization round-trip: RelationshipTypeDefinition
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_relationship_type_definition_round_trip():
@@ -101,6 +101,7 @@ def test_relationship_type_definition_round_trip():
 # 3. Backward compat: EntityTypeRule alias
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_entity_type_rule_alias():
     """EntityTypeRule must be the same class as EntityTypeDefinition."""
@@ -112,6 +113,7 @@ def test_entity_type_rule_alias():
 # ---------------------------------------------------------------------------
 # 4. Backward compat: RelationshipRule alias
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_relationship_rule_alias():
@@ -125,30 +127,36 @@ def test_relationship_rule_alias():
 # 5. store_as_edge_property auto-migrates to properties
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_store_as_edge_property_migration():
     """Deprecated store_as_edge_property must auto-migrate to properties."""
-    rt = RelationshipTypeDefinition(**{
-        "name": "HIRED",
-        "store_as_edge_property": ["salary", "start_date"],
-    })
+    rt = RelationshipTypeDefinition(
+        **{
+            "name": "HIRED",
+            "store_as_edge_property": ["salary", "start_date"],
+        }
+    )
     assert rt.properties == ["salary", "start_date"]
 
 
 @pytest.mark.unit
 def test_store_as_edge_property_not_overwrite_properties():
     """When properties is already set, store_as_edge_property must NOT overwrite it."""
-    rt = RelationshipTypeDefinition(**{
-        "name": "HIRED",
-        "properties": ["role"],
-        "store_as_edge_property": ["salary"],
-    })
+    rt = RelationshipTypeDefinition(
+        **{
+            "name": "HIRED",
+            "properties": ["role"],
+            "store_as_edge_property": ["salary"],
+        }
+    )
     assert rt.properties == ["role"]
 
 
 # ---------------------------------------------------------------------------
 # 6. InstructionsCompiler renders properties and description
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_compiler_renders_entity_type_properties():
@@ -192,9 +200,12 @@ def test_compiler_renders_relationship_type_properties():
 # 7. _enforce_ontology() STRICT — removes violations, keeps structural rels
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_enforce_ontology_strict_removes_violating_nodes():
-    from app.services.pipeline_service import MultiTenantGraphRAGPipeline, _EnforcementReport
+    from app.services.pipeline_service import (
+        MultiTenantGraphRAGPipeline,
+    )
 
     pipeline = MultiTenantGraphRAGPipeline.__new__(MultiTenantGraphRAGPipeline)
     pipeline.graph_id = "test-graph"
@@ -226,6 +237,7 @@ def test_enforce_ontology_strict_removes_violating_nodes():
 # 8. _enforce_ontology() WARN — keeps all nodes, returns correct violation count
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_enforce_ontology_warn_keeps_all_nodes():
     from app.services.pipeline_service import MultiTenantGraphRAGPipeline
@@ -252,6 +264,7 @@ def test_enforce_ontology_warn_keeps_all_nodes():
 # 9. _enforce_ontology() COERCE — relabels Human → Person at 0.7 threshold
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_enforce_ontology_coerce_relabels_close_match():
     from app.services.pipeline_service import MultiTenantGraphRAGPipeline
@@ -272,6 +285,7 @@ def test_enforce_ontology_coerce_relabels_close_match():
     # "Human" and "Person" — SequenceMatcher ratio ~0.6 may or may not reach 0.7,
     # so test behavior based on actual ratio rather than asserting the outcome
     import difflib
+
     ratio = difflib.SequenceMatcher(None, "human", "person").ratio()
     if ratio >= 0.7:
         assert report.coercions == 1
@@ -307,6 +321,7 @@ def test_enforce_ontology_coerce_exact_parent_match():
 # 10. Graph without ontology extracts freely (no regression)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_enforce_ontology_no_entity_types_is_noop():
     """When no entity_types configured, _enforce_ontology must be a no-op."""
@@ -331,6 +346,7 @@ def test_enforce_ontology_no_entity_types_is_noop():
 # 11. OntologyValidationMode enum values
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_ontology_validation_mode_values():
     assert OntologyValidationMode.WARN.value == "warn"
@@ -341,6 +357,7 @@ def test_ontology_validation_mode_values():
 # ---------------------------------------------------------------------------
 # 12. GraphInstructions includes ontology_mode with default WARN
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_graph_instructions_ontology_mode_default():
@@ -360,11 +377,15 @@ def test_graph_instructions_ontology_mode_serializes():
 # 13. build_schema_block renders correctly
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_build_schema_block_with_types():
     compiler = InstructionsCompiler()
     resolved = ResolvedInstructions(
-        entity_types=[EntityTypeDefinition(name="Person"), EntityTypeDefinition(name="Company")],
+        entity_types=[
+            EntityTypeDefinition(name="Person"),
+            EntityTypeDefinition(name="Company"),
+        ],
         relationship_types=[RelationshipTypeDefinition(name="WORKS_FOR")],
     )
     block = compiler.build_schema_block(resolved)

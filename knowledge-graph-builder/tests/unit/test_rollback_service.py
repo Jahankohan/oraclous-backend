@@ -5,14 +5,14 @@ Covers: create_rollback_job, get_rollback_job, rollback (_full_rollback).
 All Neo4j calls are mocked — no live database required.
 All rollback operations are whole-graph only (Phase 3 scope).
 """
+
 import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.services.rollback_service import RollbackService
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,19 +48,22 @@ def _make_count_result(cnt: int):
 # _full_rollback — property naming (must use invalidated_at, not deleted_at)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_full_rollback_uses_invalidated_at():
     svc = _make_svc()
 
     with patch("app.services.rollback_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(side_effect=[
-            _make_count_result(2),   # entities soft-deleted
-            _make_count_result(1),   # entities restored
-            _make_count_result(3),   # rels soft-deleted
-            _make_count_result(0),   # rels restored
-            _make_count_result(0),   # integrity pass
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                _make_count_result(2),  # entities soft-deleted
+                _make_count_result(1),  # entities restored
+                _make_count_result(3),  # rels soft-deleted
+                _make_count_result(0),  # rels restored
+                _make_count_result(0),  # integrity pass
+            ]
+        )
         result = await svc._full_rollback(
             graph_id=GRAPH_ID,
             captured_at=_CAPTURED_AT,
@@ -78,7 +81,9 @@ async def test_full_rollback_uses_invalidated_at():
     for call_args in mock_client.execute_query.call_args_list:
         query: str = call_args[0][0]
         params: dict = call_args[0][1]
-        assert "deleted_at" not in query, f"Query must use invalidated_at, not deleted_at: {query[:80]}"
+        assert (
+            "deleted_at" not in query
+        ), f"Query must use invalidated_at, not deleted_at: {query[:80]}"
         assert params.get("graph_id") == GRAPH_ID
 
 
@@ -88,13 +93,15 @@ async def test_full_rollback_all_queries_include_graph_id():
     svc = _make_svc()
 
     with patch("app.services.rollback_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(side_effect=[
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+            ]
+        )
         await svc._full_rollback(GRAPH_ID, _CAPTURED_AT, "u", _NOW_ISO, None)
 
     for i, args in enumerate(mock_client.execute_query.call_args_list):
@@ -105,6 +112,7 @@ async def test_full_rollback_all_queries_include_graph_id():
 # rollback — auto-checkpoint logic
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rollback_creates_checkpoint_by_default():
@@ -112,20 +120,27 @@ async def test_rollback_creates_checkpoint_by_default():
     checkpoint_id = str(uuid.uuid4())
 
     fake_snap = _fake_snapshot()
-    fake_checkpoint = {**_fake_snapshot(version_id=checkpoint_id), "captured_at": _NOW_ISO}
+    fake_checkpoint = {
+        **_fake_snapshot(version_id=checkpoint_id),
+        "captured_at": _NOW_ISO,
+    }
 
-    with patch("app.services.rollback_service.snapshot_service") as mock_snap_svc, \
-         patch("app.services.rollback_service.neo4j_client") as mock_neo:
+    with (
+        patch("app.services.rollback_service.snapshot_service") as mock_snap_svc,
+        patch("app.services.rollback_service.neo4j_client") as mock_neo,
+    ):
 
         mock_snap_svc.get_snapshot = AsyncMock(return_value=fake_snap)
         mock_snap_svc.create_snapshot = AsyncMock(return_value=fake_checkpoint)
-        mock_neo.execute_query = AsyncMock(side_effect=[
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-        ])
+        mock_neo.execute_query = AsyncMock(
+            side_effect=[
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+            ]
+        )
 
         result = await svc.rollback(
             graph_id=GRAPH_ID,
@@ -147,17 +162,21 @@ async def test_rollback_skips_checkpoint_when_disabled():
     svc = _make_svc()
     fake_snap = _fake_snapshot()
 
-    with patch("app.services.rollback_service.snapshot_service") as mock_snap_svc, \
-         patch("app.services.rollback_service.neo4j_client") as mock_neo:
+    with (
+        patch("app.services.rollback_service.snapshot_service") as mock_snap_svc,
+        patch("app.services.rollback_service.neo4j_client") as mock_neo,
+    ):
 
         mock_snap_svc.get_snapshot = AsyncMock(return_value=fake_snap)
-        mock_neo.execute_query = AsyncMock(side_effect=[
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-        ])
+        mock_neo.execute_query = AsyncMock(
+            side_effect=[
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+            ]
+        )
 
         result = await svc.rollback(
             graph_id=GRAPH_ID,
@@ -189,6 +208,7 @@ async def test_rollback_raises_when_snapshot_not_found():
 # create_rollback_job — mode is always "full"
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_create_rollback_job_mode_is_full():
@@ -212,15 +232,16 @@ async def test_create_rollback_job_mode_is_full():
     fake_job.celery_task_id = None
     fake_job.started_at = None
     fake_job.completed_at = None
-    fake_job.created_at = datetime.now(timezone.utc)
+    fake_job.created_at = datetime.now(UTC)
 
     mock_db = AsyncMock()
     mock_db.refresh = AsyncMock(side_effect=lambda obj: None)
 
-    from app.models.graph import GraphRollbackJob
 
-    with patch("app.services.rollback_service.uuid") as mock_uuid, \
-         patch.object(mock_db, "add") as mock_add:
+    with (
+        patch("app.services.rollback_service.uuid") as mock_uuid,
+        patch.object(mock_db, "add") as mock_add,
+    ):
 
         mock_uuid.uuid4.return_value = fake_job.id
         mock_db.add = MagicMock()

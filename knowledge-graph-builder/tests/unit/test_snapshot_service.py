@@ -4,14 +4,14 @@ Unit tests for SnapshotService.
 Covers: create_snapshot, list_snapshots, get_snapshot, delete_snapshot, diff_snapshots.
 All Neo4j calls are mocked — no live database required.
 """
+
 import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.services.snapshot_service import SnapshotService, _snapshot_ts
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,7 +20,7 @@ from app.services.snapshot_service import SnapshotService, _snapshot_ts
 GRAPH_ID = str(uuid.uuid4())
 SNAP_ID = str(uuid.uuid4())
 OTHER_SNAP_ID = str(uuid.uuid4())
-_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2025, 9, 4, 12, 0, 0, tzinfo=UTC)
 _NOW_ISO = _NOW.isoformat()
 
 _EARLIER_ISO = "2025-09-04T10:00:00+00:00"
@@ -55,6 +55,7 @@ def _make_service() -> SnapshotService:
 # _snapshot_ts helper
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_snapshot_ts_string_passthrough():
     snapshot = {"captured_at": _NOW_ISO}
@@ -79,6 +80,7 @@ def test_snapshot_ts_neo4j_datetime_object():
 # create_snapshot
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_create_snapshot_returns_dict():
@@ -86,14 +88,16 @@ async def test_create_snapshot_returns_dict():
     node = _fake_neo4j_node()
 
     with patch("app.services.snapshot_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(side_effect=[
-            # count query
-            [{"entity_count": 10, "relationship_count": 5}],
-            # version_number query
-            [{"next_num": 1}],
-            # create query
-            [{"v": node}],
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                # count query
+                [{"entity_count": 10, "relationship_count": 5}],
+                # version_number query
+                [{"next_num": 1}],
+                # create query
+                [{"v": node}],
+            ]
+        )
         result = await svc.create_snapshot(
             graph_id=GRAPH_ID,
             label="v1",
@@ -112,11 +116,13 @@ async def test_create_snapshot_passes_graph_id_to_all_queries():
     node = _fake_neo4j_node()
 
     with patch("app.services.snapshot_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(side_effect=[
-            [{"entity_count": 0, "relationship_count": 0}],
-            [{"next_num": 1}],
-            [{"v": node}],
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                [{"entity_count": 0, "relationship_count": 0}],
+                [{"next_num": 1}],
+                [{"v": node}],
+            ]
+        )
         await svc.create_snapshot(
             graph_id=GRAPH_ID, label=None, description=None, created_by="u"
         )
@@ -133,12 +139,14 @@ async def test_create_snapshot_fallback_when_graph_node_missing():
     node = _fake_neo4j_node()
 
     with patch("app.services.snapshot_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(side_effect=[
-            [{"entity_count": 0, "relationship_count": 0}],
-            [{"next_num": 1}],
-            [],       # MATCH (g:Graph ...) returns nothing
-            [{"v": node}],  # fallback CREATE succeeds
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                [{"entity_count": 0, "relationship_count": 0}],
+                [{"next_num": 1}],
+                [],  # MATCH (g:Graph ...) returns nothing
+                [{"v": node}],  # fallback CREATE succeeds
+            ]
+        )
         result = await svc.create_snapshot(
             graph_id=GRAPH_ID, label="v1", description=None, created_by="u"
         )
@@ -149,6 +157,7 @@ async def test_create_snapshot_fallback_when_graph_node_missing():
 # ---------------------------------------------------------------------------
 # list_snapshots
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -181,6 +190,7 @@ async def test_list_snapshots_enforces_graph_id():
 # ---------------------------------------------------------------------------
 # get_snapshot
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -226,6 +236,7 @@ async def test_get_snapshot_scoped_by_graph_id():
 # delete_snapshot
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_delete_snapshot_returns_true_when_found():
@@ -234,10 +245,12 @@ async def test_delete_snapshot_returns_true_when_found():
 
     with patch("app.services.snapshot_service.neo4j_client") as mock_client:
         # get_snapshot call returns data, delete call returns []
-        mock_client.execute_query = AsyncMock(side_effect=[
-            [{"v": node}],
-            [],
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                [{"v": node}],
+                [],
+            ]
+        )
         result = await svc.delete_snapshot(GRAPH_ID, SNAP_ID)
 
     assert result is True
@@ -258,6 +271,7 @@ async def test_delete_snapshot_returns_false_when_not_found():
 # ---------------------------------------------------------------------------
 # diff_snapshots
 # ---------------------------------------------------------------------------
+
 
 def _make_count_result(cnt: int):
     return [{"cnt": cnt}]
@@ -286,22 +300,24 @@ async def test_diff_snapshots_orders_older_first():
     ]
 
     with patch("app.services.snapshot_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(side_effect=[
-            # get_snapshot(SNAP_ID) = older
-            [{"v": older_node}],
-            # get_snapshot(OTHER_SNAP_ID) = newer
-            [{"v": newer_node}],
-            # ea count
-            _make_count_result(3),
-            # ed count
-            _make_count_result(1),
-            # ra count
-            _make_count_result(2),
-            # rd count
-            _make_count_result(0),
-            # changes page
-            [],
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                # get_snapshot(SNAP_ID) = older
+                [{"v": older_node}],
+                # get_snapshot(OTHER_SNAP_ID) = newer
+                [{"v": newer_node}],
+                # ea count
+                _make_count_result(3),
+                # ed count
+                _make_count_result(1),
+                # ra count
+                _make_count_result(2),
+                # rd count
+                _make_count_result(0),
+                # changes page
+                [],
+            ]
+        )
         result = await svc.diff_snapshots(
             graph_id=GRAPH_ID,
             snapshot_id=SNAP_ID,
@@ -337,15 +353,17 @@ async def test_diff_snapshots_swaps_order_when_v1_newer():
     ]
 
     with patch("app.services.snapshot_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(side_effect=[
-            [{"v": newer_node}],   # get_snapshot(SNAP_ID) = newer
-            [{"v": older_node}],   # get_snapshot(OTHER_SNAP_ID) = older
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-            _make_count_result(0),
-            [],
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                [{"v": newer_node}],  # get_snapshot(SNAP_ID) = newer
+                [{"v": older_node}],  # get_snapshot(OTHER_SNAP_ID) = older
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                [],
+            ]
+        )
         result = await svc.diff_snapshots(
             graph_id=GRAPH_ID,
             snapshot_id=SNAP_ID,
@@ -374,22 +392,33 @@ async def test_diff_snapshots_all_queries_include_graph_id():
 
     node1 = MagicMock()
     node1.items.return_value = [
-        ("version_id", SNAP_ID), ("graph_id", GRAPH_ID),
-        ("captured_at", _EARLIER_ISO), ("version_number", 1), ("label", None),
+        ("version_id", SNAP_ID),
+        ("graph_id", GRAPH_ID),
+        ("captured_at", _EARLIER_ISO),
+        ("version_number", 1),
+        ("label", None),
     ]
     node2 = MagicMock()
     node2.items.return_value = [
-        ("version_id", OTHER_SNAP_ID), ("graph_id", GRAPH_ID),
-        ("captured_at", _LATER_ISO), ("version_number", 2), ("label", None),
+        ("version_id", OTHER_SNAP_ID),
+        ("graph_id", GRAPH_ID),
+        ("captured_at", _LATER_ISO),
+        ("version_number", 2),
+        ("label", None),
     ]
 
     with patch("app.services.snapshot_service.neo4j_client") as mock_client:
-        mock_client.execute_query = AsyncMock(side_effect=[
-            [{"v": node1}], [{"v": node2}],
-            _make_count_result(0), _make_count_result(0),
-            _make_count_result(0), _make_count_result(0),
-            [],
-        ])
+        mock_client.execute_query = AsyncMock(
+            side_effect=[
+                [{"v": node1}],
+                [{"v": node2}],
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                _make_count_result(0),
+                [],
+            ]
+        )
         await svc.diff_snapshots(GRAPH_ID, SNAP_ID, OTHER_SNAP_ID)
 
     for i, args in enumerate(mock_client.execute_query.call_args_list):

@@ -14,8 +14,8 @@ Covers:
 - ChatRequest.temporal_filter field present and optional
 """
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -35,7 +35,7 @@ from app.schemas.graph_schemas import (
 
 
 def _dt(year: int, month: int = 1, day: int = 1) -> datetime:
-    return datetime(year, month, day, tzinfo=timezone.utc)
+    return datetime(year, month, day, tzinfo=UTC)
 
 
 def _rel_props(**kwargs) -> RelationshipProperties:
