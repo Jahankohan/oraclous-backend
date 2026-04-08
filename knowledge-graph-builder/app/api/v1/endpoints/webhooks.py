@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_database
 from app.core.logging import get_logger
+from app.core.rate_limiter import limiter
 from app.services.connector_service import connector_service
 
 router = APIRouter()
@@ -28,7 +29,9 @@ logger = get_logger(__name__)
     "/webhooks/{graph_id}/{connector_id}",
     summary="Receive an inbound webhook event",
     response_model=Dict[str, Any],
+    responses={429: {"description": "Rate limit exceeded"}},
 )
+@limiter.limit("100/minute")
 async def receive_webhook(
     graph_id: str,
     connector_id: str,
@@ -47,9 +50,13 @@ async def receive_webhook(
     6. Dispatch to Celery for async KG ingestion
     """
     # 1. Load connector — 404 on mismatch (never 403; prevents enumeration)
-    connector = await connector_service.load_connector_by_ids(db, graph_id, connector_id)
+    connector = await connector_service.load_connector_by_ids(
+        db, graph_id, connector_id
+    )
     if connector.connector_type != "webhook_receiver":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found"
+        )
 
     # 2. Read raw body
     raw_body = await request.body()
@@ -61,7 +68,9 @@ async def receive_webhook(
         hmac_cred_id = auth_config.get("hmac_secret_credential_id")
         resolved_secret = await _resolve_credential(hmac_cred_id)
         headers_dict = dict(request.headers)
-        if not connector_service.verify_hmac(raw_body, auth_config, headers_dict, resolved_secret):
+        if not connector_service.verify_hmac(
+            raw_body, auth_config, headers_dict, resolved_secret
+        ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook signature",
@@ -79,7 +88,9 @@ async def receive_webhook(
         return {"status": "duplicate", "accepted": False}
 
     # 5. Store event (status=pending)
-    event_type = request.headers.get("X-GitHub-Event") or request.headers.get("X-Event-Type")
+    event_type = request.headers.get("X-GitHub-Event") or request.headers.get(
+        "X-Event-Type"
+    )
     event_id = await connector_service.store_webhook_event(
         db, connector_id, payload, payload_hash, event_type=event_type
     )
@@ -87,12 +98,15 @@ async def receive_webhook(
     # 6. Dispatch to Celery
     try:
         from app.services.connector_jobs import process_webhook_event
+
         process_webhook_event.delay(event_id, graph_id, connector_id)
     except Exception as e:
         logger.error(f"Failed to dispatch webhook event {event_id} to Celery: {e}")
         # Event is stored; retry worker will pick it up
 
-    logger.info(f"Accepted webhook event {event_id} for connector {connector_id} graph {graph_id}")
+    logger.info(
+        f"Accepted webhook event {event_id} for connector {connector_id} graph {graph_id}"
+    )
     return {"status": "accepted", "event_id": event_id}
 
 
@@ -102,6 +116,7 @@ async def _resolve_credential(credential_id: str | None) -> str | None:
         return None
     try:
         from app.services.credential_service import credential_service
+
         creds = await credential_service.get_user_credentials(
             user_id="system", provider=credential_id
         )
