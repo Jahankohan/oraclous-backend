@@ -23,7 +23,7 @@ from __future__ import annotations
 import io
 import os
 import tempfile
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
