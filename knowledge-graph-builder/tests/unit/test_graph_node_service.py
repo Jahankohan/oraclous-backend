@@ -515,3 +515,53 @@ class TestMigrateRelationshipProperties:
 
 
 from unittest.mock import patch
+
+
+# ---------------------------------------------------------------------------
+# Tests: _TEMPORAL_INDEX_STATEMENTS — ORA-138
+# ---------------------------------------------------------------------------
+
+class TestTemporalIndexStatements:
+    """Verify the _TEMPORAL_INDEX_STATEMENTS class-level list includes all required indexes."""
+
+    @pytest.mark.unit
+    def test_rel_temporal_composite_idx_present(self):
+        """Composite (graph_id, valid_from, valid_to) index must be defined."""
+        stmts = " ".join(GraphNodeService._TEMPORAL_INDEX_STATEMENTS)
+        assert "rel_temporal_idx" in stmts
+
+    @pytest.mark.unit
+    def test_standalone_rel_valid_from_idx_present(self):
+        """ORA-138: standalone rel_valid_from_idx required for traversal queries."""
+        stmts = " ".join(GraphNodeService._TEMPORAL_INDEX_STATEMENTS)
+        assert "rel_valid_from_idx" in stmts
+
+    @pytest.mark.unit
+    def test_standalone_rel_valid_to_idx_present(self):
+        """ORA-138: standalone rel_valid_to_idx required for traversal queries."""
+        stmts = " ".join(GraphNodeService._TEMPORAL_INDEX_STATEMENTS)
+        assert "rel_valid_to_idx" in stmts
+
+    @pytest.mark.unit
+    def test_standalone_indexes_use_if_not_exists(self):
+        """All index statements must be idempotent (IF NOT EXISTS)."""
+        for stmt in GraphNodeService._TEMPORAL_INDEX_STATEMENTS:
+            assert "IF NOT EXISTS" in stmt, (
+                f"Index statement missing IF NOT EXISTS (not idempotent): {stmt!r}"
+            )
+
+    @pytest.mark.unit
+    def test_ensure_temporal_indexes_calls_session_run_for_each_statement(self):
+        """_ensure_temporal_indexes must run every statement in _TEMPORAL_INDEX_STATEMENTS."""
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_session.__enter__ = MagicMock(return_value=mock_session)
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_driver.session.return_value = mock_session
+
+        svc = GraphNodeService(mock_driver)
+        svc._ensure_temporal_indexes()
+
+        assert mock_session.run.call_count == len(GraphNodeService._TEMPORAL_INDEX_STATEMENTS), (
+            "session.run() call count must match number of index statements"
+        )

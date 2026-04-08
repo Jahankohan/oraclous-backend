@@ -689,3 +689,98 @@ class TestStreamSearch:
         event = json.loads(chunks[0].removeprefix("data: ").strip())
         assert event["type"] == "error"
         assert "stream failure" in event["message"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: _multihop_enrich temporal parameter safety — ORA-138
+# ---------------------------------------------------------------------------
+
+class TestMultihopTemporalParams:
+    """
+    ORA-138: _multihop_enrich must pass temporal values as Cypher parameters,
+    not as f-string-interpolated datetime literals.
+    """
+
+    def _build_service(self):
+        return ChatService(graph_id="g-test", user_id="u-test")
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_point_in_time_uses_parameter_not_fstring(self):
+        """$tf_pit must appear as a query parameter, not baked into the Cypher string."""
+        from datetime import datetime, timezone
+        from app.schemas.graph_schemas import TemporalFilter
+        from app.core import neo4j_client as nc
+
+        svc = self._build_service()
+        pit = datetime(2015, 6, 1, tzinfo=timezone.utc)
+        tf = TemporalFilter(point_in_time=pit)
+
+        mock_result = MagicMock()
+        mock_result.records = []
+        mock_driver = AsyncMock()
+        mock_driver.execute_query = AsyncMock(return_value=mock_result)
+
+        with patch.object(nc, "async_driver", mock_driver):
+            await svc._multihop_enrich(["Alice"], temporal_filter=tf)
+
+        assert mock_driver.execute_query.called
+        call_kwargs = mock_driver.execute_query.call_args
+        query = call_kwargs[0][0]
+        params = call_kwargs[0][1] if len(call_kwargs[0]) > 1 else call_kwargs[1]
+
+        # The ISO string must NOT be hard-coded into the query
+        assert pit.isoformat() not in query, (
+            "point_in_time value must be passed as $tf_pit parameter, "
+            "not interpolated into the Cypher string"
+        )
+        # The parameter must be present in the params dict
+        assert "tf_pit" in params, (
+            "$tf_pit must be in the query parameters dict"
+        )
+        assert params["tf_pit"] == pit.isoformat()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_current_only_adds_valid_to_null_clause(self):
+        """current_only filter must add valid_to IS NULL to the Cypher."""
+        from app.schemas.graph_schemas import TemporalFilter
+        from app.core import neo4j_client as nc
+
+        svc = self._build_service()
+        tf = TemporalFilter(current_only=True)
+
+        mock_result = MagicMock()
+        mock_result.records = []
+        mock_driver = AsyncMock()
+        mock_driver.execute_query = AsyncMock(return_value=mock_result)
+
+        with patch.object(nc, "async_driver", mock_driver):
+            await svc._multihop_enrich(["Alice"], temporal_filter=tf)
+
+        assert mock_driver.execute_query.called
+        call_kwargs = mock_driver.execute_query.call_args
+        query = call_kwargs[0][0]
+        assert "r1.valid_to IS NULL" in query
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_no_temporal_filter_uses_default_cypher(self):
+        """Without temporal_filter, the static _MULTIHOP_CYPHER must be used."""
+        from app.services.chat_service import _MULTIHOP_CYPHER
+        from app.core import neo4j_client as nc
+
+        svc = self._build_service()
+
+        mock_result = MagicMock()
+        mock_result.records = []
+        mock_driver = AsyncMock()
+        mock_driver.execute_query = AsyncMock(return_value=mock_result)
+
+        with patch.object(nc, "async_driver", mock_driver):
+            await svc._multihop_enrich(["Alice"], temporal_filter=None)
+
+        assert mock_driver.execute_query.called
+        call_kwargs = mock_driver.execute_query.call_args
+        query = call_kwargs[0][0]
+        assert query == _MULTIHOP_CYPHER

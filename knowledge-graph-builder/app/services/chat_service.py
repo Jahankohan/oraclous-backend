@@ -492,16 +492,19 @@ class ChatService:
             logger.warning("Async driver unavailable — skipping multi-hop enrichment")
             return enriched
 
-        # Build optional temporal WHERE clause for the first-hop relationship
+        # Build optional temporal WHERE clause for the first-hop relationship.
+        # ORA-138: Use Cypher parameters ($tf_pit) instead of f-string datetime
+        # interpolation to avoid injection and enable rel_valid_from/to indexes.
         temporal_clause = ""
+        temporal_params: Dict[str, Any] = {}
         if temporal_filter:
             if temporal_filter.current_only:
                 temporal_clause = "AND r1.valid_to IS NULL"
             elif temporal_filter.point_in_time:
-                pit = temporal_filter.point_in_time.isoformat()
+                temporal_params["tf_pit"] = temporal_filter.point_in_time.isoformat()
                 temporal_clause = (
-                    f"AND (r1.valid_from IS NULL OR r1.valid_from <= datetime('{pit}'))"
-                    f" AND (r1.valid_to IS NULL OR r1.valid_to > datetime('{pit}'))"
+                    "AND (r1.valid_from IS NULL OR r1.valid_from <= datetime($tf_pit))"
+                    " AND (r1.valid_to IS NULL OR r1.valid_to > datetime($tf_pit))"
                 )
 
         cypher = f"""
@@ -526,7 +529,7 @@ LIMIT 20
             try:
                 result = await driver.execute_query(
                     cypher,
-                    {"graph_id": self.graph_id, "entity_name": entity_name},
+                    {"graph_id": self.graph_id, "entity_name": entity_name, **temporal_params},
                 )
                 records = result.records if hasattr(result, "records") else result[0]
                 for rec in records:
