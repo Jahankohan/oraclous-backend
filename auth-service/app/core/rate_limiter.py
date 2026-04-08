@@ -62,10 +62,14 @@ async def enforce_key_prefix_rate_limit(request: Request) -> None:
 
     redis_key = f"rl:pfx:{key_prefix}"
     try:
-        count = await redis_client.incr(redis_key)
-        if count == 1:
-            # First request in this window — set the expiry
-            await redis_client.expire(redis_key, _KEY_PREFIX_WINDOW_SECONDS)
+        # Use a MULTI/EXEC pipeline so INCR and EXPIRE are atomic.
+        # Without this, a crash between INCR and EXPIRE leaves the key with no
+        # TTL — permanently rate-limiting that prefix.
+        async with redis_client.pipeline(transaction=True) as pipe:
+            await pipe.incr(redis_key)
+            await pipe.expire(redis_key, _KEY_PREFIX_WINDOW_SECONDS)
+            results = await pipe.execute()
+        count = results[0]
         if count > _KEY_PREFIX_LIMIT:
             ttl = await redis_client.ttl(redis_key)
             raise HTTPException(

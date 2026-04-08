@@ -158,6 +158,19 @@ def test_forgot_password_limit_5_per_minute():
     assert r.status_code == 429
 
 
+@pytest.mark.unit
+def test_reset_password_limit_5_per_minute():
+    """POST /reset-password/ limit: first 5 succeed, 6th returns 429."""
+    client = _build_test_client("5/minute")
+
+    for _ in range(5):
+        r = client.post("/test")
+        assert r.status_code == 200
+
+    r = client.post("/test")
+    assert r.status_code == 429
+
+
 # ---------------------------------------------------------------------------
 # Per-IP isolation
 # ---------------------------------------------------------------------------
