@@ -9,21 +9,23 @@ Tests cover:
 - _enforce_ontology() STRICT / WARN / COERCE modes
 - Graph without ontology extracts freely (no regression)
 """
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
+
+import pytest
 
 from app.schemas.graph_schemas import (
     EntityTypeDefinition,
     EntityTypeRule,
-    RelationshipTypeDefinition,
-    RelationshipRule,
-    OntologyValidationMode,
     GraphInstructions,
-    OntologySetRequest,
     OntologyPatchRequest,
     OntologyResponse,
+    OntologySetRequest,
+    OntologyValidationMode,
+    RelationshipRule,
+    RelationshipTypeDefinition,
     RetroactiveApplyRequest,
     RetroactiveApplyResponse,
 )
@@ -32,10 +34,10 @@ from app.services.instructions_service import (
     ResolvedInstructions,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_node(node_id: str, label: str, name: str = "test"):
     node = MagicMock()
@@ -64,6 +66,7 @@ def _make_graph(nodes=None, rels=None):
 # 1. Serialization round-trip: EntityTypeDefinition
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_entity_type_definition_round_trip():
     et = EntityTypeDefinition(
@@ -76,12 +79,16 @@ def test_entity_type_definition_round_trip():
     restored = EntityTypeDefinition(**dumped)
     assert restored.name == "Person"
     assert restored.description == "A human being"
-    assert restored.properties == {"age": "numeric age in years", "nationality": "ISO country code"}
+    assert restored.properties == {
+        "age": "numeric age in years",
+        "nationality": "ISO country code",
+    }
 
 
 # ---------------------------------------------------------------------------
 # 2. Serialization round-trip: RelationshipTypeDefinition
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_relationship_type_definition_round_trip():
@@ -101,6 +108,7 @@ def test_relationship_type_definition_round_trip():
 # 3. Backward compat: EntityTypeRule alias
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_entity_type_rule_alias():
     """EntityTypeRule must be the same class as EntityTypeDefinition."""
@@ -112,6 +120,7 @@ def test_entity_type_rule_alias():
 # ---------------------------------------------------------------------------
 # 4. Backward compat: RelationshipRule alias
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_relationship_rule_alias():
@@ -125,30 +134,36 @@ def test_relationship_rule_alias():
 # 5. store_as_edge_property auto-migrates to properties
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_store_as_edge_property_migration():
     """Deprecated store_as_edge_property must auto-migrate to properties."""
-    rt = RelationshipTypeDefinition(**{
-        "name": "HIRED",
-        "store_as_edge_property": ["salary", "start_date"],
-    })
+    rt = RelationshipTypeDefinition(
+        **{
+            "name": "HIRED",
+            "store_as_edge_property": ["salary", "start_date"],
+        }
+    )
     assert rt.properties == ["salary", "start_date"]
 
 
 @pytest.mark.unit
 def test_store_as_edge_property_not_overwrite_properties():
     """When properties is already set, store_as_edge_property must NOT overwrite it."""
-    rt = RelationshipTypeDefinition(**{
-        "name": "HIRED",
-        "properties": ["role"],
-        "store_as_edge_property": ["salary"],
-    })
+    rt = RelationshipTypeDefinition(
+        **{
+            "name": "HIRED",
+            "properties": ["role"],
+            "store_as_edge_property": ["salary"],
+        }
+    )
     assert rt.properties == ["role"]
 
 
 # ---------------------------------------------------------------------------
 # 6. InstructionsCompiler renders properties and description
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_compiler_renders_entity_type_properties():
@@ -192,9 +207,13 @@ def test_compiler_renders_relationship_type_properties():
 # 7. _enforce_ontology() STRICT — removes violations, keeps structural rels
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_enforce_ontology_strict_removes_violating_nodes():
-    from app.services.pipeline_service import MultiTenantGraphRAGPipeline, _EnforcementReport
+    from app.services.pipeline_service import (
+        MultiTenantGraphRAGPipeline,
+        _EnforcementReport,
+    )
 
     pipeline = MultiTenantGraphRAGPipeline.__new__(MultiTenantGraphRAGPipeline)
     pipeline.graph_id = "test-graph"
@@ -226,6 +245,7 @@ def test_enforce_ontology_strict_removes_violating_nodes():
 # 8. _enforce_ontology() WARN — keeps all nodes, returns correct violation count
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_enforce_ontology_warn_keeps_all_nodes():
     from app.services.pipeline_service import MultiTenantGraphRAGPipeline
@@ -252,6 +272,7 @@ def test_enforce_ontology_warn_keeps_all_nodes():
 # 9. _enforce_ontology() COERCE — relabels Human → Person at 0.7 threshold
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_enforce_ontology_coerce_relabels_close_match():
     from app.services.pipeline_service import MultiTenantGraphRAGPipeline
@@ -272,6 +293,7 @@ def test_enforce_ontology_coerce_relabels_close_match():
     # "Human" and "Person" — SequenceMatcher ratio ~0.6 may or may not reach 0.7,
     # so test behavior based on actual ratio rather than asserting the outcome
     import difflib
+
     ratio = difflib.SequenceMatcher(None, "human", "person").ratio()
     if ratio >= 0.7:
         assert report.coercions == 1
@@ -307,6 +329,7 @@ def test_enforce_ontology_coerce_exact_parent_match():
 # 10. Graph without ontology extracts freely (no regression)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_enforce_ontology_no_entity_types_is_noop():
     """When no entity_types configured, _enforce_ontology must be a no-op."""
@@ -331,6 +354,7 @@ def test_enforce_ontology_no_entity_types_is_noop():
 # 11. OntologyValidationMode enum values
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_ontology_validation_mode_values():
     assert OntologyValidationMode.WARN.value == "warn"
@@ -341,6 +365,7 @@ def test_ontology_validation_mode_values():
 # ---------------------------------------------------------------------------
 # 12. GraphInstructions includes ontology_mode with default WARN
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_graph_instructions_ontology_mode_default():
@@ -360,11 +385,15 @@ def test_graph_instructions_ontology_mode_serializes():
 # 13. build_schema_block renders correctly
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_build_schema_block_with_types():
     compiler = InstructionsCompiler()
     resolved = ResolvedInstructions(
-        entity_types=[EntityTypeDefinition(name="Person"), EntityTypeDefinition(name="Company")],
+        entity_types=[
+            EntityTypeDefinition(name="Person"),
+            EntityTypeDefinition(name="Company"),
+        ],
         relationship_types=[RelationshipTypeDefinition(name="WORKS_FOR")],
     )
     block = compiler.build_schema_block(resolved)
@@ -378,3 +407,194 @@ def test_build_schema_block_empty_without_types():
     compiler = InstructionsCompiler()
     resolved = ResolvedInstructions()
     assert compiler.build_schema_block(resolved) == ""
+
+
+# ---------------------------------------------------------------------------
+# 14. retroactive_apply_ontology_task — Cypher uses labels() not e.label
+#
+# ORA-98: Previously the task used `WHERE NOT e.label IN $allowed_types`
+# which always evaluates to NULL (no-op) because entity types are stored as
+# Neo4j node labels, not as a property.  These tests verify the Cypher sent
+# to the driver now uses the labels()-based predicate.
+# ---------------------------------------------------------------------------
+
+import pathlib
+
+
+def _ontology_tasks_source() -> str:
+    """Return the source text of ontology_tasks.py for pattern assertions."""
+    src_path = (
+        pathlib.Path(__file__).parent.parent.parent
+        / "app"
+        / "tasks"
+        / "ontology_tasks.py"
+    )
+    return src_path.read_text()
+
+
+def _import_ontology_tasks_module():
+    """
+    Import app.tasks.ontology_tasks with background_jobs stubbed out.
+
+    app/models/graph.py has a pre-existing bug (ConnectorSyncLog.metadata is a
+    reserved SQLAlchemy attribute name) that prevents the full background_jobs
+    import chain from loading in the unit-test environment.  We stub only the
+    Celery glue so the business logic in ontology_tasks.py can be tested.
+    """
+    import sys
+    import types
+
+    if "app.tasks.ontology_tasks" in sys.modules:
+        return sys.modules["app.tasks.ontology_tasks"]
+
+    if "app.services.background_jobs" not in sys.modules:
+        stub = types.ModuleType("app.services.background_jobs")
+        mock_celery = MagicMock()
+        # Passthrough: @celery_app.task(bind=True) → function unchanged
+        mock_celery.task.side_effect = lambda bind=False, **kw: (lambda fn: fn)
+        stub.celery_app = mock_celery
+        sys.modules["app.services.background_jobs"] = stub
+
+    import app.tasks.ontology_tasks as m  # noqa: E402
+
+    return m
+
+
+def _make_session_mock(single_results=None, data_results=None):
+    """Return (mock_driver, mock_session) with controlled query results."""
+    mock_session = MagicMock()
+    mock_result = MagicMock()
+
+    _singles = list(single_results or [{"deleted": 0, "cnt": 0}])
+    mock_result.single.side_effect = _singles if len(_singles) > 1 else None
+    if len(_singles) == 1:
+        mock_result.single.return_value = _singles[0]
+
+    mock_result.data.return_value = data_results or []
+    mock_session.run.return_value = mock_result
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
+
+    mock_driver = MagicMock()
+    mock_driver.session.return_value = mock_session
+    return mock_driver, mock_session
+
+
+# ---------------------------------------------------------------------------
+# Source-pattern tests (no import chain needed)
+# These are regression guards: they fail immediately if `e.label` creeps back.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_retroactive_task_source_no_e_label_property():
+    """ORA-98 regression: ontology_tasks.py must not reference e.label (the property)."""
+    source = _ontology_tasks_source()
+    assert "e.label" not in source, (
+        "Found 'e.label' in ontology_tasks.py — entity types are Neo4j labels, "
+        "not a .label property.  Use labels(e) instead."
+    )
+
+
+@pytest.mark.unit
+def test_retroactive_task_source_uses_labels_function():
+    """ontology_tasks.py must use the labels(e) Cypher function for type filtering."""
+    source = _ontology_tasks_source()
+    assert (
+        "labels(e)" in source
+    ), "labels(e) not found in ontology_tasks.py — ORA-98 fix may not have been applied."
+
+
+@pytest.mark.unit
+def test_retroactive_task_source_excludes_system_labels():
+    """Cypher must exclude __Entity__ and __KGBuilder__ from the type comparison."""
+    source = _ontology_tasks_source()
+    assert (
+        "__Entity__" in source
+    ), "System label __Entity__ missing from exclusion filter"
+    assert (
+        "__KGBuilder__" in source
+    ), "System label __KGBuilder__ missing from exclusion filter"
+
+
+# ---------------------------------------------------------------------------
+# Execution tests (stubbed import chain)
+# These verify that the correct Cypher is actually sent to the Neo4j driver.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_retroactive_strict_cypher_uses_labels():
+    """Strict mode: Cypher sent to driver must use labels(e), not e.label."""
+    mod = _import_ontology_tasks_module()
+    mock_driver, mock_session = _make_session_mock()
+
+    with patch.object(mod, "GraphDatabase") as mock_gdb:
+        mock_gdb.driver.return_value = mock_driver
+        fn = mod.retroactive_apply_ontology_task
+        fn(MagicMock(), "graph-1", ["Person"], "strict")
+
+    cypher_calls = [str(c.args[0]) for c in mock_session.run.call_args_list]
+    for cypher in cypher_calls:
+        assert "e.label" not in cypher, f"e.label still present in Cypher: {cypher!r}"
+    assert any("labels(e)" in c for c in cypher_calls), "No Cypher used labels(e)"
+
+
+@pytest.mark.unit
+def test_retroactive_coerce_cypher_uses_labels():
+    """Coerce mode: all Cypher — find violators, get their label, count remaining — uses labels(e)."""
+    mod = _import_ontology_tasks_module()
+    mock_driver, mock_session = _make_session_mock(
+        data_results=[{"eid": "4:abc:1", "label": "Company"}],
+    )
+
+    with patch.object(mod, "GraphDatabase") as mock_gdb:
+        mock_gdb.driver.return_value = mock_driver
+        fn = mod.retroactive_apply_ontology_task
+        fn(MagicMock(), "graph-1", ["Person"], "coerce")
+
+    cypher_calls = [str(c.args[0]) for c in mock_session.run.call_args_list]
+    for cypher in cypher_calls:
+        assert "e.label" not in cypher, f"e.label still present in Cypher: {cypher!r}"
+    assert any("labels(e)" in c for c in cypher_calls)
+
+
+@pytest.mark.unit
+def test_retroactive_graph_id_parameterized_not_interpolated():
+    """graph_id must be passed as a query parameter, never interpolated into Cypher."""
+    mod = _import_ontology_tasks_module()
+    mock_driver, mock_session = _make_session_mock()
+
+    with patch.object(mod, "GraphDatabase") as mock_gdb:
+        mock_gdb.driver.return_value = mock_driver
+        fn = mod.retroactive_apply_ontology_task
+        fn(MagicMock(), "tenant-xyz", ["Person"], "strict")
+
+    for call in mock_session.run.call_args_list:
+        cypher = str(call.args[0])
+        params = call.args[1] if len(call.args) > 1 else {}
+        assert (
+            "tenant-xyz" not in cypher
+        ), f"graph_id interpolated into Cypher (injection risk): {cypher!r}"
+        if "$graph_id" in cypher:
+            assert params.get("graph_id") == "tenant-xyz"
+
+
+@pytest.mark.unit
+def test_retroactive_strict_returns_correct_dict_shape():
+    """Strict mode must return the expected result dict keys."""
+    mod = _import_ontology_tasks_module()
+    mock_driver, mock_session = _make_session_mock(
+        single_results=[{"deleted": 3, "cnt": 0}, {"deleted": 0, "cnt": 0}]
+    )
+
+    with patch.object(mod, "GraphDatabase") as mock_gdb:
+        mock_gdb.driver.return_value = mock_driver
+        fn = mod.retroactive_apply_ontology_task
+        result = fn(MagicMock(), "graph-1", ["Person"], "strict")
+
+    assert result["graph_id"] == "graph-1"
+    assert result["mode"] == "strict"
+    assert "deletions_applied" in result
+    assert "coercions_applied" in result
+    assert "remaining_violations" in result
