@@ -52,6 +52,7 @@ if str(_repo_root) not in sys.path:
 # Runtime config helpers
 # ---------------------------------------------------------------------------
 
+
 def _base_url() -> str:
     return os.environ.get("ORACLOUS_BASE_URL", "http://localhost:8003").rstrip("/")
 
@@ -207,32 +208,21 @@ async def delete_graph(graph_id: str) -> dict:
     Returns:
         Confirmation dict with graph_id and deleted (bool).
     """
-    # Verify ownership via the GET endpoint first.
-    check = await _client().get(
+    resp = await _client().delete(
         f"{_base_url()}/api/v1/graphs/{graph_id}",
         headers=_auth_headers(),
     )
-    if check.status_code == 404:
+    if resp.status_code == 404:
         return {"graph_id": graph_id, "deleted": False, "error": "Graph not found."}
-    if check.status_code == 403:
+    if resp.status_code == 403:
         return {"graph_id": graph_id, "deleted": False, "error": "Access denied."}
-    check.raise_for_status()
-
-    user_id = check.json().get("user_id")
-
-    # Use GraphNodeService directly (no REST DELETE endpoint yet).
+    if resp.status_code == 204:
+        return {"graph_id": graph_id, "deleted": True}
     try:
-        from app.core.neo4j_client import neo4j_client as _app_client
-        from app.services.graph_node_service import GraphNodeService
-
-        if _app_client.sync_driver is None:
-            _app_client.connect_sync()
-        svc = GraphNodeService(_app_client.sync_driver)
-        deleted = svc.delete_graph(graph_id=graph_id, user_id=str(user_id))
+        resp.raise_for_status()
     except Exception as exc:
         return {"graph_id": graph_id, "deleted": False, "error": str(exc)}
-
-    return {"graph_id": graph_id, "deleted": deleted}
+    return {"graph_id": graph_id, "deleted": True}
 
 
 @mcp.tool()
@@ -504,12 +494,14 @@ async def search_nodes(
     results = []
     with driver.session() as session:
         for record in session.run(cypher, params):
-            results.append({
-                "entity_id": record["entity_id"],
-                "name": record["name"],
-                "type": record.get("type") or "",
-                "description": record.get("description") or "",
-            })
+            results.append(
+                {
+                    "entity_id": record["entity_id"],
+                    "name": record["name"],
+                    "type": record.get("type") or "",
+                    "description": record.get("description") or "",
+                }
+            )
     return results
 
 
@@ -542,11 +534,7 @@ async def get_node(graph_id: str, entity_name: str) -> dict:
         ).single()
 
     if not record:
-        return {
-            "error": (
-                f"Entity {entity_name!r} not found in graph {graph_id!r}."
-            )
-        }
+        return {"error": (f"Entity {entity_name!r} not found in graph {graph_id!r}.")}
 
     node = dict(record["e"])
     node.pop("embedding", None)  # strip large vector field
@@ -614,34 +602,36 @@ async def get_neighbors(
                 anchor_name = record["anchor"]
             if hops == 1:
                 if record["neighbor"]:
-                    neighbors.append({
-                        "relationship": record["rel_type"],
-                        "name": record["neighbor"],
-                        "type": record.get("neighbor_type") or "",
-                        "hop": 1,
-                    })
+                    neighbors.append(
+                        {
+                            "relationship": record["rel_type"],
+                            "name": record["neighbor"],
+                            "type": record.get("neighbor_type") or "",
+                            "hop": 1,
+                        }
+                    )
             else:
                 if record["hop1_name"]:
-                    neighbors.append({
-                        "relationship": record["rel1"],
-                        "name": record["hop1_name"],
-                        "type": record.get("hop1_type") or "",
-                        "hop": 1,
-                    })
+                    neighbors.append(
+                        {
+                            "relationship": record["rel1"],
+                            "name": record["hop1_name"],
+                            "type": record.get("hop1_type") or "",
+                            "hop": 1,
+                        }
+                    )
                 if record["hop2_name"]:
-                    neighbors.append({
-                        "relationship": record["rel2"],
-                        "name": record["hop2_name"],
-                        "type": record.get("hop2_type") or "",
-                        "hop": 2,
-                    })
+                    neighbors.append(
+                        {
+                            "relationship": record["rel2"],
+                            "name": record["hop2_name"],
+                            "type": record.get("hop2_type") or "",
+                            "hop": 2,
+                        }
+                    )
 
     if anchor_name is None:
-        return {
-            "error": (
-                f"Entity {entity_name!r} not found in graph {graph_id!r}."
-            )
-        }
+        return {"error": (f"Entity {entity_name!r} not found in graph {graph_id!r}.")}
 
     return {
         "entity": anchor_name,

@@ -1,67 +1,73 @@
 # app/api/v1/endpoints/graphs.py - NEO4J-ONLY VERSION
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
-from typing import List, Any
-from uuid import UUID
 from datetime import datetime
+from typing import Any, List
+from uuid import UUID
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Core dependencies
 from app.api.dependencies import get_current_user_id, get_database, verify_graph_access
-from app.models.graph import IngestionJob, KnowledgeGraph, GraphRollbackJob  # Keep for job tracking only
+from app.core.logging import get_logger
+from app.core.neo4j_client import neo4j_client
+from app.models.graph import (  # Keep for job tracking only
+    GraphRollbackJob,
+    IngestionJob,
+    KnowledgeGraph,
+)
 from app.schemas.graph_schemas import (
-    GraphCreate,
-    GraphUpdate,
-    GraphResponse,
-    IngestDataRequest,
-    IngestionJobResponse,
-    GraphInstructions,
-    GraphInstructionsResponse,
-    OntologyResponse,
-    OntologySetRequest,
-    OntologyPatchRequest,
-    OntologyValidationReport,
-    RetroactiveApplyRequest,
-    RetroactiveApplyResponse,
+    AsyncRollbackResponse,
+    CommunityDetailResponse,
     CommunityDetectRequest,
     CommunityDetectResponse,
     CommunityListResponse,
-    CommunityDetailResponse,
     CommunityStatusResponse,
-    UpdateTemporalBoundsRequest,
-    TimelineResponse,
-    TimelineEvent,
-    VersionCreateRequest,
-    VersionResponse,
-    VersionListResponse,
-    VersionDiffResponse,
+    GraphCreate,
+    GraphInstructions,
+    GraphInstructionsResponse,
+    GraphResponse,
+    GraphUpdate,
+    IngestDataRequest,
+    IngestionJobResponse,
+    IngestMode,
+    OntologyPatchRequest,
+    OntologyResponse,
+    OntologySetRequest,
+    OntologyValidationReport,
+    RetroactiveApplyRequest,
+    RetroactiveApplyResponse,
+    RollbackJobResponse,
     RollbackRequest,
     RollbackResponse,
-    AsyncRollbackResponse,
-    RollbackJobResponse,
-    IngestMode,
+    TimelineEvent,
+    TimelineResponse,
+    UpdateTemporalBoundsRequest,
+    VersionCreateRequest,
+    VersionDiffResponse,
+    VersionListResponse,
+    VersionResponse,
 )
+from app.services.background_job_service import background_job_service
 
 # Neo4j Services
 from app.services.graph_node_service import GraphNodeService
-from app.services.background_job_service import background_job_service
-from app.services.snapshot_service import snapshot_service
 from app.services.rollback_service import rollback_service
-from app.core.neo4j_client import neo4j_client
-from app.core.logging import get_logger
+from app.services.snapshot_service import snapshot_service
 
 router = APIRouter()
 logger = get_logger(__name__)
 
 # ==================== HELPER FUNCTIONS ====================
 
+
 def convert_neo4j_datetime_to_python(neo4j_datetime: Any) -> datetime:
     """Convert Neo4j DateTime to Python datetime for Pydantic validation"""
     if isinstance(neo4j_datetime, str):
         # Handle ISO format strings from GraphNodeService
-        return datetime.fromisoformat(neo4j_datetime.replace('Z', '+00:00'))
-    elif hasattr(neo4j_datetime, 'to_native'):
+        return datetime.fromisoformat(neo4j_datetime.replace("Z", "+00:00"))
+    elif hasattr(neo4j_datetime, "to_native"):
         # Handle Neo4j DateTime objects
         return neo4j_datetime.to_native()
     elif isinstance(neo4j_datetime, datetime):
@@ -69,9 +75,11 @@ def convert_neo4j_datetime_to_python(neo4j_datetime: Any) -> datetime:
         return neo4j_datetime
     else:
         # Fallback - try to parse as string
-        return datetime.fromisoformat(str(neo4j_datetime).replace('Z', '+00:00'))
+        return datetime.fromisoformat(str(neo4j_datetime).replace("Z", "+00:00"))
+
 
 # ==================== NEO4J GRAPH CRUD ENDPOINTS ====================
+
 
 @router.post(
     "/graphs",
@@ -83,8 +91,7 @@ def convert_neo4j_datetime_to_python(neo4j_datetime: Any) -> datetime:
     },
 )
 async def create_graph(
-    graph_data: GraphCreate,
-    user_id: str = Depends(get_current_user_id)
+    graph_data: GraphCreate, user_id: str = Depends(get_current_user_id)
 ):
     """
     Create a new knowledge graph in Neo4j.
@@ -93,34 +100,38 @@ async def create_graph(
     container for entities and relationships extracted from your documents.
     After creating a graph, use `POST /graphs/{id}/ingest` to populate it.
     """
-    
+
     try:
         # Use GraphNodeService with Neo4j sync driver for Neo4j operations
         if not neo4j_client.sync_driver:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available"
+                detail="Neo4j connection not available",
             )
-            
+
         graph_service = GraphNodeService(neo4j_client.sync_driver)
-        
+
         # Generate unique graph_id
         from uuid import uuid4
+
         graph_id = str(uuid4())
-        
+
         # Create graph in Neo4j
         graph_result = graph_service.create_graph(
             graph_id=graph_id,
             user_id=user_id,
             name=graph_data.name,
-            description=graph_data.description
+            description=graph_data.description,
         )
-        
-        logger.info(f"Created new Neo4j graph: {graph_result['graph_id']} for user: {user_id}")
+
+        logger.info(
+            f"Created new Neo4j graph: {graph_result['graph_id']} for user: {user_id}"
+        )
 
         # Register in ReBAC system so creator immediately has admin access
-        from app.services.rebac_service import rebac_service
         from app.core.neo4j_client import neo4j_client as _neo4j_client
+        from app.services.rebac_service import rebac_service
+
         if _neo4j_client.async_driver:
             try:
                 await rebac_service.register_new_graph(
@@ -130,7 +141,9 @@ async def create_graph(
                     name=graph_data.name,
                 )
             except Exception as rebac_exc:
-                logger.warning(f"ReBAC graph registration failed (non-fatal): {rebac_exc}")
+                logger.warning(
+                    f"ReBAC graph registration failed (non-fatal): {rebac_exc}"
+                )
 
         # Return response in expected format
         return GraphResponse(
@@ -143,67 +156,69 @@ async def create_graph(
             node_count=graph_result.get("node_count", 0),
             relationship_count=graph_result.get("relationship_count", 0),
             status=graph_result.get("status", "active"),
-            schema_config=graph_data.schema_config or {}
+            schema_config=graph_data.schema_config or {},
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to create graph: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create graph: {str(e)}"
+            detail=f"Failed to create graph: {str(e)}",
         )
+
 
 @router.get(
     "/graphs",
     response_model=List[GraphResponse],
     summary="List knowledge graphs",
 )
-async def list_graphs(
-    user_id: str = Depends(get_current_user_id)
-):
+async def list_graphs(user_id: str = Depends(get_current_user_id)):
     """
     Return all knowledge graphs owned by the authenticated user.
 
     Results are scoped to the current user — graphs owned by other users
     are never returned.
     """
-    
+
     try:
         if not neo4j_client.sync_driver:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available"
+                detail="Neo4j connection not available",
             )
-            
+
         graph_service = GraphNodeService(neo4j_client.sync_driver)
         graphs = graph_service.list_user_graphs(user_id)
-        
+
         # Convert to GraphResponse format
         graph_responses = []
         for graph in graphs:
-            graph_responses.append(GraphResponse(
-                id=UUID(graph["graph_id"]),
-                name=graph["name"],
-                description=graph.get("description", ""),
-                user_id=UUID(user_id),
-                created_at=convert_neo4j_datetime_to_python(graph["created_at"]),
-                updated_at=convert_neo4j_datetime_to_python(graph["updated_at"]),
-                node_count=graph.get("node_count", 0),
-                relationship_count=graph.get("relationship_count", 0),
-                status=graph.get("status", "active"),
-                schema_config={}  # Will be populated from graph metadata later
-            ))
-        
+            graph_responses.append(
+                GraphResponse(
+                    id=UUID(graph["graph_id"]),
+                    name=graph["name"],
+                    description=graph.get("description", ""),
+                    user_id=UUID(user_id),
+                    created_at=convert_neo4j_datetime_to_python(graph["created_at"]),
+                    updated_at=convert_neo4j_datetime_to_python(graph["updated_at"]),
+                    node_count=graph.get("node_count", 0),
+                    relationship_count=graph.get("relationship_count", 0),
+                    status=graph.get("status", "active"),
+                    schema_config={},  # Will be populated from graph metadata later
+                )
+            )
+
         return graph_responses
-        
+
     except Exception as e:
         logger.error(f"Failed to list graphs: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list graphs: {str(e)}"
+            detail=f"Failed to list graphs: {str(e)}",
         )
+
 
 @router.get(
     "/graphs/{graph_id}",
@@ -214,10 +229,7 @@ async def list_graphs(
         404: {"description": "Graph not found"},
     },
 )
-async def get_graph(
-    graph_id: UUID,
-    user_id: str = Depends(get_current_user_id)
-):
+async def get_graph(graph_id: UUID, user_id: str = Depends(get_current_user_id)):
     """
     Return details for a specific knowledge graph.
 
@@ -231,7 +243,7 @@ async def get_graph(
         if not neo4j_client.sync_driver:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available"
+                detail="Neo4j connection not available",
             )
 
         graph_service = GraphNodeService(neo4j_client.sync_driver)
@@ -239,8 +251,7 @@ async def get_graph(
 
         if not graph:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Graph not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
             )
 
         return GraphResponse(
@@ -253,17 +264,18 @@ async def get_graph(
             node_count=graph.get("node_count", 0),
             relationship_count=graph.get("relationship_count", 0),
             status=graph.get("status", "active"),
-            schema_config={}  # Will be populated from graph metadata later
+            schema_config={},  # Will be populated from graph metadata later
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get graph {graph_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get graph: {str(e)}"
+            detail=f"Failed to get graph: {str(e)}",
         )
+
 
 @router.put(
     "/graphs/{graph_id}",
@@ -277,7 +289,7 @@ async def get_graph(
 async def update_graph(
     graph_id: UUID,
     graph_update: GraphUpdate,
-    user_id: str = Depends(get_current_user_id)
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     Update the name or description of a knowledge graph.
@@ -292,7 +304,7 @@ async def update_graph(
         if not neo4j_client.sync_driver:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available"
+                detail="Neo4j connection not available",
             )
 
         graph_service = GraphNodeService(neo4j_client.sync_driver)
@@ -300,8 +312,7 @@ async def update_graph(
         existing_graph = graph_service.get_graph(str(graph_id))
         if not existing_graph:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Graph not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
             )
 
         # Update graph
@@ -317,7 +328,7 @@ async def update_graph(
         if not updated_graph:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update graph"
+                detail="Failed to update graph",
             )
 
         return GraphResponse(
@@ -334,17 +345,65 @@ async def update_graph(
             federatable=updated_graph.get("federatable", False),
             federation_group=updated_graph.get("federation_group"),
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to update graph {graph_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update graph: {str(e)}"
+            detail=f"Failed to update graph: {str(e)}",
         )
 
+
+@router.delete(
+    "/graphs/{graph_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a knowledge graph",
+    responses={
+        403: {"description": "Graph belongs to another user"},
+        404: {"description": "Graph not found"},
+        503: {"description": "Neo4j service unavailable"},
+    },
+)
+async def delete_graph(graph_id: UUID, user_id: str = Depends(get_current_user_id)):
+    """
+    Permanently delete a knowledge graph and all its entities and relationships.
+
+    Only the graph owner can delete — admin-level ReBAC access is required.
+    Returns `403` when access is denied (never `404`, to prevent enumeration).
+    """
+    await verify_graph_access(str(graph_id), "admin", user_id)
+
+    try:
+        if not neo4j_client.sync_driver:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Neo4j connection not available",
+            )
+
+        graph_service = GraphNodeService(neo4j_client.sync_driver)
+        deleted = graph_service.delete_graph(graph_id=str(graph_id), user_id=user_id)
+
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
+            )
+
+        logger.info(f"Deleted graph {graph_id} for user {user_id}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete graph {graph_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete graph",
+        )
+
+
 # ==================== SIMPLIFIED INGESTION ENDPOINT ====================
+
 
 @router.post(
     "/graphs/{graph_id}/ingest",
@@ -362,7 +421,7 @@ async def ingest_data_corrected(
     data: IngestDataRequest,
     background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_database)
+    db: AsyncSession = Depends(get_database),
 ):
     """
     Submit document content for entity and relationship extraction.
@@ -379,7 +438,7 @@ async def ingest_data_corrected(
     **Deprecated:** The top-level `instructions` string field is deprecated.
     Use `overrides.additional_focus` instead.
     """
-    
+
     # ReBAC check — write level required for ingestion
     await verify_graph_access(str(graph_id), "write", user_id)
 
@@ -388,7 +447,7 @@ async def ingest_data_corrected(
         if not neo4j_client.sync_driver:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available"
+                detail="Neo4j connection not available",
             )
 
         graph_service = GraphNodeService(neo4j_client.sync_driver)
@@ -396,8 +455,7 @@ async def ingest_data_corrected(
 
         if not neo4j_graph:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Graph not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
             )
 
     except HTTPException:
@@ -406,17 +464,19 @@ async def ingest_data_corrected(
         logger.error(f"Failed to verify graph {graph_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to verify graph: {str(e)}"
+            detail=f"Failed to verify graph: {str(e)}",
         )
-    
+
     # Capture per-job overrides (including backwards-compat wrapping of deprecated field)
     effective_overrides = data.resolved_overrides()
     effective_instructions_payload: dict = {}
     if effective_overrides is not None:
-        effective_instructions_payload["overrides"] = effective_overrides.model_dump(exclude_none=True)
+        effective_instructions_payload["overrides"] = effective_overrides.model_dump(
+            exclude_none=True
+        )
     if data.temporal_context is not None:
-        effective_instructions_payload["temporal_context"] = data.temporal_context.model_dump(
-            mode="json", exclude_none=True
+        effective_instructions_payload["temporal_context"] = (
+            data.temporal_context.model_dump(mode="json", exclude_none=True)
         )
     # Store ingest mode so the background worker can reconstruct it
     effective_instructions_payload["ingest_mode"] = data.mode.value
@@ -432,41 +492,42 @@ async def ingest_data_corrected(
         ingest_mode=data.mode.value,
         effective_instructions=effective_instructions_payload,
     )
-    
+
     db.add(job)
     await db.commit()
     await db.refresh(job)
-    
+
     # Start background ingestion job using pipeline service
     try:
         job_result = background_job_service.start_ingestion_job(str(job.id), user_id)
-        
+
         if job_result["status"] == "failed":
             logger.error(f"Failed to start background job: {job_result['message']}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to start background ingestion job"
+                detail="Failed to start background ingestion job",
             )
-        
+
         logger.info(f"Started ingestion job {job.id} for graph {graph_id}")
-        
+
         return IngestionJobResponse(
-            id=job.id, # type: ignore
-            graph_id=job.graph_id, # type: ignore
-            status=job.status, # type: ignore
-            progress=job.progress, # type: ignore
-            created_at=job.created_at, # type: ignore
-            source_type=job.source_type, # type: ignore
+            id=job.id,  # type: ignore
+            graph_id=job.graph_id,  # type: ignore
+            status=job.status,  # type: ignore
+            progress=job.progress,  # type: ignore
+            created_at=job.created_at,  # type: ignore
+            source_type=job.source_type,  # type: ignore
             extracted_entities=0,
-            extracted_relationships=0
+            extracted_relationships=0,
         )
-        
+
     except Exception as e:
         logger.error(f"Ingestion job creation failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create ingestion job: {str(e)}"
+            detail=f"Failed to create ingestion job: {str(e)}",
         )
+
 
 @router.post(
     "/graphs/{graph_id}/ingest/incremental",
@@ -498,6 +559,7 @@ async def ingest_incremental(
 
 # ==================== GRAPH INSTRUCTIONS ENDPOINTS ====================
 
+
 @router.put(
     "/graphs/{graph_id}/instructions",
     response_model=GraphInstructionsResponse,
@@ -527,7 +589,10 @@ async def set_graph_instructions(
     await verify_graph_access(str(graph_id), "write", user_id)
 
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     from app.services.instructions_service import instructions_service
 
@@ -557,13 +622,19 @@ async def get_graph_instructions(
     await verify_graph_access(str(graph_id), "read", user_id)
 
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     from app.services.instructions_service import instructions_service
 
     result = await instructions_service.get_instructions(str(graph_id))
     if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No instructions configured for this graph")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No instructions configured for this graph",
+        )
     return result
 
 
@@ -591,7 +662,10 @@ async def delete_graph_instructions(
     await verify_graph_access(str(graph_id), "admin", user_id)
 
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     from app.services.instructions_service import instructions_service
 
@@ -599,6 +673,7 @@ async def delete_graph_instructions(
 
 
 # ==================== MIGRATION ENDPOINT ====================
+
 
 @router.post(
     "/graphs/{graph_id}/migrate-properties",
@@ -627,7 +702,10 @@ async def migrate_graph_properties(
     await verify_graph_access(str(graph_id), "admin", user_id)
 
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     graph_service = GraphNodeService(neo4j_client.sync_driver)
     try:
@@ -635,10 +713,13 @@ async def migrate_graph_properties(
         return result
     except Exception as e:
         logger.error(f"Migration failed for graph {graph_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 # ==================== JOB MANAGEMENT ENDPOINTS ====================
+
 
 @router.get(
     "/graphs/{graph_id}/jobs",
@@ -651,7 +732,7 @@ async def migrate_graph_properties(
 async def list_ingestion_jobs(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_database)
+    db: AsyncSession = Depends(get_database),
 ):
     """
     Return all ingestion jobs for a graph, ordered newest-first.
@@ -669,8 +750,9 @@ async def list_ingestion_jobs(
         .order_by(IngestionJob.created_at.desc())
     )
     jobs = result.scalars().all()
-    
+
     return jobs
+
 
 @router.get(
     "/graphs/{graph_id}/jobs/{job_id}",
@@ -684,7 +766,7 @@ async def get_ingestion_job(
     graph_id: UUID,
     job_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_database)
+    db: AsyncSession = Depends(get_database),
 ):
     """
     Return the current status and statistics for a specific ingestion job.
@@ -699,22 +781,21 @@ async def get_ingestion_job(
     # Get the specific job
     result = await db.execute(
         select(IngestionJob).where(
-            IngestionJob.id == job_id,
-            IngestionJob.graph_id == graph_id
+            IngestionJob.id == job_id, IngestionJob.graph_id == graph_id
         )
     )
     job = result.scalar_one_or_none()
-    
+
     if not job:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Ingestion job not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion job not found"
         )
-    
+
     return job
 
 
 # ==================== ONTOLOGY ENDPOINTS ====================
+
 
 @router.post(
     "/graphs/{graph_id}/ontology",
@@ -739,7 +820,10 @@ async def set_graph_ontology(
     Invalidates the schema cache.
     """
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     from app.services.instructions_service import instructions_service
 
@@ -766,7 +850,10 @@ async def get_graph_ontology(
     Returns `404` if no ontology has been configured. Free-form graphs have no ontology.
     """
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     from app.services.instructions_service import instructions_service
 
@@ -801,7 +888,10 @@ async def patch_graph_ontology(
     Invalidates the schema cache.
     """
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     from app.services.instructions_service import instructions_service
 
@@ -830,7 +920,10 @@ async def delete_graph_ontology(
     Invalidates the schema cache.
     """
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     from app.services.instructions_service import instructions_service
 
@@ -858,7 +951,10 @@ async def validate_graph_ontology(
     the impact before running retroactive-apply.
     """
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     from app.services.instructions_service import instructions_service
 
@@ -885,19 +981,24 @@ async def validate_graph_ontology(
 
     try:
         count_records = await neo4j_client.execute_query(
-            count_query, {"graph_id": str(graph_id), "allowed_types": list(allowed_types)}
+            count_query,
+            {"graph_id": str(graph_id), "allowed_types": list(allowed_types)},
         )
         violation_records = await neo4j_client.execute_query(
-            scan_query, {"graph_id": str(graph_id), "allowed_types": list(allowed_types)}
+            scan_query,
+            {"graph_id": str(graph_id), "allowed_types": list(allowed_types)},
         )
     except Exception as e:
         logger.error(f"Ontology validation scan failed for graph {graph_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
     total = count_records[0]["total"] if count_records else 0
     violations = count_records[0]["violations"] if count_records else 0
 
     import difflib
+
     coercion_candidates = 0
     allowed_list = list(allowed_types)
     violation_samples = []
@@ -905,12 +1006,21 @@ async def validate_graph_ontology(
         label = rec.get("label", "")
         if label:
             best_ratio = max(
-                (difflib.SequenceMatcher(None, label.lower(), a.lower()).ratio() for a in allowed_list),
+                (
+                    difflib.SequenceMatcher(None, label.lower(), a.lower()).ratio()
+                    for a in allowed_list
+                ),
                 default=0.0,
             )
             if best_ratio >= 0.7:
                 coercion_candidates += 1
-        violation_samples.append({"name": rec.get("name"), "label": label, "element_id": rec.get("element_id")})
+        violation_samples.append(
+            {
+                "name": rec.get("name"),
+                "label": label,
+                "element_id": rec.get("element_id"),
+            }
+        )
 
     return OntologyValidationReport(
         graph_id=graph_id,
@@ -944,7 +1054,10 @@ async def retroactive_apply_ontology(
       `celery_task_id`. Poll job status separately.
     """
     if not neo4j_client.sync_driver:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j not available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j not available",
+        )
 
     from app.services.instructions_service import instructions_service
 
@@ -973,7 +1086,8 @@ async def retroactive_apply_ontology(
         RETURN count(CASE WHEN NOT e.label IN $allowed_types THEN 1 END) AS violations
         """
         records = await neo4j_client.execute_query(
-            count_query, {"graph_id": str(graph_id), "allowed_types": list(allowed_types)}
+            count_query,
+            {"graph_id": str(graph_id), "allowed_types": list(allowed_types)},
         )
         violation_count = records[0]["violations"] if records else 0
         return RetroactiveApplyResponse(
@@ -989,6 +1103,7 @@ async def retroactive_apply_ontology(
     if entity_count > 10_000:
         # Dispatch as Celery task
         from app.tasks.ontology_tasks import retroactive_apply_ontology_task
+
         task = retroactive_apply_ontology_task.delay(
             str(graph_id), list(allowed_types), mode.value
         )
@@ -1004,6 +1119,7 @@ async def retroactive_apply_ontology(
 
     # Inline apply (≤10k)
     import difflib
+
     allowed_list = list(allowed_types)
 
     from app.schemas.graph_schemas import OntologyValidationMode as OVM
@@ -1019,7 +1135,8 @@ async def retroactive_apply_ontology(
         RETURN count(e) AS deleted
         """
         del_records = await neo4j_client.execute_query(
-            delete_query, {"graph_id": str(graph_id), "allowed_types": list(allowed_types)}
+            delete_query,
+            {"graph_id": str(graph_id), "allowed_types": list(allowed_types)},
         )
         deletions = del_records[0]["deleted"] if del_records else 0
 
@@ -1030,7 +1147,8 @@ async def retroactive_apply_ontology(
         RETURN elementId(e) AS eid, e.label AS label
         """
         violators = await neo4j_client.execute_query(
-            violators_query, {"graph_id": str(graph_id), "allowed_types": list(allowed_types)}
+            violators_query,
+            {"graph_id": str(graph_id), "allowed_types": list(allowed_types)},
         )
         for rec in violators:
             label = rec.get("label", "")
@@ -1039,9 +1157,13 @@ async def retroactive_apply_ontology(
                 continue
             best_match = max(
                 allowed_list,
-                key=lambda a: difflib.SequenceMatcher(None, label.lower(), a.lower()).ratio(),
+                key=lambda a: difflib.SequenceMatcher(
+                    None, label.lower(), a.lower()
+                ).ratio(),
             )
-            ratio = difflib.SequenceMatcher(None, label.lower(), best_match.lower()).ratio()
+            ratio = difflib.SequenceMatcher(
+                None, label.lower(), best_match.lower()
+            ).ratio()
             if ratio >= 0.7:
                 await neo4j_client.execute_query(
                     "MATCH (e:__Entity__) WHERE elementId(e) = $eid SET e.label = $new_label",
@@ -1062,7 +1184,8 @@ async def retroactive_apply_ontology(
     RETURN count(e) AS cnt
     """
     v_records = await neo4j_client.execute_query(
-        violations_query, {"graph_id": str(graph_id), "allowed_types": list(allowed_types)}
+        violations_query,
+        {"graph_id": str(graph_id), "allowed_types": list(allowed_types)},
     )
     remaining_violations = v_records[0]["cnt"] if v_records else 0
 
@@ -1211,11 +1334,14 @@ async def get_community_detail(
     await _verify_graph_ownership(graph_id, user_id)
     result = await analytics.get_community_detail(graph_id, community_id)
     if not result:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Community not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Community not found"
+        )
     return CommunityDetailResponse(**result)
 
 
 # ==================== TEMPORAL ENDPOINTS ====================
+
 
 @router.get(
     "/graphs/{graph_id}/entities/at",
@@ -1262,7 +1388,9 @@ async def get_entities_at(
         )
     except Exception as e:
         logger.error(f"Point-in-time entity query failed for graph {graph_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
     def _neo4j_dt(v) -> Any:
         if v is None:
@@ -1331,8 +1459,12 @@ async def get_relationships_at(
             query, {"graph_id": str(graph_id), "pit": point_in_time.isoformat()}
         )
     except Exception as e:
-        logger.error(f"Point-in-time relationship query failed for graph {graph_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        logger.error(
+            f"Point-in-time relationship query failed for graph {graph_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
     def _neo4j_dt(v) -> Any:
         if v is None:
@@ -1416,11 +1548,18 @@ async def update_entity_temporal_bounds(
     try:
         records = await neo4j_client.execute_query(query, params)
     except Exception as e:
-        logger.error(f"Temporal bounds update failed for entity {entity_element_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        logger.error(
+            f"Temporal bounds update failed for entity {entity_element_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
     if not records:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found in this graph")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Entity not found in this graph",
+        )
 
     def _neo4j_dt(v) -> Any:
         if v is None:
@@ -1509,7 +1648,9 @@ async def get_graph_timeline(
         rel_records = await neo4j_client.execute_query(rel_query, params)
     except Exception as e:
         logger.error(f"Timeline query failed for graph {graph_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
     def _neo4j_dt(v):
         if v is None:
@@ -1525,32 +1666,38 @@ async def get_graph_timeline(
 
     events: list = []
     for r in entity_records:
-        events.append(TimelineEvent(
-            event_type=r["event_type"],
-            entity_id=r["entity_id"],
-            entity_name=r.get("entity_name"),
-            entity_label=r.get("entity_label"),
-            relationship_type=r.get("relationship_type"),
-            related_entity_name=r.get("related_entity_name"),
-            valid_from=_neo4j_dt(r.get("valid_from")),
-            valid_to=_neo4j_dt(r.get("valid_to")),
-            transaction_time=_neo4j_dt(r.get("transaction_time")),
-        ))
+        events.append(
+            TimelineEvent(
+                event_type=r["event_type"],
+                entity_id=r["entity_id"],
+                entity_name=r.get("entity_name"),
+                entity_label=r.get("entity_label"),
+                relationship_type=r.get("relationship_type"),
+                related_entity_name=r.get("related_entity_name"),
+                valid_from=_neo4j_dt(r.get("valid_from")),
+                valid_to=_neo4j_dt(r.get("valid_to")),
+                transaction_time=_neo4j_dt(r.get("transaction_time")),
+            )
+        )
     for r in rel_records:
-        events.append(TimelineEvent(
-            event_type=r["event_type"],
-            entity_id=r["entity_id"],
-            entity_name=r.get("entity_name"),
-            entity_label=r.get("entity_label"),
-            relationship_type=r.get("relationship_type"),
-            related_entity_name=r.get("related_entity_name"),
-            valid_from=_neo4j_dt(r.get("valid_from")),
-            valid_to=_neo4j_dt(r.get("valid_to")),
-            transaction_time=_neo4j_dt(r.get("transaction_time")),
-        ))
+        events.append(
+            TimelineEvent(
+                event_type=r["event_type"],
+                entity_id=r["entity_id"],
+                entity_name=r.get("entity_name"),
+                entity_label=r.get("entity_label"),
+                relationship_type=r.get("relationship_type"),
+                related_entity_name=r.get("related_entity_name"),
+                valid_from=_neo4j_dt(r.get("valid_from")),
+                valid_to=_neo4j_dt(r.get("valid_to")),
+                transaction_time=_neo4j_dt(r.get("transaction_time")),
+            )
+        )
 
     # Sort all events chronologically
-    events.sort(key=lambda e: (e.valid_from or datetime.min, e.transaction_time or datetime.min))
+    events.sort(
+        key=lambda e: (e.valid_from or datetime.min, e.transaction_time or datetime.min)
+    )
 
     return TimelineResponse(
         graph_id=str(graph_id),
@@ -1562,7 +1709,9 @@ async def get_graph_timeline(
 
 # ==================== VERSIONING / SNAPSHOT ENDPOINTS ====================
 
-_LARGE_GRAPH_ROLLBACK_THRESHOLD = 10_000  # nodes — above this, dispatch async Celery task
+_LARGE_GRAPH_ROLLBACK_THRESHOLD = (
+    10_000  # nodes — above this, dispatch async Celery task
+)
 
 
 @router.post(
@@ -1592,7 +1741,9 @@ async def create_graph_snapshot(
         return VersionResponse(**version)
     except Exception as exc:
         logger.error(f"Snapshot creation failed for graph {graph_id}: {exc}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        )
 
 
 @router.get(
@@ -1627,7 +1778,9 @@ async def get_graph_snapshot(
     await _verify_graph_ownership(graph_id, user_id)
     version = await snapshot_service.get_snapshot(str(graph_id), snapshot_id)
     if not version:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found"
+        )
     return VersionResponse(**version)
 
 
@@ -1645,7 +1798,9 @@ async def delete_graph_snapshot(
     await _verify_graph_ownership(graph_id, user_id)
     deleted = await snapshot_service.delete_snapshot(str(graph_id), snapshot_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found"
+        )
 
 
 @router.get(
@@ -1670,7 +1825,9 @@ async def diff_graph_snapshots(
     """
     await _verify_graph_ownership(graph_id, user_id)
     if limit > 500:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be ≤ 500")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be ≤ 500"
+        )
     try:
         diff = await snapshot_service.diff_snapshots(
             graph_id=str(graph_id),
@@ -1684,7 +1841,9 @@ async def diff_graph_snapshots(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except Exception as exc:
         logger.error(f"Diff failed for graph {graph_id}: {exc}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        )
 
 
 @router.post(
@@ -1718,7 +1877,9 @@ async def rollback_graph_snapshot(
     # Count live entities to decide sync vs async path
     count_q = "MATCH (e:__Entity__ {graph_id: $graph_id}) WHERE e.invalidated_at IS NULL RETURN count(e) AS cnt"
     try:
-        count_result = await neo4j_client.execute_query(count_q, {"graph_id": str(graph_id)})
+        count_result = await neo4j_client.execute_query(
+            count_q, {"graph_id": str(graph_id)}
+        )
         entity_count = int((count_result or [{"cnt": 0}])[0]["cnt"])
     except Exception:
         entity_count = 0
@@ -1726,6 +1887,7 @@ async def rollback_graph_snapshot(
     if entity_count > _LARGE_GRAPH_ROLLBACK_THRESHOLD:
         # Dispatch async Celery task — track via PostgreSQL
         from app.services.background_jobs import async_rollback_graph
+
         job_data = await rollback_service.create_rollback_job(
             db=db,
             graph_id=str(graph_id),
@@ -1742,9 +1904,12 @@ async def rollback_graph_snapshot(
             scope=None,
         )
         # Store Celery task ID
-        from app.models.graph import GraphRollbackJob
-        from sqlalchemy import update as sa_update
         import uuid as _uuid
+
+        from sqlalchemy import update as sa_update
+
+        from app.models.graph import GraphRollbackJob
+
         await db.execute(
             sa_update(GraphRollbackJob)
             .where(GraphRollbackJob.id == _uuid.UUID(job_data["rollback_job_id"]))
@@ -1769,8 +1934,12 @@ async def rollback_graph_snapshot(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except Exception as exc:
-        logger.error(f"Rollback failed for graph {graph_id} snapshot {snapshot_id}: {exc}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        logger.error(
+            f"Rollback failed for graph {graph_id} snapshot {snapshot_id}: {exc}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        )
 
 
 @router.get(
@@ -1788,5 +1957,7 @@ async def get_rollback_job_status(
     await _verify_graph_ownership(graph_id, user_id)
     job = await rollback_service.get_rollback_job(db, str(graph_id), rollback_job_id)
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rollback job not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Rollback job not found"
+        )
     return RollbackJobResponse(**job)
