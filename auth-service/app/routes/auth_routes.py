@@ -79,6 +79,7 @@ async def forgot_password(forget_password_req: auth_schemas.ForgotPasswordReques
     return await auth_service.send_password_reset_email(email=forget_password_req.email)
 
 @router.post("/reset-password/")
+@limiter.limit("5/minute")
 async def reset_password(token: str, reset_password_req: auth_schemas.ResetPasswordRequest, request: Request):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
