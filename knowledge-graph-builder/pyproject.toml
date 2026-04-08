@@ -6,6 +6,7 @@ skip-string-normalization = false
 [tool.isort]
 profile = "black"
 line_length = 88
+known_first_party = ["app"]
 
 [tool.ruff]
 line-length = 88
