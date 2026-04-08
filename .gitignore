@@ -5,6 +5,9 @@ __pycache__
 *.db
 *.sqlite
 .env
+.env.staging
+.env.prod
+.env.local
 .vscode
 *.DS_Store
 .venv

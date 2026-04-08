@@ -1,0 +1,29 @@
+# docker-compose.prod.yml — override for production environment
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Before deploying:
+#   1. Create auth-service/.env.prod from auth-service/.env.example
+#   2. Set ALLOWED_ORIGINS and TRUSTED_PROXY_IPS to real production values
+#   3. All secrets MUST come from a secrets manager (AWS Secrets Manager, Vault, etc.)
+#      Do NOT store plaintext credentials in .env.prod inside the repo.
+#
+# TRUSTED_PROXY_IPS must be the internal IP or CIDR of your production ALB/nginx.
+
+services:
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile.prod
+    env_file:
+      - ./auth-service/.env.prod
+    environment:
+      # ── CORS ────────────────────────────────────────────────
+      # Production origins. Add any additional subdomains as needed.
+      ALLOWED_ORIGINS: '["https://app.oraclous.com","https://studio.oraclous.com"]'
+      # ⚠️  Replace with the real ALB internal IP/CIDR before deploying.
+      TRUSTED_PROXY_IPS: '["REPLACE_WITH_ALB_INTERNAL_IP_OR_CIDR"]'
+    # Remove the volume mount — production runs from the baked image only
+    volumes: []
+    restart: always
