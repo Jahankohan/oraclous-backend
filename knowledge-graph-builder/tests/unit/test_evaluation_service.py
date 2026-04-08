@@ -31,14 +31,18 @@ def _make_grounded_result(
     result.answer = answer
     result.is_grounded = is_grounded
     result.confidence = confidence
-    result.sources = sources or [
-        {
-            "node_id": "n1",
-            "node_labels": ["Person"],
-            "content": "Alice is CEO of Acme.",
-            "relevance_score": 0.95,
-        },
-    ]
+    result.sources = (
+        sources
+        if sources is not None
+        else [
+            {
+                "node_id": "n1",
+                "node_labels": ["Person"],
+                "content": "Alice is CEO of Acme.",
+                "relevance_score": 0.95,
+            },
+        ]
+    )
     result.retriever_result = None
     return result
 
@@ -69,7 +73,7 @@ class _MockEvalCtx:
 
     def __init__(self, grounded_result=None, ragas_df=None, ragas_import_error=False):
         self._grounded_result = grounded_result or _make_grounded_result()
-        self._ragas_df = ragas_df or _make_ragas_dataframe()
+        self._ragas_df = ragas_df if ragas_df is not None else _make_ragas_dataframe()
         self._ragas_import_error = ragas_import_error
 
     def __enter__(self):

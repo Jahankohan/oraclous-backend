@@ -128,7 +128,7 @@ class EvaluationService:
         warnings: list[str] = []
 
         # Resolve which metrics to compute.
-        requested = set(metrics) if metrics else SUPPORTED_METRICS.copy()
+        requested = set(metrics) if metrics else set(SUPPORTED_METRICS)
         unknown = requested - SUPPORTED_METRICS
         if unknown:
             warnings.append(f"Unknown metrics ignored: {sorted(unknown)}")
