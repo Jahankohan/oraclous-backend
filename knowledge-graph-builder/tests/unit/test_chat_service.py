@@ -702,7 +702,7 @@ class TestMultihopTemporalParams:
     """
 
     def _build_service(self):
-        return ChatService(graph_id="g-test", user_id="u-test")
+        return ChatService(graph_id="g-test")
 
     @pytest.mark.unit
     @pytest.mark.asyncio
@@ -710,7 +710,6 @@ class TestMultihopTemporalParams:
         """$tf_pit must appear as a query parameter, not baked into the Cypher string."""
         from datetime import datetime, timezone
         from app.schemas.graph_schemas import TemporalFilter
-        from app.core import neo4j_client as nc
 
         svc = self._build_service()
         pit = datetime(2015, 6, 1, tzinfo=timezone.utc)
@@ -720,8 +719,10 @@ class TestMultihopTemporalParams:
         mock_result.records = []
         mock_driver = AsyncMock()
         mock_driver.execute_query = AsyncMock(return_value=mock_result)
+        mock_client = MagicMock()
+        mock_client.async_driver = mock_driver
 
-        with patch.object(nc, "async_driver", mock_driver):
+        with patch("app.services.chat_service.neo4j_client", mock_client):
             await svc._multihop_enrich(["Alice"], temporal_filter=tf)
 
         assert mock_driver.execute_query.called
@@ -745,7 +746,6 @@ class TestMultihopTemporalParams:
     async def test_current_only_adds_valid_to_null_clause(self):
         """current_only filter must add valid_to IS NULL to the Cypher."""
         from app.schemas.graph_schemas import TemporalFilter
-        from app.core import neo4j_client as nc
 
         svc = self._build_service()
         tf = TemporalFilter(current_only=True)
@@ -754,8 +754,10 @@ class TestMultihopTemporalParams:
         mock_result.records = []
         mock_driver = AsyncMock()
         mock_driver.execute_query = AsyncMock(return_value=mock_result)
+        mock_client = MagicMock()
+        mock_client.async_driver = mock_driver
 
-        with patch.object(nc, "async_driver", mock_driver):
+        with patch("app.services.chat_service.neo4j_client", mock_client):
             await svc._multihop_enrich(["Alice"], temporal_filter=tf)
 
         assert mock_driver.execute_query.called
@@ -768,7 +770,6 @@ class TestMultihopTemporalParams:
     async def test_no_temporal_filter_uses_default_cypher(self):
         """Without temporal_filter, the static _MULTIHOP_CYPHER must be used."""
         from app.services.chat_service import _MULTIHOP_CYPHER
-        from app.core import neo4j_client as nc
 
         svc = self._build_service()
 
@@ -776,8 +777,10 @@ class TestMultihopTemporalParams:
         mock_result.records = []
         mock_driver = AsyncMock()
         mock_driver.execute_query = AsyncMock(return_value=mock_result)
+        mock_client = MagicMock()
+        mock_client.async_driver = mock_driver
 
-        with patch.object(nc, "async_driver", mock_driver):
+        with patch("app.services.chat_service.neo4j_client", mock_client):
             await svc._multihop_enrich(["Alice"], temporal_filter=None)
 
         assert mock_driver.execute_query.called
