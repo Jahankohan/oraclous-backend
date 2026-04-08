@@ -8,8 +8,6 @@ knowledge graph via the chat API. These tests verify that /chat and
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.main import app
-
 OWNER_USER_ID = "owner-user-abc"
 OTHER_USER_ID = "intruder-user-xyz"
 

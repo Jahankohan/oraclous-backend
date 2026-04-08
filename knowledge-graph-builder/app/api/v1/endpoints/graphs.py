@@ -5,6 +5,7 @@ from typing import Any, List
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.responses import Response
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -604,6 +605,7 @@ async def get_graph_instructions(
 @router.delete(
     "/graphs/{graph_id}/instructions",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete graph extraction instructions",
     responses={
         403: {"description": "Graph belongs to another user"},
@@ -865,6 +867,7 @@ async def patch_graph_ontology(
 @router.delete(
     "/graphs/{graph_id}/ontology",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete graph ontology",
     responses={
         403: {"description": "Graph belongs to another user"},
@@ -1750,6 +1753,7 @@ async def get_graph_snapshot(
 @router.delete(
     "/graphs/{graph_id}/snapshots/{snapshot_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a snapshot",
 )
 async def delete_graph_snapshot(
