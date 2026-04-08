@@ -289,22 +289,23 @@ class TestCompileTemporalFilterLogic:
 
 
 # ---------------------------------------------------------------------------
-# Suite 4: Index strategy review — composite vs separate (ORA-138 deviation)
+# Suite 4: Index strategy review — composite + standalone (ORA-138 final design)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
 class TestIndexStrategyReview:
     """
-    The ORA-138 bug report proposed two separate indexes:
-      - rel_valid_from_idx  FOR ()-[r]-() ON (r.valid_from)
-      - rel_valid_to_idx    FOR ()-[r]-() ON (r.valid_to)
-
-    The actual fix uses one composite index:
+    The ORA-138 fix implements three indexes:
       - rel_temporal_idx    FOR ()-[r]-() ON (r.graph_id, r.valid_from, r.valid_to)
+        → composite index for multi-tenant temporal range queries
+      - rel_valid_from_idx  FOR ()-[r]-() ON (r.valid_from)
+        → standalone index needed for multihop traversal (Neo4j can't use
+          composite index for single-property traversal steps)
+      - rel_valid_to_idx    FOR ()-[r]-() ON (r.valid_to)
+        → same rationale as rel_valid_from_idx
 
-    These tests verify the composite approach is correct and the original
-    separate index names are NOT in the codebase (confirming the composite
-    was the intentional implementation choice).
+    These tests verify all three indexes are present and the composite
+    index retains the graph_id lead key for multi-tenant query isolation.
     """
 
     def test_composite_approach_is_graph_id_scoped(self):
@@ -316,18 +317,25 @@ class TestIndexStrategyReview:
                 return
         pytest.fail("rel_temporal_idx not found")
 
-    def test_separate_indexes_not_used(self):
+    def test_standalone_valid_from_index_present(self):
         """
-        The two separate indexes proposed in the bug report (rel_valid_from_idx,
-        rel_valid_to_idx) should NOT be present — the composite was chosen instead.
-        This confirms the implementation is intentional.
+        rel_valid_from_idx must exist alongside the composite index.
+        Neo4j cannot use the composite rel_temporal_idx for single-property
+        multihop traversal steps — a dedicated index is required.
         """
         src = _read("services/snapshot_service.py")
-        assert "rel_valid_from_idx" not in src, (
-            "rel_valid_from_idx found — unexpected, composite rel_temporal_idx "
-            "should be the only temporal relationship index"
+        assert "rel_valid_from_idx" in src, (
+            "rel_valid_from_idx missing — multihop temporal traversal will "
+            "fall back to full relationship scans without this index"
         )
-        assert "rel_valid_to_idx" not in src, (
-            "rel_valid_to_idx found — unexpected, composite rel_temporal_idx "
-            "should be the only temporal relationship index"
+
+    def test_standalone_valid_to_index_present(self):
+        """
+        rel_valid_to_idx must exist alongside the composite index.
+        Same rationale as rel_valid_from_idx — required for multihop traversal.
+        """
+        src = _read("services/snapshot_service.py")
+        assert "rel_valid_to_idx" in src, (
+            "rel_valid_to_idx missing — multihop temporal traversal will "
+            "fall back to full relationship scans without this index"
         )
