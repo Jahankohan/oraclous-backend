@@ -20,6 +20,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 router = APIRouter()
 
 @router.post("/register/", response_model=auth_schemas.Token)
+@limiter.limit("5/minute")
 async def register_user(user: auth_schemas.UserCreateWithEmail, request: Request):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
@@ -28,6 +29,7 @@ async def register_user(user: auth_schemas.UserCreateWithEmail, request: Request
     return token_schema
 
 @router.post("/login/", response_model=auth_schemas.Token)
+@limiter.limit("10/minute")
 async def login_user(form_data: auth_schemas.UserLogin, request: Request):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
@@ -35,9 +37,10 @@ async def login_user(form_data: auth_schemas.UserLogin, request: Request):
     if not token_schema:
         raise HTTPException(status_code=400, detail="Incorrect email/username or password")
     return token_schema
-    
+
 
 @router.post("/refresh/", response_model=auth_schemas.Token)
+@limiter.limit("20/minute")
 async def refresh_token(refresh_token: auth_schemas.RefreshTokenRequest, request: Request):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
@@ -68,6 +71,7 @@ async def resend_email_verification(request: Request, token: str = Depends(oauth
 
 
 @router.post("/forgot-password/")
+@limiter.limit("5/minute")
 async def forgot_password(forget_password_req: auth_schemas.ForgotPasswordRequest, request: Request):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
