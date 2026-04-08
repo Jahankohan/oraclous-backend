@@ -1,19 +1,29 @@
 """
 Chat API endpoints using Neo4j GraphRAG with Enhanced Retriever Support
 """
+
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Depends
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.api.dependencies import security, verify_graph_access
+from app.core.logging import get_logger
+from app.core.rate_limiter import limiter
+from app.schemas.chat_schemas import (
+    ChatMode,
+    ChatModesResponse,
+    ChatRequest,
+    ChatResponse,
+    ErrorResponse,
+    RetrievalContext,
+    SourceInfo,
+    get_all_modes,
+    get_mode_mapping,
+)
 from app.services.auth_service import auth_service
 from app.services.chat_service import ChatService
-from app.core.logging import get_logger
-from app.schemas.chat_schemas import (
-    ChatRequest, ChatResponse, ChatModesResponse, ErrorResponse,
-    get_mode_mapping, get_all_modes, ChatMode, SourceInfo, RetrievalContext
-)
 from app.services.retriever_factory import RetrieverType
 
 logger = get_logger(__name__)
@@ -28,11 +38,14 @@ router = APIRouter()
     responses={
         403: {"description": "Graph not found or access denied"},
         422: {"description": "Request body validation failed"},
+        429: {"description": "Rate limit exceeded"},
         500: {"description": "LLM or retriever error"},
     },
 )
+@limiter.limit("30/minute")
 async def chat_with_graph(
-    request: ChatRequest,
+    request: Request,
+    body: ChatRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> ChatResponse:
     """
@@ -56,48 +69,56 @@ async def chat_with_graph(
     user_id = str(user["id"])
 
     # ReBAC access check — read level required for chat
-    await verify_graph_access(request.graph_id, "read", user_id)
+    await verify_graph_access(body.graph_id, "read", user_id)
 
     try:
-        logger.info(f"Processing chat request for graph {request.graph_id}")
+        logger.info(f"Processing chat request for graph {body.graph_id}")
 
         # Determine retriever type from mode or explicit type.
-        retriever_type = request.retriever_type
+        retriever_type = body.retriever_type
         if not retriever_type:
             mode_mapping = get_mode_mapping()
             retriever_type = mode_mapping.get(
-                request.mode or ChatMode.ENHANCED, RetrieverType.VECTOR_CYPHER
+                body.mode or ChatMode.ENHANCED, RetrieverType.VECTOR_CYPHER
             )
 
         chat_service = ChatService(
-            graph_id=request.graph_id,
+            graph_id=body.graph_id,
             retriever_type=retriever_type,
-            retriever_config=request.retriever_config.model_dump() if request.retriever_config else None
+            retriever_config=(
+                body.retriever_config.model_dump() if body.retriever_config else None
+            ),
         )
         await chat_service.initialize()
 
         result = await chat_service.search(
-            query_text=request.query,
-            retriever_config=request.retriever_config.model_dump() if request.retriever_config else {"top_k": 5},
-            return_context=request.return_context,
-            examples=request.examples,
-            temporal_filter=request.temporal_filter,
+            query_text=body.query,
+            retriever_config=(
+                body.retriever_config.model_dump()
+                if body.retriever_config
+                else {"top_k": 5}
+            ),
+            return_context=body.return_context,
+            examples=body.examples,
+            temporal_filter=body.temporal_filter,
         )
 
         # Map GroundedSearchResult sources → SourceInfo schema objects.
         sources: List[SourceInfo] = []
-        if request.include_sources:
+        if body.include_sources:
             for src in result.sources:
-                sources.append(SourceInfo(
-                    node_id=src.get("node_id"),
-                    node_labels=src.get("node_labels"),
-                    relevance_score=src.get("relevance_score"),
-                    content=src.get("content"),
-                    properties=src.get("properties"),
-                ))
+                sources.append(
+                    SourceInfo(
+                        node_id=src.get("node_id"),
+                        node_labels=src.get("node_labels"),
+                        relevance_score=src.get("relevance_score"),
+                        content=src.get("content"),
+                        properties=src.get("properties"),
+                    )
+                )
 
         context = None
-        if request.return_context and result.retriever_result:
+        if body.return_context and result.retriever_result:
             context = RetrievalContext(
                 retriever_type=retriever_type.value,
                 sources=sources,
@@ -106,29 +127,26 @@ async def chat_with_graph(
 
         return ChatResponse(
             answer=result.answer,
-            query=request.query,
-            graph_id=request.graph_id,
+            query=body.query,
+            graph_id=body.graph_id,
             success=True,
-            mode=request.mode.value if request.mode else "enhanced",
+            mode=body.mode.value if body.mode else "enhanced",
             retriever_type=result.retriever_used,
             is_grounded=result.is_grounded,
             confidence=result.confidence,
             context=context,
-            sources=sources if request.include_sources else None,
-            conversation_id=request.conversation_id,
+            sources=sources if body.include_sources else None,
+            conversation_id=body.conversation_id,
             metadata={
                 "model": "gpt-4o",
-                "include_cypher": request.include_cypher,
-                "return_context": request.return_context,
-            }
+                "include_cypher": body.include_cypher,
+                "return_context": body.return_context,
+            },
         )
 
     except Exception as e:
-        logger.error(f"Chat error for graph {request.graph_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Chat processing failed: {str(e)}"
-        )
+        logger.error(f"Chat error for graph {body.graph_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Chat processing failed: {str(e)}")
 
 
 @router.post(
@@ -138,10 +156,13 @@ async def chat_with_graph(
     responses={
         200: {"content": {"text/event-stream": {}}, "description": "SSE stream"},
         403: {"description": "Graph not found or access denied"},
+        429: {"description": "Rate limit exceeded"},
     },
 )
+@limiter.limit("30/minute")
 async def stream_chat_with_graph(
-    request: ChatRequest,
+    request: Request,
+    body: ChatRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> StreamingResponse:
     """
@@ -172,32 +193,39 @@ async def stream_chat_with_graph(
     user_id = str(user["id"])
 
     # ReBAC access check — read level required for streaming chat
-    await verify_graph_access(request.graph_id, "read", user_id)
+    await verify_graph_access(body.graph_id, "read", user_id)
 
-    retriever_type = request.retriever_type
+    retriever_type = body.retriever_type
     if not retriever_type:
         mode_mapping = get_mode_mapping()
         retriever_type = mode_mapping.get(
-            request.mode or ChatMode.ENHANCED, RetrieverType.VECTOR_CYPHER
+            body.mode or ChatMode.ENHANCED, RetrieverType.VECTOR_CYPHER
         )
 
     chat_service = ChatService(
-        graph_id=request.graph_id,
+        graph_id=body.graph_id,
         retriever_type=retriever_type,
-        retriever_config=request.retriever_config.model_dump() if request.retriever_config else None,
+        retriever_config=(
+            body.retriever_config.model_dump() if body.retriever_config else None
+        ),
     )
 
     async def event_generator():
         try:
             await chat_service.initialize()
             async for chunk in chat_service.stream_search(
-                query_text=request.query,
-                retriever_config=request.retriever_config.model_dump() if request.retriever_config else {"top_k": 5},
+                query_text=body.query,
+                retriever_config=(
+                    body.retriever_config.model_dump()
+                    if body.retriever_config
+                    else {"top_k": 5}
+                ),
             ):
                 yield chunk
         except Exception as e:
             import json
-            logger.error(f"Stream chat error for graph {request.graph_id}: {e}")
+
+            logger.error(f"Stream chat error for graph {body.graph_id}: {e}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
@@ -229,6 +257,6 @@ async def get_chat_modes(
         graph_capabilities={
             "has_fulltext_indexes": True,  # This should be checked per graph
             "has_vector_indexes": True,
-            "supports_cypher": True
-        }
+            "supports_cypher": True,
+        },
     )
