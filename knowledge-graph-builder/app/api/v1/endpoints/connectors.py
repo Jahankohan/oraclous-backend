@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id, get_database, verify_graph_access
@@ -122,6 +123,7 @@ async def update_connector(
 @router.delete(
     "/graphs/{graph_id}/connectors/{connector_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a connector",
 )
 async def delete_connector(
@@ -129,7 +131,7 @@ async def delete_connector(
     connector_id: str,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
-) -> None:
+):
     await verify_graph_access(graph_id=graph_id, required_level="write", user_id=user_id)
     await connector_service.delete_connector(db, graph_id, user_id, connector_id)
 

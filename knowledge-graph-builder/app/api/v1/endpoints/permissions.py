@@ -14,6 +14,7 @@ Architecture rules enforced:
     #8  — validate at the boundary only (request models handle this)
 """
 from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi.responses import Response
 
 from app.api.dependencies import get_current_user_id, verify_graph_access
 from app.core.neo4j_client import neo4j_client
@@ -114,6 +115,7 @@ async def grant_member_role(
 @router.delete(
     "/graphs/{graphId}/members/{targetUserId}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Revoke a user's role",
     description="Soft-revoke a user's role on this graph. Requires admin access.",
 )
