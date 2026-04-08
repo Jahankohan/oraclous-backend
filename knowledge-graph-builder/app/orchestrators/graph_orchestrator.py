@@ -5,9 +5,9 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from app.components.drift_search import DRIFTRetriever
 from neo4j_graphrag.generation import GraphRAG
 
+from app.components.drift_search import DRIFTRetriever
 from app.core.dependencies import create_multi_tenant_retriever, get_llm
 from app.services.analytics_service import analytics_service
 from app.services.chat_service import ChatService

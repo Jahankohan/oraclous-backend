@@ -22,6 +22,9 @@ ignore = [
     "E402",   # Module-level imports not at top — intentional lazy imports to avoid circular deps
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
 [tool.mypy]
 python_version = "3.12"
 disallow_untyped_defs = true
