@@ -587,3 +587,58 @@ class TestLifespan:
         # Should complete without error
         async with mcp_module._lifespan(mcp_module.mcp):
             pass
+
+
+# ---------------------------------------------------------------------------
+# Entry point — main()
+# ---------------------------------------------------------------------------
+
+
+class TestMain:
+    def test_sse_transport_sets_settings_and_runs(self, monkeypatch):
+        """SSE path must configure mcp.settings.host/port before calling mcp.run()."""
+        monkeypatch.setenv("MCP_TRANSPORT", "sse")
+        monkeypatch.setenv("MCP_HOST", "127.0.0.1")
+        monkeypatch.setenv("MCP_PORT", "9001")
+
+        mock_run = MagicMock()
+        with patch.object(mcp_module.mcp, "run", mock_run):
+            mcp_module.main()
+
+        mock_run.assert_called_once_with(transport="sse")
+        assert mcp_module.mcp.settings.host == "127.0.0.1"
+        assert mcp_module.mcp.settings.port == 9001
+
+    def test_sse_transport_uses_defaults(self, monkeypatch):
+        """SSE path must default to 0.0.0.0:8004 when env vars are absent."""
+        monkeypatch.setenv("MCP_TRANSPORT", "sse")
+        monkeypatch.delenv("MCP_HOST", raising=False)
+        monkeypatch.delenv("MCP_PORT", raising=False)
+
+        mock_run = MagicMock()
+        with patch.object(mcp_module.mcp, "run", mock_run):
+            mcp_module.main()
+
+        mock_run.assert_called_once_with(transport="sse")
+        assert mcp_module.mcp.settings.host == "0.0.0.0"
+        assert mcp_module.mcp.settings.port == 8004
+
+    def test_stdio_transport_does_not_set_host_port(self, monkeypatch):
+        """stdio path must call mcp.run(transport='stdio') and not touch settings."""
+        monkeypatch.setenv("MCP_TRANSPORT", "stdio")
+
+        mock_run = MagicMock()
+        with patch.object(mcp_module.mcp, "run", mock_run):
+            mcp_module.main()
+
+        mock_run.assert_called_once_with(transport="stdio")
+
+    def test_default_transport_is_stdio(self, monkeypatch):
+        """When MCP_TRANSPORT is unset the server must default to stdio."""
+        monkeypatch.delenv("MCP_TRANSPORT", raising=False)
+
+        mock_run = MagicMock()
+        with patch.object(mcp_module.mcp, "run", mock_run):
+            mcp_module.main()
+
+        mock_run.assert_called_once_with(transport="stdio")
