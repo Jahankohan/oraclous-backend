@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI):
         # Initialize databases
         await create_tables()
         await neo4j_client.connect()
+        neo4j_client.connect_sync()
 
         # Initialize ReBAC schema (Phase A + Phase B) + sync existing data
         from app.core.database import async_session_maker
