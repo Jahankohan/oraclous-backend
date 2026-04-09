@@ -15,34 +15,34 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-def _ensure_stub(name):
-    """Insert a stub module if not already present."""
-    if name not in sys.modules:
-        mod = types.ModuleType(name)
-        sys.modules[name] = mod
-    return sys.modules[name]
-
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_lifespan_calls_connect_sync(monkeypatch):
     """connect_sync() must be called during lifespan startup (ORA-218 regression)."""
-    # Stub modules that are unavailable in unit-test context
+    # Stub modules that are unavailable in unit-test context.
+    # Use monkeypatch.setitem so sys.modules is restored after test teardown,
+    # preventing these stubs from polluting other tests (e.g. test_rate_limiting).
     for mod_name in ["app.api.v1.router", "app.core.rate_limiter"]:
-        stub = _ensure_stub(mod_name)
+        stub = types.ModuleType(mod_name)
         if mod_name == "app.api.v1.router":
             stub.api_router = MagicMock()
         elif mod_name == "app.core.rate_limiter":
             stub.limiter = MagicMock()
+        monkeypatch.setitem(sys.modules, mod_name, stub)
 
-    slowapi_stub = _ensure_stub("slowapi")
-    if not hasattr(slowapi_stub, "RateLimitExceeded"):
+    # Stub slowapi only when not already installed.
+    if "slowapi" not in sys.modules:
+        slowapi_stub = types.ModuleType("slowapi")
         slowapi_stub.RateLimitExceeded = type("RateLimitExceeded", (Exception,), {})
-    if not hasattr(slowapi_stub, "_rate_limit_exceeded_handler"):
         slowapi_stub._rate_limit_exceeded_handler = MagicMock()
-    slowapi_errors = _ensure_stub("slowapi.errors")
-    if not hasattr(slowapi_errors, "RateLimitExceeded"):
-        slowapi_errors.RateLimitExceeded = slowapi_stub.RateLimitExceeded
+        monkeypatch.setitem(sys.modules, "slowapi", slowapi_stub)
+    if "slowapi.errors" not in sys.modules:
+        slowapi_errors_stub = types.ModuleType("slowapi.errors")
+        slowapi_errors_stub.RateLimitExceeded = sys.modules["slowapi"].RateLimitExceeded
+        monkeypatch.setitem(sys.modules, "slowapi.errors", slowapi_errors_stub)
+
+    # Ensure app.main is re-imported fresh (cleared via monkeypatch for auto-restore).
+    monkeypatch.delitem(sys.modules, "app.main", raising=False)
 
     # Build mock neo4j_client
     mock_client = MagicMock()
@@ -68,9 +68,6 @@ async def test_lifespan_calls_connect_sync(monkeypatch):
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
 
-    # Force re-import of app.main so our patches take effect
-    sys.modules.pop("app.main", None)
-
     with (
         patch("app.core.neo4j_client.neo4j_client", mock_client),
         patch("app.core.database.create_tables", new_callable=AsyncMock),
@@ -88,12 +85,8 @@ async def test_lifespan_calls_connect_sync(monkeypatch):
         app_obj = main_module.app
 
         with (
-            patch(
-                "app.services.rebac_service.rebac_service", mock_rebac, create=True
-            ),
-            patch(
-                "app.core.database.async_session_maker", return_value=mock_session
-            ),
+            patch("app.services.rebac_service.rebac_service", mock_rebac, create=True),
+            patch("app.core.database.async_session_maker", return_value=mock_session),
             patch(
                 "app.services.snapshot_service.snapshot_service",
                 mock_snapshot,
@@ -140,12 +133,12 @@ def test_main_py_calls_connect_sync_after_connect():
     call_names = [name for _, name in calls]
 
     assert "connect" in call_names, "lifespan must call neo4j_client.connect()"
-    assert "connect_sync" in call_names, (
-        "lifespan must call neo4j_client.connect_sync() — ORA-218 regression guard"
-    )
+    assert (
+        "connect_sync" in call_names
+    ), "lifespan must call neo4j_client.connect_sync() — ORA-218 regression guard"
 
     connect_idx = call_names.index("connect")
     connect_sync_idx = call_names.index("connect_sync")
-    assert connect_idx < connect_sync_idx, (
-        "connect_sync() must be called after connect()"
-    )
+    assert (
+        connect_idx < connect_sync_idx
+    ), "connect_sync() must be called after connect()"
