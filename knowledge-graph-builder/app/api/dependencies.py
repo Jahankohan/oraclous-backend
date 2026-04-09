@@ -96,3 +96,17 @@ async def verify_graph_access(
             status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
         )
     return graph_id
+
+
+async def verify_graph_write_access(
+    graph_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> str:
+    """
+    FastAPI-injectable dependency for write-level graph access checks.
+
+    Use with Depends() in endpoint signatures so that dependency_overrides
+    works correctly in tests.  graph_id is resolved from the route path
+    parameter of the same name; user_id comes from the auth dependency.
+    """
+    return await verify_graph_access(graph_id, "write", user_id)

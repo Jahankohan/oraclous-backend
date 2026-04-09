@@ -19,7 +19,11 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id, get_database, verify_graph_access
+from app.api.dependencies import (
+    get_current_user_id,
+    get_database,
+    verify_graph_write_access,
+)
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.models.graph import IngestionJob
@@ -98,6 +102,7 @@ async def ingest_document(
         PDFExtractor.AUTO, description="PDF extraction backend"
     ),
     user_id: str = Depends(get_current_user_id),
+    _access: str = Depends(verify_graph_write_access),
     db: AsyncSession = Depends(get_database),
 ):
     """
@@ -106,7 +111,6 @@ async def ingest_document(
     The file is saved to a local temp directory, then processed asynchronously
     by a Celery worker.  Poll `GET /graphs/{id}/jobs/{job_id}` for status.
     """
-    await verify_graph_access(str(graph_id), "write", user_id)
     await _verify_graph(graph_id)
 
     # ── Read and validate ─────────────────────────────────────────────────────
@@ -139,7 +143,14 @@ async def ingest_document(
 
     # ── Persist job record ────────────────────────────────────────────────────
     job_id = uuid4()
-    file_path = _save_upload(str(graph_id), str(job_id), file, data)
+    try:
+        file_path = _save_upload(str(graph_id), str(job_id), file, data)
+    except OSError as exc:
+        logger.error(f"Failed to save upload for graph {graph_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save uploaded file — check MULTIMODAL_UPLOAD_DIR configuration",
+        )
 
     # Encode context in effective_instructions so the worker can read it
     effective_instructions = (
@@ -204,6 +215,7 @@ async def ingest_image(
     context: str = Form("", description="Domain hint, e.g. 'AWS architecture diagram'"),
     vision_model: VisionModel = Form(VisionModel.CLAUDE, description="Vision model"),
     user_id: str = Depends(get_current_user_id),
+    _access: str = Depends(verify_graph_write_access),
     db: AsyncSession = Depends(get_database),
 ):
     """
@@ -212,7 +224,6 @@ async def ingest_image(
     Claude 3.5 Sonnet is used by default.  Supply `vision_model=gpt4o` to use
     GPT-4o instead.  The job runs asynchronously; poll `GET /graphs/{id}/jobs/{job_id}`.
     """
-    await verify_graph_access(str(graph_id), "write", user_id)
     await _verify_graph(graph_id)
 
     data = await file.read()
@@ -241,7 +252,14 @@ async def ingest_image(
         )
 
     job_id = uuid4()
-    file_path = _save_upload(str(graph_id), str(job_id), file, data)
+    try:
+        file_path = _save_upload(str(graph_id), str(job_id), file, data)
+    except OSError as exc:
+        logger.error(f"Failed to save image upload for graph {graph_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save uploaded file — check MULTIMODAL_UPLOAD_DIR configuration",
+        )
 
     effective_instructions = {
         "context": context,
