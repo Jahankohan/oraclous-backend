@@ -385,3 +385,142 @@ class TestStalenessLogic:
         entity_delta = 9
         staleness = entity_delta / entity_count_at_detection
         assert staleness <= 0.10
+
+
+# ---------------------------------------------------------------------------
+# Staleness: _maybe_trigger_community_detection — function-level tests
+# ---------------------------------------------------------------------------
+
+
+class TestMaybeTriggerCommunityDetectionStaleness:
+    """
+    Function-level tests for the staleness check inside
+    _maybe_trigger_community_detection. Verifies that abs() is applied to
+    new_delta so that entity count decreases (negative delta) also trigger
+    the stale transition, and that zero entity_count_at_detection does not
+    raise ZeroDivisionError.
+
+    All external I/O (Neo4j, PostgreSQL) is mocked.
+    """
+
+    def _build_mocks(
+        self, entity_count_at_detection: int, entity_delta: int, neo4j_count: int = 100
+    ):
+        """Return (mock_driver, mock_engine) for the given staleness scenario."""
+        # Neo4j driver session mock
+        mock_neo4j_result = MagicMock()
+        mock_neo4j_result.single.return_value = {"cnt": neo4j_count}
+        mock_session = MagicMock()
+        mock_session.run.return_value = mock_neo4j_result
+        mock_session.__enter__ = MagicMock(return_value=mock_session)
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        # SQLAlchemy mock — row is a plain list so row[0]/row[1] behave naturally
+        pg_row = [entity_count_at_detection, entity_delta]
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchone.return_value = pg_row
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value = mock_conn
+
+        return mock_driver, mock_engine
+
+    @pytest.mark.unit
+    async def test_negative_delta_above_threshold_marks_stale(self):
+        """Negative delta of -20% → abs(-20)/100 = 0.20 > 0.10 → stale."""
+        mock_driver, mock_engine = self._build_mocks(
+            entity_count_at_detection=100, entity_delta=-21  # new_delta = -21+1 = -20
+        )
+        with (
+            patch("neo4j.GraphDatabase") as mock_gdb,
+            patch("sqlalchemy.create_engine", return_value=mock_engine),
+            patch(
+                "app.tasks.community_tasks._get_communities_status_pg",
+                return_value="active",
+            ),
+            patch(
+                "app.tasks.community_tasks._update_communities_status_pg"
+            ) as mock_update,
+            patch("app.tasks.community_tasks.detect_communities_task"),
+        ):
+            mock_gdb.driver.return_value = mock_driver
+            from app.services.background_jobs import _maybe_trigger_community_detection
+
+            await _maybe_trigger_community_detection("test-graph-id")
+
+        mock_update.assert_called_once_with(mock_engine, "test-graph-id", "stale")
+
+    @pytest.mark.unit
+    async def test_positive_delta_above_threshold_marks_stale(self):
+        """Positive delta of +20% → abs(20)/100 = 0.20 > 0.10 → stale."""
+        mock_driver, mock_engine = self._build_mocks(
+            entity_count_at_detection=100, entity_delta=19  # new_delta = 19+1 = 20
+        )
+        with (
+            patch("neo4j.GraphDatabase") as mock_gdb,
+            patch("sqlalchemy.create_engine", return_value=mock_engine),
+            patch(
+                "app.tasks.community_tasks._get_communities_status_pg",
+                return_value="active",
+            ),
+            patch(
+                "app.tasks.community_tasks._update_communities_status_pg"
+            ) as mock_update,
+            patch("app.tasks.community_tasks.detect_communities_task"),
+        ):
+            mock_gdb.driver.return_value = mock_driver
+            from app.services.background_jobs import _maybe_trigger_community_detection
+
+            await _maybe_trigger_community_detection("test-graph-id")
+
+        mock_update.assert_called_once_with(mock_engine, "test-graph-id", "stale")
+
+    @pytest.mark.unit
+    async def test_delta_below_threshold_not_stale(self):
+        """Delta of 8% ≤ 10% threshold → communities NOT marked stale."""
+        mock_driver, mock_engine = self._build_mocks(
+            entity_count_at_detection=100, entity_delta=7  # new_delta = 7+1 = 8
+        )
+        with (
+            patch("neo4j.GraphDatabase") as mock_gdb,
+            patch("sqlalchemy.create_engine", return_value=mock_engine),
+            patch(
+                "app.tasks.community_tasks._get_communities_status_pg",
+                return_value="active",
+            ),
+            patch(
+                "app.tasks.community_tasks._update_communities_status_pg"
+            ) as mock_update,
+            patch("app.tasks.community_tasks.detect_communities_task"),
+        ):
+            mock_gdb.driver.return_value = mock_driver
+            from app.services.background_jobs import _maybe_trigger_community_detection
+
+            await _maybe_trigger_community_detection("test-graph-id")
+
+        mock_update.assert_not_called()
+
+    @pytest.mark.unit
+    async def test_zero_entity_count_at_detection_no_zero_division_error(self):
+        """entity_count_at_detection=0 → guarded by row[0] check; no ZeroDivisionError."""
+        mock_driver, mock_engine = self._build_mocks(
+            entity_count_at_detection=0, entity_delta=15
+        )
+        with (
+            patch("neo4j.GraphDatabase") as mock_gdb,
+            patch("sqlalchemy.create_engine", return_value=mock_engine),
+            patch(
+                "app.tasks.community_tasks._get_communities_status_pg",
+                return_value="active",
+            ),
+            patch("app.tasks.community_tasks._update_communities_status_pg"),
+            patch("app.tasks.community_tasks.detect_communities_task"),
+        ):
+            mock_gdb.driver.return_value = mock_driver
+            from app.services.background_jobs import _maybe_trigger_community_detection
+
+            # Must not raise ZeroDivisionError
+            await _maybe_trigger_community_detection("test-graph-id")

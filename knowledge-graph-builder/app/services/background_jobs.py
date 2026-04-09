@@ -747,7 +747,7 @@ async def _maybe_trigger_community_detection(graph_id: str) -> None:
                     ).fetchone()
                     if row and row[0] and row[0] > 0:
                         new_delta = (row[1] or 0) + 1  # bump delta by new entities
-                        staleness = new_delta / row[0]
+                        staleness = abs(new_delta) / max(row[0], 1)
                         if staleness > 0.10:
                             _update_communities_status_pg(pg_engine, graph_id, "stale")
                             logger.info(
