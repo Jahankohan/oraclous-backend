@@ -154,7 +154,7 @@ services:
     volumes:
       - ./knowledge-graph-builder/app:/app/app
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/sse"]
+      test: ["CMD-SHELL", "bash -c 'curl -sf --max-time 3 http://localhost:8004/sse; code=$?; [ $code -eq 0 ] || [ $code -eq 28 ]'"]
       interval: 30s
       timeout: 10s
       retries: 3
