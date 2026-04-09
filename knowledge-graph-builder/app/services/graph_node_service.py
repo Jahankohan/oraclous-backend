@@ -275,7 +275,30 @@ class GraphNodeService:
             params["federation_group"] = federation_group
 
         set_clause = ", ".join(set_parts)
-        query = f"""
+
+        if federatable is not None:
+            # Sync shadow node atomically so federation_service reads the updated flag.
+            # OPTIONAL MATCH is a no-op when the shadow node does not yet exist.
+            query = f"""
+        MATCH (g:Graph {{graph_id: $graph_id, user_id: $user_id}})
+        OPTIONAL MATCH (shadow:Graph {{graph_id: $graph_id, namespace: "__system__"}})
+        SET {set_clause}, shadow.federatable = $federatable
+        RETURN g {{
+            .graph_id,
+            .name,
+            .description,
+            .user_id,
+            .created_at,
+            .updated_at,
+            .node_count,
+            .relationship_count,
+            .status,
+            .federatable,
+            .federation_group
+        }} as graph
+        """
+        else:
+            query = f"""
         MATCH (g:Graph {{graph_id: $graph_id, user_id: $user_id}})
         SET {set_clause}
         RETURN g {{

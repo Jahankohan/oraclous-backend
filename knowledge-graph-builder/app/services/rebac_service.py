@@ -443,6 +443,26 @@ class ReBACService:
         except Exception as exc:
             logger.warning(f"Phase B bootstrap failed for graph {graph_id}: {exc}")
 
+    async def sync_graph_federatable(
+        self,
+        driver: AsyncDriver,
+        graph_id: str,
+        federatable: bool,
+    ) -> None:
+        """Update the federatable flag on the ReBAC shadow node.
+
+        Called after the main Graph node is updated so federation_service
+        reads the correct value.  Multi-tenancy: query is scoped to graph_id.
+        """
+        async with driver.session() as session:
+            await session.run(
+                """
+                MATCH (g:Graph {graph_id: $graph_id, namespace: "__system__"})
+                SET g.federatable = $federatable
+                """,
+                {"graph_id": graph_id, "federatable": federatable},
+            )
+
     # ── PHASE B — ROLE BOOTSTRAP ──────────────────────────────────────────
 
     async def bootstrap_graph_roles(
