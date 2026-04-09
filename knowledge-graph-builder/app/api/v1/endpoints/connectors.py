@@ -144,6 +144,7 @@ async def get_db_connector(
     "/graphs/{graph_id}/connectors/database/{connector_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
+    response_model=None,
     summary="Soft-delete a database connector",
     tags=["database-connectors"],
 )
