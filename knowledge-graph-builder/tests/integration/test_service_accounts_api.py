@@ -154,7 +154,7 @@ class TestServiceAccountFullLifecycle:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.post(
-                    f"/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
+                    f"/api/v1/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
                     json={
                         "name": "integration-test-sa",
                         "description": "created in integration tests",
@@ -193,7 +193,7 @@ class TestServiceAccountFullLifecycle:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -226,7 +226,7 @@ class TestServiceAccountFullLifecycle:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.post(
-                    f"/api/v1/service-accounts/{SA_ID}/rotate-key",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}/rotate-key",
                     headers=_auth_headers(),
                 )
         finally:
@@ -261,7 +261,7 @@ class TestServiceAccountFullLifecycle:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.delete(
-                    f"/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -302,7 +302,7 @@ class TestServiceAccountJWTAuthPath:
                 mock_dep_svc.check_sa_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -335,7 +335,7 @@ class TestServiceAccountJWTAuthPath:
                 mock_dep_svc.check_sa_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.get(
-                    f"/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -360,7 +360,7 @@ class TestServiceAccountJWTAuthPath:
                 mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
 
                 response = await async_client.post(
-                    f"/api/v1/service-accounts/{SA_ID}/graph-grants",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}/graph-grants",
                     json={"graph_id": TARGET_GRAPH_ID, "level": "reader"},
                     headers=_auth_headers(),
                 )
@@ -400,7 +400,7 @@ class TestCrossGraphGrant:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.post(
-                    f"/api/v1/service-accounts/{SA_ID}/graph-grants",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}/graph-grants",
                     json={"graph_id": TARGET_GRAPH_ID, "level": "reader"},
                     headers=_auth_headers(),
                 )
@@ -444,7 +444,7 @@ class TestCrossGraphGrant:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/service-accounts/{SA_ID}/graph-grants",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}/graph-grants",
                     headers=_auth_headers(),
                 )
         finally:
@@ -478,7 +478,7 @@ class TestCrossGraphGrant:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.delete(
-                    f"/api/v1/service-accounts/{SA_ID}/graph-grants/{TARGET_GRAPH_ID}",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}/graph-grants/{TARGET_GRAPH_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -510,7 +510,7 @@ class TestCrossGraphGrant:
                 mock_dep_svc.check_sa_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.get(
-                    f"/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -548,7 +548,7 @@ class TestListRequiresAdmin:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
+                    f"/api/v1/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
                     headers=_auth_headers(),
                 )
         finally:
@@ -572,7 +572,7 @@ class TestListRequiresAdmin:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.get(
-                    f"/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
+                    f"/api/v1/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
                     headers=_auth_headers(),
                 )
         finally:
@@ -595,7 +595,7 @@ class TestListRequiresAdmin:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.get(
-                    f"/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
+                    f"/api/v1/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
                     headers=_auth_headers(),
                 )
         finally:
@@ -632,7 +632,7 @@ class TestCrossTenantIsolation:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.post(
-                    f"/api/v1/graphs/{TARGET_GRAPH_ID}/service-accounts",
+                    f"/api/v1/api/v1/graphs/{TARGET_GRAPH_ID}/service-accounts",
                     json={"name": "hijack-sa", "level": "reader"},
                     headers=_auth_headers(),
                 )
@@ -658,7 +658,7 @@ class TestCrossTenantIsolation:
                 mock_svc.get_service_account = AsyncMock(return_value=None)
 
                 response = await async_client.get(
-                    f"/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -685,7 +685,7 @@ class TestCrossTenantIsolation:
                 mock_svc.get_service_account = AsyncMock(return_value=None)
 
                 response = await async_client.get(
-                    f"/api/v1/service-accounts/{unknown_sa_id}",
+                    f"/api/v1/api/v1/service-accounts/{unknown_sa_id}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -715,7 +715,7 @@ class TestCrossTenantIsolation:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.patch(
-                    f"/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
                     json={"name": "updated-name"},
                     headers=_auth_headers(),
                 )
@@ -753,7 +753,7 @@ class TestRevokedSAToken:
         )
         try:
             response = await async_client.get(
-                f"/api/v1/service-accounts/{SA_ID}",
+                f"/api/v1/api/v1/service-accounts/{SA_ID}",
                 headers=_auth_headers(),
             )
         finally:
@@ -765,7 +765,7 @@ class TestRevokedSAToken:
     @pytest.mark.api
     async def test_missing_auth_header_returns_403(self, async_client):
         """Request with no Authorization header → 403 (HTTPBearer rejects it)."""
-        response = await async_client.get(f"/api/v1/service-accounts/{SA_ID}")
+        response = await async_client.get(f"/api/v1/api/v1/service-accounts/{SA_ID}")
         # HTTPBearer returns 403 when no credentials provided
         assert response.status_code == 403
 
@@ -789,7 +789,7 @@ class TestRevokedSAToken:
                 mock_dep_svc.check_sa_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
