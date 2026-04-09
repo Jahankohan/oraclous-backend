@@ -1,25 +1,24 @@
 import asyncio
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from typing import Optional
 
-from app.core.dependencies import (
-    get_service_account_repository,
-    get_user_repository,
-    verify_internal_service,
-)
-from app.core.jwt_handler import create_service_account_token, verify_access_token
+from app.core.dependencies import (get_service_account_repository,
+                                   get_user_repository,
+                                   verify_internal_service)
+from app.core.jwt_handler import (create_service_account_token,
+                                  verify_access_token)
 from app.core.rate_limiter import enforce_key_prefix_rate_limit, limiter
 from app.schema import auth_schemas
 from app.services.auth_service import AuthService
 
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 router = APIRouter()
 
-@router.post("/register/", response_model=auth_schemas.Token)
+
+@router.post("/register/", response_model=auth_schemas.Token, status_code=201)
 @limiter.limit("5/minute")
 async def register_user(user: auth_schemas.UserCreateWithEmail, request: Request):
     repository = await get_user_repository(request)
@@ -28,31 +27,44 @@ async def register_user(user: auth_schemas.UserCreateWithEmail, request: Request
     token_schema = await auth_service.create_user(user=user)
     return token_schema
 
+
 @router.post("/login/", response_model=auth_schemas.Token)
 @limiter.limit("10/minute")
 async def login_user(form_data: auth_schemas.UserLogin, request: Request):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
-    token_schema = await auth_service.authenticate_user(email=form_data.email, password=form_data.password)
+    token_schema = await auth_service.authenticate_user(
+        email=form_data.email, password=form_data.password
+    )
     if not token_schema:
-        raise HTTPException(status_code=400, detail="Incorrect email/username or password")
+        raise HTTPException(
+            status_code=401, detail="Incorrect email/username or password"
+        )
     return token_schema
 
 
 @router.post("/refresh/", response_model=auth_schemas.Token)
 @limiter.limit("20/minute")
-async def refresh_token(refresh_token: auth_schemas.RefreshTokenRequest, request: Request):
+async def refresh_token(
+    refresh_token: auth_schemas.RefreshTokenRequest, request: Request
+):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
 
     token_schema = await auth_service.verify_refresh_token(refresh_token.refresh_token)
     if not token_schema:
-        raise HTTPException(status_code=400, detail="Refresh Token is invalid or expired")
+        raise HTTPException(
+            status_code=400, detail="Refresh Token is invalid or expired"
+        )
     return token_schema
-    
+
 
 @router.post("/verify-email/")
-async def verify_email(email_verification_request: auth_schemas.EmailVerificationRequest, request: Request, token: str = Depends(oauth2_scheme)):
+async def verify_email(
+    email_verification_request: auth_schemas.EmailVerificationRequest,
+    request: Request,
+    token: str = Depends(oauth2_scheme),
+):
     print("Received token:", token)
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
@@ -60,10 +72,12 @@ async def verify_email(email_verification_request: auth_schemas.EmailVerificatio
     code = email_verification_request.code
     print("Verification code:", code)
     return await auth_service.verify_user_email(token, code)
-    
+
 
 @router.post("/resend-email-verification/")
-async def resend_email_verification(request: Request, token: str = Depends(oauth2_scheme)):
+async def resend_email_verification(
+    request: Request, token: str = Depends(oauth2_scheme)
+):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
 
@@ -72,35 +86,54 @@ async def resend_email_verification(request: Request, token: str = Depends(oauth
 
 @router.post("/forgot-password/")
 @limiter.limit("5/minute")
-async def forgot_password(forget_password_req: auth_schemas.ForgotPasswordRequest, request: Request):
+async def forgot_password(
+    forget_password_req: auth_schemas.ForgotPasswordRequest, request: Request
+):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
 
     return await auth_service.send_password_reset_email(email=forget_password_req.email)
 
+
 @router.post("/reset-password/")
 @limiter.limit("5/minute")
-async def reset_password(token: str, reset_password_req: auth_schemas.ResetPasswordRequest, request: Request):
+async def reset_password(
+    token: str, reset_password_req: auth_schemas.ResetPasswordRequest, request: Request
+):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
 
-    return await auth_service.reset_password(token=token, new_password=reset_password_req.new_password)
+    return await auth_service.reset_password(
+        token=token, new_password=reset_password_req.new_password
+    )
+
 
 @router.post("/change-password/")
-async def change_password(change_password_req: auth_schemas.ChangePasswordRequest, request: Request, token: str = Depends(oauth2_scheme)):
+async def change_password(
+    change_password_req: auth_schemas.ChangePasswordRequest,
+    request: Request,
+    token: str = Depends(oauth2_scheme),
+):
     repository = await get_user_repository(request)
     auth_service = AuthService(repository)
 
     payload = await auth_service.verify_access_token(token)
     user_id = payload.get("sub")
     if user_id is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+        )
 
     db_user = await repository.get_user_by_id(user_id)
     if not db_user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
 
-    return await auth_service.change_password(user=db_user, new_password=change_password_req.new_password)
+    return await auth_service.change_password(
+        user=db_user, new_password=change_password_req.new_password
+    )
+
 
 @router.get("/validate")
 async def validate_token(request: Request, token: str = Depends(oauth2_scheme)):
@@ -110,12 +143,17 @@ async def validate_token(request: Request, token: str = Depends(oauth2_scheme)):
     payload = await auth_service.verify_access_token(token)
     user_id = payload.get("sub")
     if user_id is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+        )
 
     db_user = await repository.get_user_by_id(user_id)
     if not db_user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
     return payload
+
 
 @router.get("/me")
 async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)):
@@ -125,7 +163,9 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
     sub = payload.get("sub")
 
     if not sub:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+        )
 
     if principal_type == "service_account":
         # Verify the SA still has an active key (revocation check)
@@ -150,7 +190,9 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
 
     db_user = await repository.get_user_by_id(sub)
     if not db_user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
 
     return {
         "id": str(db_user.id),
@@ -163,6 +205,7 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
 
 
 # ── Service Account Endpoints ──────────────────────────────────────────────
+
 
 class ServiceTokenRequest(BaseModel):
     api_key: str
@@ -203,14 +246,17 @@ async def exchange_service_token(
     #
     # Retrieve stored metadata from the key record via SA lookup
     from sqlalchemy.future import select
+
     from app.models.service_account_model import AgentServiceAccountKey
 
     async with sa_repository.Session() as session:
         result = await session.execute(
-            select(AgentServiceAccountKey).where(
+            select(AgentServiceAccountKey)
+            .where(
                 AgentServiceAccountKey.service_account_id == sa_id,
                 AgentServiceAccountKey.status == "active",
-            ).limit(1)
+            )
+            .limit(1)
         )
         key_record = result.scalars().first()
 
@@ -229,6 +275,7 @@ async def exchange_service_token(
 
 # ── Internal endpoints (service-to-service, requires X-Internal-Key header) ─
 
+
 class CreateKeyRequest(BaseModel):
     service_account_id: str
     created_by_user_id: str
@@ -239,7 +286,7 @@ class CreateKeyRequest(BaseModel):
 
 class CreateKeyResponse(BaseModel):
     key_id: str
-    api_key: str       # raw key — shown only once
+    api_key: str  # raw key — shown only once
     key_prefix: str
 
 
@@ -273,7 +320,9 @@ async def internal_create_sa_key(
 
     # Persist tenant_id and home_graph_id on the key record for token exchange
     from sqlalchemy import update as sa_update
+
     from app.models.service_account_model import AgentServiceAccountKey
+
     async with sa_repository.Session() as session:
         await session.execute(
             sa_update(AgentServiceAccountKey)
@@ -292,7 +341,10 @@ async def internal_create_sa_key(
     )
 
 
-@router.delete("/internal/service-account-keys/{service_account_id}", response_model=RevokeKeysResponse)
+@router.delete(
+    "/internal/service-account-keys/{service_account_id}",
+    response_model=RevokeKeysResponse,
+)
 async def internal_revoke_sa_keys(
     service_account_id: str,
     request: Request,
