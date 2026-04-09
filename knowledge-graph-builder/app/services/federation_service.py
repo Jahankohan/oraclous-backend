@@ -268,30 +268,31 @@ class FederationService:
     ) -> list[dict[str, Any]]:
         """Build a UNION ALL Cypher query across all graph_ids and execute async.
 
-        Each CALL subquery is scoped to one graph_id, hitting the per-graph index.
+        Each UNION branch is scoped to one graph_id, hitting the per-graph index.
+        All branches are wrapped in a single outer CALL to satisfy Neo4j 5.23+
+        syntax: queries must not conclude with a CALL subquery (ORA-217 fix).
         """
         params: dict[str, Any] = {"search_term": search_term, "limit": max_per_graph}
 
-        subqueries: list[str] = []
+        branches: list[str] = []
         for i, gid in enumerate(graph_ids):
             param_key = f"gid_{i}"
             params[param_key] = gid
-            subqueries.append(
-                f"CALL {{\n"
+            branches.append(
                 f"  MATCH (e:__Entity__)\n"
                 f"  WHERE e.graph_id = ${param_key}\n"
                 f"    AND toLower(e.name) CONTAINS toLower($search_term)\n"
                 f"  RETURN elementId(e) AS entity_id,\n"
                 f"         e.name AS name,\n"
                 f"         coalesce(e.type, labels(e)[-1]) AS type,\n"
-                f"         ${param_key} AS source_graph_id\n"
-                f"  LIMIT $limit\n"
-                f"}}"
+                f"         e.graph_id AS source_graph_id\n"
+                f"  LIMIT $limit"
             )
 
+        union_body = "\n  UNION ALL\n".join(branches)
         cypher = (
-            "\nUNION ALL\n".join(subqueries)
-            + "\nRETURN entity_id, name, type, source_graph_id"
+            f"CALL {{\n{union_body}\n}}\n"
+            "RETURN entity_id, name, type, source_graph_id"
         )
 
         async with self._driver.session(database=self._database) as session:

@@ -442,6 +442,86 @@ async def test_same_as_no_link_for_different_types():
     assert links == []
 
 
+# ─── ORA-217 regression: valid CALL { UNION ALL } syntax ─────────────────────
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_entity_union_cypher_uses_single_outer_call():
+    """ORA-217 regression: generated Cypher must NOT use CALL {} UNION ALL CALL {}.
+
+    Neo4j 5.23+ rejects queries that conclude with a CALL subquery.
+    The fix wraps all UNION ALL branches in a single outer CALL block.
+    """
+    import inspect
+
+    source = inspect.getsource(FederationService._execute_entity_union)
+    # The old (broken) pattern had each branch wrapped as its own CALL
+    # joined at the top level: CALL{} UNION ALL CALL{}
+    # The fixed pattern has one outer CALL containing all branches.
+    # Verify the branch-building loop does NOT produce per-branch CALL wrappers.
+    assert (
+        'f"CALL {\\n"' not in source and "f'CALL {\\n'" not in source
+    ), "ORA-217 regression: branches must NOT be individually wrapped in CALL"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_entity_union_cypher_structure_single_call_wrapping():
+    """ORA-217: _execute_entity_union must emit CALL { <union branches> } RETURN."""
+    graph_ids = ["graph-x", "graph-y", "graph-z"]
+
+    captured_cypher: list[str] = []
+    captured_params: list[dict] = []
+
+    mock_result = AsyncMock()
+    mock_result.data = AsyncMock(return_value=[])
+
+    mock_session = MagicMock()
+
+    async def capture_run(cypher, params=None):
+        captured_cypher.append(cypher)
+        captured_params.append(params or {})
+        return mock_result
+
+    mock_session.run = capture_run
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    driver = MagicMock()
+    driver.session.return_value = mock_session
+
+    svc = FederationService(async_driver=driver)
+    await svc._execute_entity_union(
+        graph_ids=graph_ids, search_term="test", max_per_graph=10
+    )
+
+    assert len(captured_cypher) == 1, "Expected exactly one Cypher execution"
+    cypher = captured_cypher[0]
+
+    # Must start with a single outer CALL block
+    assert cypher.startswith("CALL {"), f"Cypher must start with 'CALL {{': {cypher!r}"
+
+    # Must have UNION ALL inside (not at the top level)
+    call_start = cypher.index("CALL {")
+    call_close = cypher.rindex("}")
+    inner_body = cypher[call_start + len("CALL {") : call_close]
+    assert (
+        "UNION ALL" in inner_body
+    ), f"UNION ALL must be inside the outer CALL block: {cypher!r}"
+
+    # Outer RETURN must follow the closing brace
+    tail = cypher[call_close + 1 :].strip()
+    assert tail.startswith(
+        "RETURN"
+    ), f"Query must conclude with RETURN after CALL block: {cypher!r}"
+
+    # All graph_id params parameterized
+    params = captured_params[0]
+    for i in range(len(graph_ids)):
+        assert f"gid_{i}" in params, f"Missing param gid_{i}"
+
+
 # ─── Pydantic schema validation tests ────────────────────────────────────────
 
 
