@@ -293,7 +293,9 @@ class TestServiceAccountJWTAuthPath:
                 patch(
                     "app.api.v1.endpoints.service_accounts.service_account_service"
                 ) as mock_svc,
-                patch("app.services.service_account_service.service_account_service") as mock_dep_svc,
+                patch(
+                    "app.services.service_account_service.service_account_service"
+                ) as mock_dep_svc,
             ):
                 mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
                 # SA permission check (via verify_graph_access → SA path)
@@ -324,7 +326,9 @@ class TestServiceAccountJWTAuthPath:
                 patch(
                     "app.api.v1.endpoints.service_accounts.service_account_service"
                 ) as mock_svc,
-                patch("app.services.service_account_service.service_account_service") as mock_dep_svc,
+                patch(
+                    "app.services.service_account_service.service_account_service"
+                ) as mock_dep_svc,
             ):
                 mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
                 # SA lacks permission on home graph
@@ -497,7 +501,9 @@ class TestCrossGraphGrant:
                 patch(
                     "app.api.v1.endpoints.service_accounts.service_account_service"
                 ) as mock_svc,
-                patch("app.services.service_account_service.service_account_service") as mock_dep_svc,
+                patch(
+                    "app.services.service_account_service.service_account_service"
+                ) as mock_dep_svc,
             ):
                 mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
                 # check_sa_graph_permission returns False — grant was revoked
@@ -775,7 +781,9 @@ class TestRevokedSAToken:
                 patch(
                     "app.api.v1.endpoints.service_accounts.service_account_service"
                 ) as mock_svc,
-                patch("app.services.service_account_service.service_account_service") as mock_dep_svc,
+                patch(
+                    "app.services.service_account_service.service_account_service"
+                ) as mock_dep_svc,
             ):
                 mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
                 mock_dep_svc.check_sa_graph_permission = AsyncMock(return_value=True)
