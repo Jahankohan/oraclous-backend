@@ -1,0 +1,54 @@
+# docker-compose.agent.yml
+#
+# Override file for running Oraclous services in agent/CI environments where
+# multiple Compose stacks may run concurrently on the same Docker host.
+#
+# Usage (ALWAYS with COMPOSE_PROJECT_NAME and IMAGE_TAG):
+#
+#   export COMPOSE_PROJECT_NAME=oraclous-ORA-XXX
+#   export IMAGE_TAG=my-branch-$(git rev-parse --short HEAD)
+#   docker compose -f docker-compose.yml -f docker-compose.agent.yml up --build -d
+#
+# Dynamic port assignment ("0:PORT") lets the OS pick a free host port,
+# preventing port collisions when multiple stacks are live simultaneously.
+# Use `docker compose port <service> <container_port>` to find the assigned port.
+
+services:
+  oraclous-core-service:
+    ports:
+      - "0:8000"
+
+  auth-service:
+    ports:
+      - "0:8000"
+
+  credential-broker-service:
+    ports:
+      - "0:8000"
+
+  knowledge-graph-builder:
+    ports:
+      - "0:8000"
+
+  knowledge-graph-mcp:
+    ports:
+      - "0:8004"
+
+  neo4j:
+    ports:
+      - "0:7474"
+      - "0:7687"
+
+  redis:
+    ports:
+      - "0:6379"
+
+  postgres:
+    ports:
+      - "0:5432"
+
+  jaeger:
+    ports:
+      - "0:16686"
+      - "0:4317"
+      - "0:4318"

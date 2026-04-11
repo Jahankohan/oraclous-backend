@@ -1,6 +1,7 @@
 services:
   oraclous-core-service:
     build: ./oraclous-core-service
+    image: oraclous-core-service:${IMAGE_TAG:-dev}
     ports:
       - "8001:8000"
     env_file:
@@ -14,6 +15,7 @@ services:
     build:
       context: ./auth-service
       dockerfile: Dockerfile.dev
+    image: oraclous-auth-service:${IMAGE_TAG:-dev}
     ports:
       - "8000:8000"
     env_file:
@@ -27,6 +29,7 @@ services:
     build:
       context: ./credential-broker-service
       dockerfile: Dockerfile
+    image: oraclous-credential-broker:${IMAGE_TAG:-dev}
     ports:
       - "8002:8000"
     env_file:
@@ -41,7 +44,6 @@ services:
 
   neo4j:
     image: neo4j:5.23-community
-    container_name: neo4j_llm_graph
     restart: unless-stopped
     ports:
       - "7474:7474"
@@ -73,7 +75,7 @@ services:
     build:
       context: ./knowledge-graph-builder
       dockerfile: Dockerfile
-    container_name: knowledge-graph-worker
+    image: oraclous-kg-builder:${IMAGE_TAG:-dev}
     restart: unless-stopped
     command: celery -A app.services.background_jobs.celery_app worker --loglevel=info
     env_file:
@@ -101,7 +103,7 @@ services:
     build:
       context: ./knowledge-graph-builder
       dockerfile: Dockerfile
-    container_name: knowledge-graph-builder
+    image: oraclous-kg-builder:${IMAGE_TAG:-dev}
     restart: unless-stopped
     ports:
       - "8003:8000"
@@ -134,7 +136,7 @@ services:
     build:
       context: ./knowledge-graph-builder
       dockerfile: Dockerfile
-    container_name: knowledge-graph-mcp
+    image: oraclous-kg-builder:${IMAGE_TAG:-dev}
     restart: unless-stopped
     command: python -m app.mcp.server
     ports:
@@ -170,7 +172,6 @@ services:
 
   jaeger:
     image: jaegertracing/all-in-one:1.58
-    container_name: jaeger
     restart: unless-stopped
     ports:
       - "16686:16686"   # Jaeger UI
@@ -189,7 +190,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: redis_cache
     restart: unless-stopped
     ports:
       - "6379:6379"
