@@ -22,12 +22,23 @@ async def test_lifespan_calls_connect_sync(monkeypatch):
     # Stub modules that are unavailable in unit-test context.
     # Use monkeypatch.setitem so sys.modules is restored after test teardown,
     # preventing these stubs from polluting other tests (e.g. test_rate_limiting).
-    for mod_name in ["app.api.v1.router", "app.core.rate_limiter"]:
+    for mod_name in [
+        "app.api.v1.router",
+        "app.core.rate_limiter",
+        "app.services.memory_service",
+        "app.services.database_connector_service",
+    ]:
         stub = types.ModuleType(mod_name)
         if mod_name == "app.api.v1.router":
             stub.api_router = MagicMock()
         elif mod_name == "app.core.rate_limiter":
             stub.limiter = MagicMock()
+        elif mod_name == "app.services.memory_service":
+            stub.ensure_memory_indexes = AsyncMock()
+        elif mod_name == "app.services.database_connector_service":
+            mock_db_connector = MagicMock()
+            mock_db_connector.ensure_constraints = AsyncMock()
+            stub.database_connector_service = mock_db_connector
         monkeypatch.setitem(sys.modules, mod_name, stub)
 
     # Stub slowapi only when not already installed.

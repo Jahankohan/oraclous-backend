@@ -537,6 +537,40 @@ class TestGetNeighbors:
 
 
 # ---------------------------------------------------------------------------
+# Health Endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestHealthEndpoint:
+    @pytest.mark.asyncio
+    async def test_health_returns_200_with_ok_status(self):
+        """GET /health must return HTTP 200 with {"status": "ok"}."""
+        import httpx
+
+        app = mcp_module.mcp.sse_app()
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/health")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+    @pytest.mark.asyncio
+    async def test_health_content_type_is_json(self):
+        """GET /health must return JSON content-type."""
+        import httpx
+
+        app = mcp_module.mcp.sse_app()
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/health")
+
+        assert "application/json" in response.headers.get("content-type", "")
+
+
+# ---------------------------------------------------------------------------
 # Lifespan / Shutdown
 # ---------------------------------------------------------------------------
 
