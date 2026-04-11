@@ -405,8 +405,8 @@ class TestUpdateGraph:
 
     @pytest.mark.unit
     def test_update_graph_federatable_syncs_shadow_node(self):
-        """When federatable is updated, the Cypher must also SET shadow.federatable
-        so that federation_service reads the correct flag from the ReBAC shadow node.
+        """When federatable is updated, the Cypher must MERGE the shadow node and
+        SET shadow.federatable so that federation_service reads the correct flag.
         """
         mock_driver, mock_session, mock_result, _ = _make_driver()
         mock_result.single.return_value = None  # return value doesn't matter here
@@ -420,12 +420,66 @@ class TestUpdateGraph:
 
         assert (
             'namespace: "__system__"' in query
-        ), "Shadow node OPTIONAL MATCH missing from query when federatable is updated"
+        ), "Shadow node MERGE missing from query when federatable is updated"
+        assert (
+            "MERGE" in query
+        ), "MERGE must be used for shadow node (not OPTIONAL MATCH) to create if absent"
         assert (
             "shadow.federatable" in query
         ), "SET shadow.federatable missing from query when federatable is updated"
         assert params.get("federatable") is True
         assert params.get("graph_id") == "g-1"
+
+    @pytest.mark.unit
+    def test_update_graph_shadow_merge_bootstrap_path(self):
+        """Bootstrap path: when no shadow node exists, MERGE must create it.
+
+        Verified by asserting MERGE (not OPTIONAL MATCH) appears in the query,
+        meaning a missing shadow node will be created rather than silently skipped.
+        """
+        mock_driver, mock_session, mock_result, _ = _make_driver()
+        mock_result.single.return_value = None
+
+        svc = GraphNodeService(mock_driver)
+        svc.update_graph("g-new", "user-1", federatable=True)
+
+        call_args = mock_session.run.call_args
+        query: str = call_args[0][0] if call_args[0] else ""
+        params: dict = call_args[0][1] if len(call_args[0]) > 1 else call_args[1]
+
+        assert (
+            "MERGE" in query
+        ), "Shadow node must use MERGE so it is created when absent"
+        assert (
+            "OPTIONAL MATCH" not in query
+        ), "OPTIONAL MATCH must not be used for shadow node"
+        assert 'namespace: "__system__"' in query
+        assert params.get("graph_id") == "g-new"
+        assert params.get("federatable") is True
+
+    @pytest.mark.unit
+    def test_update_graph_shadow_merge_update_path_preserves_other_props(self):
+        """Update path: shadow MERGE must only SET federatable — not overwrite other props.
+
+        Verified by asserting the SET clause targets shadow.federatable specifically
+        and does not use SET shadow = {…} (which would wipe owner_user_id, graph_name, etc.).
+        """
+        mock_driver, mock_session, mock_result, _ = _make_driver()
+        mock_result.single.return_value = None
+
+        svc = GraphNodeService(mock_driver)
+        svc.update_graph("g-existing", "user-1", federatable=False)
+
+        call_args = mock_session.run.call_args
+        query: str = call_args[0][0] if call_args[0] else ""
+        params: dict = call_args[0][1] if len(call_args[0]) > 1 else call_args[1]
+
+        assert "shadow.federatable" in query, "Must SET shadow.federatable specifically"
+        # Ensure we're not doing a destructive SET shadow = {...} that wipes all properties
+        assert (
+            "SET shadow = " not in query
+        ), "Must not overwrite all shadow node properties"
+        assert params.get("federatable") is False
 
     @pytest.mark.unit
     def test_update_graph_no_shadow_sync_when_federatable_not_provided(self):
