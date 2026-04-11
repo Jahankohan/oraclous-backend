@@ -107,6 +107,11 @@ async def test_lifespan_calls_connect_sync(monkeypatch):
                 mock_sa_service,
                 create=True,
             ),
+            patch(
+                "app.services.memory_service.ensure_memory_indexes",
+                AsyncMock(),
+                create=True,
+            ),
             patch.object(main_module, "neo4j_client", mock_client),
         ):
             async with lifespan_fn(app_obj):
