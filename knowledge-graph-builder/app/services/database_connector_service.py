@@ -19,9 +19,9 @@ import socket
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 from fastapi import HTTPException, status
 
@@ -36,13 +36,13 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class DatabaseConnectorType(str, Enum):
+class DatabaseConnectorType(StrEnum):
     POSTGRESQL = "postgresql"
     MYSQL = "mysql"
     MONGODB = "mongodb"
 
 
-class DbSyncMode(str, Enum):
+class DbSyncMode(StrEnum):
     FULL_SNAPSHOT = "full_snapshot"
     SCHEMA_ONLY = "schema_only"
     CDC = "cdc"
@@ -60,23 +60,23 @@ class ColumnMeta:
     nullable: bool
     is_pk: bool
     is_fk: bool
-    fk_table: Optional[str] = None
-    fk_column: Optional[str] = None
+    fk_table: str | None = None
+    fk_column: str | None = None
 
 
 @dataclass
 class TableMeta:
     name: str
     schema_name: str
-    columns: List[ColumnMeta] = field(default_factory=list)
-    row_count: Optional[int] = None
+    columns: list[ColumnMeta] = field(default_factory=list)
+    row_count: int | None = None
 
 
 @dataclass
 class SchemaSnapshot:
     connector_type: DatabaseConnectorType
     database: str
-    tables: List[TableMeta]
+    tables: list[TableMeta]
     captured_at: datetime
 
     def to_json(self) -> str:
@@ -109,7 +109,7 @@ class SchemaSnapshot:
         )
 
     @classmethod
-    def from_json(cls, data: str) -> "SchemaSnapshot":
+    def from_json(cls, data: str) -> SchemaSnapshot:
         obj = json.loads(data)
         tables = [
             TableMeta(
@@ -141,7 +141,7 @@ class SchemaSnapshot:
 @dataclass
 class SampleRow:
     table_name: str
-    row_data: Dict[str, Any]
+    row_data: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -163,14 +163,14 @@ class DatabaseConnector(ABC):
         ...
 
     @abstractmethod
-    async def extract_sample_data(self, table: str, limit: int) -> List[SampleRow]:
+    async def extract_sample_data(self, table: str, limit: int) -> list[SampleRow]:
         """Return up to `limit` rows from `table` as dict records."""
         ...
 
     @abstractmethod
     async def detect_schema_changes(
         self, previous_snapshot: SchemaSnapshot
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Compare current schema against a previous snapshot.
 
         Returns dict with keys: added_tables, removed_tables, altered_tables.
@@ -246,12 +246,12 @@ def validate_host_ssrf(host: str) -> None:
 class PostgreSQLConnector(DatabaseConnector):
     """Async PostgreSQL connector using asyncpg."""
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         self._host: str = config["host"]
         self._port: int = config["port"]
         self._database: str = config["database"]
         self._schema: str = config.get("schema_filter") or "public"
-        self._table_filter: Optional[List[str]] = config.get("table_filter")
+        self._table_filter: list[str] | None = config.get("table_filter")
         self._sample_row_limit: int = config.get("sample_row_limit", 100)
         self._conn = None
 
@@ -318,7 +318,7 @@ class PostgreSQLConnector(DatabaseConnector):
             self._schema,
         )
 
-        tables: Dict[str, TableMeta] = {}
+        tables: dict[str, TableMeta] = {}
         for row in rows:
             tname = row["table_name"]
             if self._table_filter and tname not in self._table_filter:
@@ -341,10 +341,10 @@ class PostgreSQLConnector(DatabaseConnector):
             connector_type=DatabaseConnectorType.POSTGRESQL,
             database=self._database,
             tables=list(tables.values()),
-            captured_at=datetime.now(timezone.utc),
+            captured_at=datetime.now(UTC),
         )
 
-    async def extract_sample_data(self, table: str, limit: int) -> List[SampleRow]:
+    async def extract_sample_data(self, table: str, limit: int) -> list[SampleRow]:
         if not self._conn:
             raise RuntimeError("Not connected.")
         # Table/schema identifiers cannot be parameterized in SQL — asyncpg $N
@@ -358,7 +358,7 @@ class PostgreSQLConnector(DatabaseConnector):
 
     async def detect_schema_changes(
         self, previous_snapshot: SchemaSnapshot
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         current = await self.introspect_schema()
         return _diff_snapshots(previous_snapshot, current)
 
@@ -376,11 +376,11 @@ class PostgreSQLConnector(DatabaseConnector):
 class MySQLConnector(DatabaseConnector):
     """Async MySQL connector using aiomysql."""
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         self._host: str = config["host"]
         self._port: int = config["port"]
         self._database: str = config["database"]
-        self._table_filter: Optional[List[str]] = config.get("table_filter")
+        self._table_filter: list[str] | None = config.get("table_filter")
         self._sample_row_limit: int = config.get("sample_row_limit", 100)
         self._conn = None
 
@@ -427,7 +427,7 @@ class MySQLConnector(DatabaseConnector):
             )
             rows = await cur.fetchall()
 
-        tables: Dict[str, TableMeta] = {}
+        tables: dict[str, TableMeta] = {}
         for row in rows:
             tname = row["table_name"]
             if self._table_filter and tname not in self._table_filter:
@@ -450,10 +450,10 @@ class MySQLConnector(DatabaseConnector):
             connector_type=DatabaseConnectorType.MYSQL,
             database=self._database,
             tables=list(tables.values()),
-            captured_at=datetime.now(timezone.utc),
+            captured_at=datetime.now(UTC),
         )
 
-    async def extract_sample_data(self, table: str, limit: int) -> List[SampleRow]:
+    async def extract_sample_data(self, table: str, limit: int) -> list[SampleRow]:
         if not self._conn:
             raise RuntimeError("Not connected.")
         import aiomysql  # type: ignore
@@ -471,7 +471,7 @@ class MySQLConnector(DatabaseConnector):
 
     async def detect_schema_changes(
         self, previous_snapshot: SchemaSnapshot
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         current = await self.introspect_schema()
         return _diff_snapshots(previous_snapshot, current)
 
@@ -488,7 +488,7 @@ class MySQLConnector(DatabaseConnector):
 _MONGO_REF_SUFFIXES = ("_id", "Id", "Ref", "ref")
 
 
-def _infer_mongo_fk_table(field_name: str) -> Optional[str]:
+def _infer_mongo_fk_table(field_name: str) -> str | None:
     for suffix in _MONGO_REF_SUFFIXES:
         if field_name.endswith(suffix) and len(field_name) > len(suffix):
             return field_name[: -len(suffix)]
@@ -521,11 +521,11 @@ def _mongo_type_name(value: Any) -> str:
 class MongoDBConnector(DatabaseConnector):
     """Async MongoDB connector using motor."""
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         self._host: str = config["host"]
         self._port: int = config["port"]
         self._database: str = config["database"]
-        self._table_filter: Optional[List[str]] = config.get("table_filter")
+        self._table_filter: list[str] | None = config.get("table_filter")
         self._sample_row_limit: int = config.get("sample_row_limit", 100)
         self._client = None
         self._db = None
@@ -546,20 +546,20 @@ class MongoDBConnector(DatabaseConnector):
             raise RuntimeError("Not connected.")
 
         collections = await self._db.list_collection_names()
-        tables: List[TableMeta] = []
+        tables: list[TableMeta] = []
 
         for coll_name in collections:
             if self._table_filter and coll_name not in self._table_filter:
                 continue
             docs = await self._db[coll_name].find({}).to_list(length=100)
 
-            field_types: Dict[str, str] = {}
+            field_types: dict[str, str] = {}
             for doc in docs:
                 for key, val in doc.items():
                     if key not in field_types:
                         field_types[key] = _mongo_type_name(val)
 
-            columns: List[ColumnMeta] = []
+            columns: list[ColumnMeta] = []
             for fname, ftype in field_types.items():
                 is_pk = fname == "_id"
                 is_fk = not is_pk and (
@@ -585,10 +585,10 @@ class MongoDBConnector(DatabaseConnector):
             connector_type=DatabaseConnectorType.MONGODB,
             database=self._database,
             tables=tables,
-            captured_at=datetime.now(timezone.utc),
+            captured_at=datetime.now(UTC),
         )
 
-    async def extract_sample_data(self, table: str, limit: int) -> List[SampleRow]:
+    async def extract_sample_data(self, table: str, limit: int) -> list[SampleRow]:
         if not self._db:
             raise RuntimeError("Not connected.")
         docs = await self._db[table].find({}).to_list(length=limit)
@@ -603,7 +603,7 @@ class MongoDBConnector(DatabaseConnector):
 
     async def detect_schema_changes(
         self, previous_snapshot: SchemaSnapshot
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         current = await self.introspect_schema()
         return _diff_snapshots(previous_snapshot, current)
 
@@ -619,7 +619,7 @@ class MongoDBConnector(DatabaseConnector):
 
 
 def make_connector(
-    connector_type: DatabaseConnectorType, config: Dict[str, Any]
+    connector_type: DatabaseConnectorType, config: dict[str, Any]
 ) -> DatabaseConnector:
     if connector_type == DatabaseConnectorType.POSTGRESQL:
         return PostgreSQLConnector(config)
@@ -635,7 +635,7 @@ def make_connector(
 # ---------------------------------------------------------------------------
 
 
-def _diff_snapshots(prev: SchemaSnapshot, cur: SchemaSnapshot) -> Dict[str, Any]:
+def _diff_snapshots(prev: SchemaSnapshot, cur: SchemaSnapshot) -> dict[str, Any]:
     prev_tables = {t.name: t for t in prev.tables}
     cur_tables = {t.name: t for t in cur.tables}
     added = [t for t in cur_tables if t not in prev_tables]
@@ -644,7 +644,7 @@ def _diff_snapshots(prev: SchemaSnapshot, cur: SchemaSnapshot) -> Dict[str, Any]
     for tname in set(prev_tables) & set(cur_tables):
         prev_cols = {c.name: c for c in prev_tables[tname].columns}
         cur_cols = {c.name: c for c in cur_tables[tname].columns}
-        changes: Dict[str, List[str]] = {
+        changes: dict[str, list[str]] = {
             "added_columns": [c for c in cur_cols if c not in prev_cols],
             "removed_columns": [c for c in prev_cols if c not in cur_cols],
             "type_changed": [
@@ -696,7 +696,7 @@ async def write_table_to_kg(
     connector_id: str,
     table: TableMeta,
     sync_mode: DbSyncMode,
-    sample_rows: List[SampleRow],
+    sample_rows: list[SampleRow],
     driver=None,  # Optional: pass worker async driver; defaults to fastapi neo4j_client
 ) -> int:
     """Write entities and relationships for one table into Neo4j.
@@ -710,7 +710,7 @@ async def write_table_to_kg(
     fk_cols = [c for c in table.columns if c.is_fk and not c.is_pk]
     scalar_cols = [c for c in table.columns if not c.is_pk and not c.is_fk]
 
-    async def run_write(cypher: str, params: Dict[str, Any]) -> List[Any]:
+    async def run_write(cypher: str, params: dict[str, Any]) -> list[Any]:
         if driver:
             records, _, _ = await driver.execute_query(cypher, params)
             return records
@@ -860,15 +860,15 @@ class DatabaseConnectorService:
         port: int,
         database: str,
         sync_mode: DbSyncMode,
-        schema_filter: Optional[str] = None,
-        table_filter: Optional[List[str]] = None,
+        schema_filter: str | None = None,
+        table_filter: list[str] | None = None,
         sample_row_limit: int = 100,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Register a new database connector node in Neo4j. Returns the connector dict."""
         validate_host_ssrf(host)
         sample_row_limit = min(sample_row_limit, 1000)
         connector_id = str(uuid.uuid4())
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
 
         result = await neo4j_client.execute_write_query(
             """
@@ -914,7 +914,7 @@ class DatabaseConnectorService:
             )
         return dict(result[0]["c"])
 
-    async def list_connectors(self, graph_id: str) -> List[Dict[str, Any]]:
+    async def list_connectors(self, graph_id: str) -> list[dict[str, Any]]:
         result = await neo4j_client.execute_query(
             """
             MATCH (c:Connector {graph_id: $graph_id})
@@ -926,7 +926,7 @@ class DatabaseConnectorService:
         )
         return [dict(r["c"]) for r in result]
 
-    async def get_connector(self, graph_id: str, connector_id: str) -> Dict[str, Any]:
+    async def get_connector(self, graph_id: str, connector_id: str) -> dict[str, Any]:
         """Get connector with last 5 sync errors."""
         result = await neo4j_client.execute_query(
             """
@@ -974,8 +974,8 @@ class DatabaseConnectorService:
         graph_id: str,
         connector_id: str,
         sync_status: str,
-        row_count: Optional[int] = None,
-        error_msg: Optional[str] = None,
+        row_count: int | None = None,
+        error_msg: str | None = None,
     ) -> None:
         await neo4j_client.execute_write_query(
             """
@@ -1016,7 +1016,7 @@ class DatabaseConnectorService:
         connector_id: str,
         error_type: str,
         error_message: str,
-        tables_failed: Optional[List[str]] = None,
+        tables_failed: list[str] | None = None,
     ) -> None:
         """Record a sync error node and prune to keep only the latest 10."""
         error_id = str(uuid.uuid4())

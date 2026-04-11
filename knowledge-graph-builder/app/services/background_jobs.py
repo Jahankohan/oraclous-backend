@@ -1450,7 +1450,8 @@ def code_ingest_task(self, job_id: str, user_id: str) -> dict[str, Any]:
     ) -> None:
         with pg_engine.begin() as conn:
             conn.execute(
-                _text("""
+                _text(
+                    """
                     UPDATE ingestion_jobs
                     SET status = :status,
                         progress = :progress,
@@ -1459,7 +1460,8 @@ def code_ingest_task(self, job_id: str, user_id: str) -> dict[str, Any]:
                         completed_at = CASE WHEN :status IN ('completed','failed') THEN NOW() ELSE completed_at END,
                         started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN NOW() ELSE started_at END
                     WHERE id = :id
-                """),
+                """
+                ),
                 {
                     "id": job_id_str,
                     "status": status,
@@ -1653,9 +1655,9 @@ def sync_database_connector(
     graph_id: str,
     connector_id: str,
     user_id: str,
-    sync_mode_override: Optional[str] = None,
-    table_filter_override: Optional[list] = None,
-) -> Dict[str, Any]:
+    sync_mode_override: str | None = None,
+    table_filter_override: list | None = None,
+) -> dict[str, Any]:
     """Celery task: sync a database connector (PostgreSQL/MySQL/MongoDB) into Neo4j.
 
     Uses WorkerNeo4jManager (async, NullPool) for task-scoped Neo4j connections.
@@ -1677,10 +1679,11 @@ async def _sync_database_connector_async(
     graph_id: str,
     connector_id: str,
     user_id: str,
-    sync_mode_override: Optional[str],
-    table_filter_override: Optional[list],
-) -> Dict[str, Any]:
+    sync_mode_override: str | None,
+    table_filter_override: list | None,
+) -> dict[str, Any]:
     """Async implementation of the database connector sync task."""
+    from app.services.credential_service import credential_service
     from app.services.database_connector_service import (
         DatabaseConnectorType,
         DbSyncMode,
@@ -1688,9 +1691,10 @@ async def _sync_database_connector_async(
         make_connector,
         write_table_to_kg,
     )
-    from app.services.credential_service import credential_service
 
-    logger.info(f"Starting database connector sync: connector={connector_id} graph={graph_id}")
+    logger.info(
+        f"Starting database connector sync: connector={connector_id} graph={graph_id}"
+    )
 
     async with WorkerNeo4jManager() as neo4j:
         async_driver = neo4j.get_async_driver()
@@ -1735,16 +1739,24 @@ async def _sync_database_connector_async(
         )
         if not creds:
             await _worker_record_sync_error(
-                async_driver, graph_id, connector_id,
-                "auth_error", "No credentials found in credential broker."
+                async_driver,
+                graph_id,
+                connector_id,
+                "auth_error",
+                "No credentials found in credential broker.",
             )
             await _worker_update_sync_status(
-                async_driver, graph_id, connector_id, "failed",
-                error_msg="No credentials registered for this connector."
+                async_driver,
+                graph_id,
+                connector_id,
+                "failed",
+                error_msg="No credentials registered for this connector.",
             )
             return {"status": "failed", "error": "Missing credentials."}
 
-        db_user = creds.get("username") or creds.get("user") or creds.get("access_token", "")
+        db_user = (
+            creds.get("username") or creds.get("user") or creds.get("access_token", "")
+        )
         db_password = creds.get("password") or creds.get("secret", "")
 
         # ------------------------------------------------------------------
@@ -1756,12 +1768,10 @@ async def _sync_database_connector_async(
         except Exception as exc:
             logger.error(f"DB connector {connector_id} connect failed: {exc}")
             await _worker_record_sync_error(
-                async_driver, graph_id, connector_id,
-                "connection_failed", str(exc)
+                async_driver, graph_id, connector_id, "connection_failed", str(exc)
             )
             await _worker_update_sync_status(
-                async_driver, graph_id, connector_id, "failed",
-                error_msg=str(exc)
+                async_driver, graph_id, connector_id, "failed", error_msg=str(exc)
             )
             return {"status": "failed", "error": str(exc)}
 
@@ -1785,9 +1795,12 @@ async def _sync_database_connector_async(
                     # For CDC: only process added/altered tables, soft-delete removed ones
                     added_names = set(changes.get("added_tables", []))
                     removed_names = set(changes.get("removed_tables", []))
-                    altered_names = {a["table"] for a in changes.get("altered_tables", [])}
+                    altered_names = {
+                        a["table"] for a in changes.get("altered_tables", [])
+                    }
                     snapshot.tables = [
-                        t for t in snapshot.tables
+                        t
+                        for t in snapshot.tables
                         if t.name in added_names or t.name in altered_names
                     ]
                     # Soft-delete entities from removed tables
@@ -1822,7 +1835,9 @@ async def _sync_database_connector_async(
                             table.name, config["sample_row_limit"]
                         )
                     except Exception as e:
-                        logger.warning(f"Sample extraction failed for {table.name}: {e}")
+                        logger.warning(
+                            f"Sample extraction failed for {table.name}: {e}"
+                        )
                         tables_failed.append(table.name)
                         continue
 
@@ -1855,12 +1870,17 @@ async def _sync_database_connector_async(
 
             final_status = "success" if not tables_failed else "partial"
             await _worker_update_sync_status(
-                async_driver, graph_id, connector_id, final_status,
+                async_driver,
+                graph_id,
+                connector_id,
+                final_status,
                 row_count=total_entities,
             )
             if tables_failed:
                 await _worker_record_sync_error(
-                    async_driver, graph_id, connector_id,
+                    async_driver,
+                    graph_id,
+                    connector_id,
                     "write_error",
                     f"Failed to process {len(tables_failed)} table(s).",
                     tables_failed=tables_failed,
@@ -1897,8 +1917,8 @@ async def _worker_update_sync_status(
     graph_id: str,
     connector_id: str,
     sync_status: str,
-    row_count: Optional[int] = None,
-    error_msg: Optional[str] = None,
+    row_count: int | None = None,
+    error_msg: str | None = None,
 ) -> None:
     """Update connector sync metadata using the worker's async driver."""
     try:
@@ -1929,7 +1949,7 @@ async def _worker_record_sync_error(
     connector_id: str,
     error_type: str,
     error_message: str,
-    tables_failed: Optional[list] = None,
+    tables_failed: list | None = None,
 ) -> None:
     """Record a ConnectorSyncError node using the worker's async driver."""
     import json as _json

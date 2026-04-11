@@ -10,9 +10,10 @@ Routes:
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
-from fastapi import Response, APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id, get_database, verify_graph_access
@@ -89,7 +90,9 @@ async def register_db_connector(
     request: RegisterDbConnectorRequest,
     user_id: str = Depends(get_current_user_id),
 ) -> DbConnectorResponse:
-    await verify_graph_access(graph_id=graph_id, required_level="write", user_id=user_id)
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
     data = await database_connector_service.register(
         graph_id=graph_id,
         user_id=user_id,
@@ -153,7 +156,9 @@ async def delete_db_connector(
     connector_id: str,
     user_id: str = Depends(get_current_user_id),
 ) -> None:
-    await verify_graph_access(graph_id=graph_id, required_level="write", user_id=user_id)
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
     await database_connector_service.delete_connector(graph_id, connector_id)
 
 
@@ -170,9 +175,11 @@ async def trigger_db_sync(
     request: TriggerDbSyncRequest = TriggerDbSyncRequest(),
     user_id: str = Depends(get_current_user_id),
 ) -> TriggerDbSyncResponse:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    await verify_graph_access(graph_id=graph_id, required_level="write", user_id=user_id)
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
 
     # Confirm connector exists and belongs to this graph before queuing
     connector = await database_connector_service.get_connector(graph_id, connector_id)
@@ -180,6 +187,7 @@ async def trigger_db_sync(
 
     if not request.dry_run:
         from app.services.background_jobs import sync_database_connector
+
         task = sync_database_connector.delay(
             graph_id=graph_id,
             connector_id=connector_id,
@@ -196,7 +204,7 @@ async def trigger_db_sync(
         connector_id=connector_id,
         sync_mode=sync_mode,
         status="queued" if not request.dry_run else "dry_run",
-        queued_at=datetime.now(timezone.utc).isoformat(),
+        queued_at=datetime.now(UTC).isoformat(),
     )
 
 

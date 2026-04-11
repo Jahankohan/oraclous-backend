@@ -20,17 +20,13 @@ Test coverage (spec §8):
 
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-
-from app.core.config import settings
 
 # ---------------------------------------------------------------------------
 # Test constants
@@ -50,8 +46,8 @@ MOCK_TOKEN = "test-db-connector-token"
 @pytest_asyncio.fixture
 async def client():
     """Async HTTP client with mocked auth and graph-access bypass."""
-    from app.main import app
     from app.api.dependencies import get_current_user_id, verify_graph_access
+    from app.main import app
 
     async def _mock_user_id() -> str:
         return TEST_USER_ID
@@ -91,7 +87,7 @@ async def cleanup_neo4j():
 # ---------------------------------------------------------------------------
 
 
-def _register_payload(**overrides) -> Dict[str, Any]:
+def _register_payload(**overrides) -> dict[str, Any]:
     base = {
         "display_name": "Test PG Connector",
         "connector_type": "postgresql",
@@ -182,7 +178,11 @@ async def test_ssrf_loopback_rejected(client: AsyncClient):
         json=_register_payload(host="127.0.0.1"),
     )
     assert resp.status_code == 422
-    assert "private" in resp.text.lower() or "loopback" in resp.text.lower() or "not allowed" in resp.text.lower()
+    assert (
+        "private" in resp.text.lower()
+        or "loopback" in resp.text.lower()
+        or "not allowed" in resp.text.lower()
+    )
 
 
 @pytest.mark.integration
@@ -246,7 +246,10 @@ async def test_sync_without_credentials_records_auth_error(client: AsyncClient):
         )
 
     assert result["status"] == "failed"
-    assert "credential" in result.get("error", "").lower() or "missing" in result.get("error", "").lower()
+    assert (
+        "credential" in result.get("error", "").lower()
+        or "missing" in result.get("error", "").lower()
+    )
 
     # Verify ConnectorSyncError was recorded in Neo4j
     from app.core.neo4j_client import neo4j_client
@@ -269,17 +272,15 @@ async def test_sync_without_credentials_records_auth_error(client: AsyncClient):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_sql_fk_produces_relationship():
+
+    from app.core.neo4j_client import neo4j_client
     from app.services.database_connector_service import (
         ColumnMeta,
-        DatabaseConnectorType,
         DbSyncMode,
         SampleRow,
-        SchemaSnapshot,
         TableMeta,
         write_table_to_kg,
     )
-    from app.core.neo4j_client import neo4j_client
-    from datetime import datetime, timezone
 
     connector_id = str(uuid.uuid4())
     graph_id = TEST_GRAPH_ID
@@ -297,7 +298,9 @@ async def test_sql_fk_produces_relationship():
 
     # Write orders entity with FK
     sample_rows = [
-        SampleRow(table_name="orders", row_data={"id": 1, "customer_id": 42, "total": 99.99})
+        SampleRow(
+            table_name="orders", row_data={"id": 1, "customer_id": 42, "total": 99.99}
+        )
     ]
     await write_table_to_kg(
         graph_id=graph_id,
@@ -317,7 +320,7 @@ async def test_sql_fk_produces_relationship():
     assert entities[0]["e"]["source_connector_id"] == connector_id
 
     # Assert relationship created (REFERENCES_CUSTOMERS)
-    rels = await neo4j_client.execute_query(
+    await neo4j_client.execute_query(
         """
         MATCH (:__Entity__ {graph_id: $g, source_table: 'orders'})
               -[r:REFERENCES_CUSTOMERS]->
@@ -340,15 +343,14 @@ async def test_sql_fk_produces_relationship():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_mongodb_reference_field_produces_relationship():
+    from app.core.neo4j_client import neo4j_client
     from app.services.database_connector_service import (
         ColumnMeta,
-        DatabaseConnectorType,
         DbSyncMode,
         SampleRow,
         TableMeta,
         write_table_to_kg,
     )
-    from app.core.neo4j_client import neo4j_client
 
     connector_id = str(uuid.uuid4())
 
@@ -390,14 +392,13 @@ async def test_mongodb_reference_field_produces_relationship():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_schema_only_mode_no_row_data():
+    from app.core.neo4j_client import neo4j_client
     from app.services.database_connector_service import (
         ColumnMeta,
         DbSyncMode,
-        SampleRow,
         TableMeta,
         write_table_to_kg,
     )
-    from app.core.neo4j_client import neo4j_client
 
     connector_id = str(uuid.uuid4())
     table = TableMeta(
@@ -434,6 +435,7 @@ async def test_schema_only_mode_no_row_data():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_cdc_upsert_no_duplicates():
+    from app.core.neo4j_client import neo4j_client
     from app.services.database_connector_service import (
         ColumnMeta,
         DbSyncMode,
@@ -441,7 +443,6 @@ async def test_cdc_upsert_no_duplicates():
         TableMeta,
         write_table_to_kg,
     )
-    from app.core.neo4j_client import neo4j_client
 
     connector_id = str(uuid.uuid4())
     table = TableMeta(
@@ -477,7 +478,9 @@ async def test_cdc_upsert_no_duplicates():
         "MATCH (e:__Entity__ {graph_id: $g, source_table: 'users'}) RETURN e",
         {"g": TEST_GRAPH_ID},
     )
-    assert len(entities) == 1, f"Expected 1 entity, got {len(entities)} (duplicate created)"
+    assert (
+        len(entities) == 1
+    ), f"Expected 1 entity, got {len(entities)} (duplicate created)"
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +491,7 @@ async def test_cdc_upsert_no_duplicates():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_multi_tenant_isolation():
+    from app.core.neo4j_client import neo4j_client
     from app.services.database_connector_service import (
         ColumnMeta,
         DbSyncMode,
@@ -495,7 +499,6 @@ async def test_multi_tenant_isolation():
         TableMeta,
         write_table_to_kg,
     )
-    from app.core.neo4j_client import neo4j_client
 
     connector_id_a = str(uuid.uuid4())
     connector_id_b = str(uuid.uuid4())
@@ -543,8 +546,8 @@ async def test_multi_tenant_isolation():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_sync_status_written_to_connector_node(client: AsyncClient):
-    from app.services.database_connector_service import database_connector_service
     from app.core.neo4j_client import neo4j_client
+    from app.services.database_connector_service import database_connector_service
 
     r = await client.post(
         f"/api/v1/graphs/{TEST_GRAPH_ID}/connectors/database",
@@ -576,8 +579,8 @@ async def test_sync_status_written_to_connector_node(client: AsyncClient):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_error_history_pruned_to_ten(client: AsyncClient):
-    from app.services.database_connector_service import database_connector_service
     from app.core.neo4j_client import neo4j_client
+    from app.services.database_connector_service import database_connector_service
 
     r = await client.post(
         f"/api/v1/graphs/{TEST_GRAPH_ID}/connectors/database",

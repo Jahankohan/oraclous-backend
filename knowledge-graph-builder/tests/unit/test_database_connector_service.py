@@ -3,7 +3,7 @@
 No Neo4j or DB connections required — all helpers are pure Python functions.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
@@ -68,7 +68,7 @@ def _make_snapshot(tables: list[TableMeta]) -> SchemaSnapshot:
         connector_type=DatabaseConnectorType.POSTGRESQL,
         database="testdb",
         tables=tables,
-        captured_at=datetime.now(timezone.utc),
+        captured_at=datetime.now(UTC),
     )
 
 

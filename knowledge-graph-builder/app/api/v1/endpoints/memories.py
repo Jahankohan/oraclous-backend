@@ -12,7 +12,7 @@ Agent Memory API Endpoints
 
 from __future__ import annotations
 
-from fastapi import Response, APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.dependencies import get_current_user_id, verify_graph_access
 from app.core.logging import get_logger
