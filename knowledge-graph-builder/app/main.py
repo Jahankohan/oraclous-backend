@@ -68,6 +68,11 @@ async def lifespan(app: FastAPI):
 
         await service_account_service.initialize_schema(neo4j_client.async_driver)
 
+        # Ensure Memory API Neo4j indexes (idempotent, IF NOT EXISTS)
+        from app.services.memory_service import ensure_memory_indexes
+
+        await ensure_memory_indexes()
+
         logger.info("All services initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")

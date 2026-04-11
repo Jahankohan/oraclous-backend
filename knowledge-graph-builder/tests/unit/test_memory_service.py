@@ -386,3 +386,60 @@ class TestMemoryRetriever:
 
         assert len(results) == 1
         assert results[0]["memory_id"] == "m1"
+
+
+# ============================================================
+# ensure_memory_indexes
+# ============================================================
+
+
+class TestEnsureMemoryIndexes:
+    @pytest.mark.unit
+    async def test_calls_all_four_index_queries(self):
+        from app.services.memory_service import ensure_memory_indexes
+
+        write_mock = AsyncMock()
+        query_mock = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "app.services.memory_service.neo4j_client.execute_write_query",
+                write_mock,
+            ),
+            patch(
+                "app.services.memory_service.neo4j_client.execute_query",
+                query_mock,
+            ),
+        ):
+            await ensure_memory_indexes()
+
+        assert write_mock.call_count == 4
+        called_queries = [call.args[0] for call in write_mock.call_args_list]
+        assert any("memory_embedding_idx" in q for q in called_queries)
+        assert any("memory_content_idx" in q for q in called_queries)
+        assert any("memory_graph_scope_idx" in q for q in called_queries)
+        assert any("memory_content_hash_idx" in q for q in called_queries)
+
+    @pytest.mark.unit
+    async def test_continues_on_index_creation_error(self):
+        """A failing index query should be swallowed (IF NOT EXISTS race) and remaining indexes created."""
+        from app.services.memory_service import ensure_memory_indexes
+
+        write_mock = AsyncMock(
+            side_effect=[Exception("already exists"), None, None, None]
+        )
+        query_mock = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "app.services.memory_service.neo4j_client.execute_write_query",
+                write_mock,
+            ),
+            patch(
+                "app.services.memory_service.neo4j_client.execute_query",
+                query_mock,
+            ),
+        ):
+            await ensure_memory_indexes()  # must not raise
+
+        assert write_mock.call_count == 4

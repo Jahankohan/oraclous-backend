@@ -810,5 +810,39 @@ class MemoryService:
         )
 
 
+async def ensure_memory_indexes() -> None:
+    """
+    Create Neo4j indexes required for the Agent Memory API. Idempotent.
+    Called once at application startup (do NOT call neo4j_client.connect/close here).
+    """
+    index_queries = [
+        # 1. Vector index — semantic similarity search on Memory nodes
+        """
+        CREATE VECTOR INDEX memory_embedding_idx IF NOT EXISTS
+        FOR (m:Memory) ON m.embedding
+        OPTIONS {indexConfig: {
+          `vector.dimensions`: 3072,
+          `vector.similarity_function`: 'cosine'
+        }}
+        """,
+        # 2. Fulltext index — keyword recall across memory content
+        "CREATE FULLTEXT INDEX memory_content_idx IF NOT EXISTS FOR (m:Memory) ON EACH [m.content]",
+        # 3. Composite lookup — graph-scoped queries by scope/type/validity
+        "CREATE INDEX memory_graph_scope_idx IF NOT EXISTS FOR (m:Memory) ON (m.graph_id, m.scope, m.memory_type, m.valid_to)",
+        # 4. Deduplication — content hash within graph
+        "CREATE INDEX memory_content_hash_idx IF NOT EXISTS FOR (m:Memory) ON (m.graph_id, m.content_hash)",
+    ]
+    for q in index_queries:
+        try:
+            await neo4j_client.execute_write_query(q)
+        except Exception as e:
+            logger.warning(f"Memory index creation skipped: {e}")
+
+    indexes = await neo4j_client.execute_query(
+        "SHOW INDEXES WHERE labelsOrTypes = ['Memory']", {}
+    )
+    logger.info(f"Memory indexes present: {len(indexes)}")
+
+
 # Global service instance
 memory_service = MemoryService()
