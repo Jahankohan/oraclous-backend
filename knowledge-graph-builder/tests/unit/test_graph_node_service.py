@@ -403,6 +403,48 @@ class TestUpdateGraph:
         with pytest.raises(Exception, match="Failed to update graph"):
             svc.update_graph("g-1", "user-1", name="New Name")
 
+    @pytest.mark.unit
+    def test_update_graph_federatable_syncs_shadow_node(self):
+        """When federatable is updated, the Cypher must also SET shadow.federatable
+        so that federation_service reads the correct flag from the ReBAC shadow node.
+        """
+        mock_driver, mock_session, mock_result, _ = _make_driver()
+        mock_result.single.return_value = None  # return value doesn't matter here
+
+        svc = GraphNodeService(mock_driver)
+        svc.update_graph("g-1", "user-1", federatable=True)
+
+        call_args = mock_session.run.call_args
+        query: str = call_args[0][0] if call_args[0] else ""
+        params: dict = call_args[0][1] if len(call_args[0]) > 1 else call_args[1]
+
+        assert (
+            'namespace: "__system__"' in query
+        ), "Shadow node OPTIONAL MATCH missing from query when federatable is updated"
+        assert (
+            "shadow.federatable" in query
+        ), "SET shadow.federatable missing from query when federatable is updated"
+        assert params.get("federatable") is True
+        assert params.get("graph_id") == "g-1"
+
+    @pytest.mark.unit
+    def test_update_graph_no_shadow_sync_when_federatable_not_provided(self):
+        """When federatable is not in the update payload, the shadow node must NOT
+        be touched (avoids unnecessary writes and respects separation of concerns).
+        """
+        mock_driver, mock_session, mock_result, _ = _make_driver()
+        mock_result.single.return_value = None
+
+        svc = GraphNodeService(mock_driver)
+        svc.update_graph("g-1", "user-1", name="Renamed")
+
+        call_args = mock_session.run.call_args
+        query: str = call_args[0][0] if call_args[0] else ""
+
+        assert (
+            "shadow" not in query
+        ), "Shadow node must not appear in query when federatable is not being updated"
+
 
 # ---------------------------------------------------------------------------
 # Tests: migrate_relationship_properties
