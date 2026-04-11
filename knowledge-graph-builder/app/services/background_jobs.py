@@ -473,7 +473,9 @@ async def _process_pipeline_ingestion_async(
                 state="PROGRESS",
                 meta={
                     "progress": 30,
-                    "status": f"Processing {len(documents)} document(s) through pipeline",
+                    "status": (
+                        f"Processing {len(documents)} document(s) through pipeline"
+                    ),
                 },
             )
 
@@ -535,7 +537,9 @@ async def _process_pipeline_ingestion_async(
                     state="PROGRESS",
                     meta={
                         "progress": 80,
-                        "status": f"Pipeline completed: {entities_created} entities, {relationships_created} relationships, {chunks_created} chunks",
+                        "status": (
+                            f"Pipeline completed: {entities_created} entities, {relationships_created} relationships, {chunks_created} chunks"
+                        ),
                     },
                 )
         elif pipeline_result["status"] == "processing":
@@ -545,7 +549,9 @@ async def _process_pipeline_ingestion_async(
                     state="PROGRESS",
                     meta={
                         "progress": 50,
-                        "status": "Documents processing in background - monitoring progress",
+                        "status": (
+                            "Documents processing in background - monitoring progress"
+                        ),
                     },
                 )
 
@@ -1030,7 +1036,9 @@ def async_rollback_graph(
                         "vid": chk_id,
                         "gid": graph_id,
                         "label": f"pre-rollback-{now_iso[:19]}",
-                        "desc": f"Auto-checkpoint before async rollback to {version_id}",
+                        "desc": (
+                            f"Auto-checkpoint before async rollback to {version_id}"
+                        ),
                         "ts": now_iso,
                         "by": performed_by,
                     },
@@ -1284,7 +1292,9 @@ async def _process_image_ingestion_async(
                 state="PROGRESS",
                 meta={
                     "progress": 40,
-                    "status": f"Vision extraction complete: {entity_count} entities, {rel_count} relationships",
+                    "status": (
+                        f"Vision extraction complete: {entity_count} entities, {rel_count} relationships"
+                    ),
                 },
             )
 
