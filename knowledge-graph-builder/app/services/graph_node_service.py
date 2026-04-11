@@ -278,10 +278,11 @@ class GraphNodeService:
 
         if federatable is not None:
             # Sync shadow node atomically so federation_service reads the updated flag.
-            # OPTIONAL MATCH is a no-op when the shadow node does not yet exist.
+            # MERGE ensures the shadow node is created if it does not yet exist.
+            # Only SET shadow.federatable — never overwrite owner_user_id, graph_name, etc.
             query = f"""
         MATCH (g:Graph {{graph_id: $graph_id, user_id: $user_id}})
-        OPTIONAL MATCH (shadow:Graph {{graph_id: $graph_id, namespace: "__system__"}})
+        MERGE (shadow:Graph {{graph_id: $graph_id, namespace: "__system__"}})
         SET {set_clause}, shadow.federatable = $federatable
         RETURN g {{
             .graph_id,
