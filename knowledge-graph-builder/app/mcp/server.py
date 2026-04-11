@@ -39,6 +39,8 @@ from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # ---------------------------------------------------------------------------
 # Ensure the knowledge-graph-builder package root is on sys.path so that
@@ -154,6 +156,16 @@ mcp = FastMCP(
     ),
     lifespan=_lifespan,
 )
+
+# ---------------------------------------------------------------------------
+# Health check — used by Docker HEALTHCHECK and load-balancer probes
+# ---------------------------------------------------------------------------
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
 
 # ===========================================================================
 # 1 – Graph Management
