@@ -153,12 +153,6 @@ services:
         condition: service_healthy
     volumes:
       - ./knowledge-graph-builder/app:/app/app
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/sse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
     networks:
       - app-network
 
