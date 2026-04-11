@@ -73,6 +73,11 @@ async def lifespan(app: FastAPI):
 
         await ensure_memory_indexes()
 
+        # Initialize Database Connector Neo4j constraints + indexes (ORA-77)
+        from app.services.database_connector_service import database_connector_service
+
+        await database_connector_service.ensure_constraints()
+
         logger.info("All services initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")

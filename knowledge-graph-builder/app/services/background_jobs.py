@@ -473,7 +473,9 @@ async def _process_pipeline_ingestion_async(
                 state="PROGRESS",
                 meta={
                     "progress": 30,
-                    "status": f"Processing {len(documents)} document(s) through pipeline",
+                    "status": (
+                        f"Processing {len(documents)} document(s) through pipeline"
+                    ),
                 },
             )
 
@@ -535,7 +537,9 @@ async def _process_pipeline_ingestion_async(
                     state="PROGRESS",
                     meta={
                         "progress": 80,
-                        "status": f"Pipeline completed: {entities_created} entities, {relationships_created} relationships, {chunks_created} chunks",
+                        "status": (
+                            f"Pipeline completed: {entities_created} entities, {relationships_created} relationships, {chunks_created} chunks"
+                        ),
                     },
                 )
         elif pipeline_result["status"] == "processing":
@@ -545,7 +549,9 @@ async def _process_pipeline_ingestion_async(
                     state="PROGRESS",
                     meta={
                         "progress": 50,
-                        "status": "Documents processing in background - monitoring progress",
+                        "status": (
+                            "Documents processing in background - monitoring progress"
+                        ),
                     },
                 )
 
@@ -1030,7 +1036,9 @@ def async_rollback_graph(
                         "vid": chk_id,
                         "gid": graph_id,
                         "label": f"pre-rollback-{now_iso[:19]}",
-                        "desc": f"Auto-checkpoint before async rollback to {version_id}",
+                        "desc": (
+                            f"Auto-checkpoint before async rollback to {version_id}"
+                        ),
                         "ts": now_iso,
                         "by": performed_by,
                     },
@@ -1284,7 +1292,9 @@ async def _process_image_ingestion_async(
                 state="PROGRESS",
                 meta={
                     "progress": 40,
-                    "status": f"Vision extraction complete: {entity_count} entities, {rel_count} relationships",
+                    "status": (
+                        f"Vision extraction complete: {entity_count} entities, {rel_count} relationships"
+                    ),
                 },
             )
 
@@ -1640,3 +1650,349 @@ def code_ingest_task(self, job_id: str, user_id: str) -> dict[str, Any]:
             logger.error(f"Failed to update code job status: {status_err}")
         stats.errors.append(str(exc))
         return {"status": "failed", "job_id": job_id, "error": str(exc)}
+
+
+# ===========================================================================
+# Database connector sync task (ORA-77)
+# ===========================================================================
+
+
+@celery_app.task(bind=True)
+def sync_database_connector(
+    self,
+    graph_id: str,
+    connector_id: str,
+    user_id: str,
+    sync_mode_override: str | None = None,
+    table_filter_override: list | None = None,
+) -> dict[str, Any]:
+    """Celery task: sync a database connector (PostgreSQL/MySQL/MongoDB) into Neo4j.
+
+    Uses WorkerNeo4jManager (async, NullPool) for task-scoped Neo4j connections.
+    Credentials are fetched from the credential broker — never stored.
+    """
+    return AsyncTaskExecutor.run_async_task(
+        _sync_database_connector_async,
+        self,
+        graph_id,
+        connector_id,
+        user_id,
+        sync_mode_override,
+        table_filter_override,
+    )
+
+
+async def _sync_database_connector_async(
+    task,
+    graph_id: str,
+    connector_id: str,
+    user_id: str,
+    sync_mode_override: str | None,
+    table_filter_override: list | None,
+) -> dict[str, Any]:
+    """Async implementation of the database connector sync task."""
+    from app.services.credential_service import credential_service
+    from app.services.database_connector_service import (
+        DatabaseConnectorType,
+        DbSyncMode,
+        SchemaSnapshot,
+        make_connector,
+        write_table_to_kg,
+    )
+
+    logger.info(
+        f"Starting database connector sync: connector={connector_id} graph={graph_id}"
+    )
+
+    async with WorkerNeo4jManager() as neo4j:
+        async_driver = neo4j.get_async_driver()
+
+        # ------------------------------------------------------------------
+        # Load connector config from Neo4j
+        # ------------------------------------------------------------------
+        records, _, _ = await async_driver.execute_query(
+            """
+            MATCH (c:Connector {graph_id: $graph_id, connector_id: $connector_id})
+            WHERE c.status <> 'deleted'
+            RETURN c
+            """,
+            {"graph_id": graph_id, "connector_id": connector_id},
+        )
+        if not records:
+            return {"status": "failed", "error": f"Connector {connector_id} not found."}
+
+        connector_node = dict(records[0]["c"])
+        connector_type = DatabaseConnectorType(connector_node["connector_type"])
+        sync_mode = DbSyncMode(sync_mode_override or connector_node["sync_mode"])
+        table_filter = table_filter_override or (
+            __import__("json").loads(connector_node["table_filter"])
+            if connector_node.get("table_filter")
+            else None
+        )
+
+        config = {
+            "host": connector_node["host"],
+            "port": connector_node["port"],
+            "database": connector_node["database"],
+            "schema_filter": connector_node.get("schema_filter"),
+            "table_filter": table_filter,
+            "sample_row_limit": connector_node.get("sample_row_limit", 100),
+        }
+
+        # ------------------------------------------------------------------
+        # Fetch credentials from broker
+        # ------------------------------------------------------------------
+        creds = await credential_service.get_user_credentials(
+            user_id, f"db:{connector_id}"
+        )
+        if not creds:
+            await _worker_record_sync_error(
+                async_driver,
+                graph_id,
+                connector_id,
+                "auth_error",
+                "No credentials found in credential broker.",
+            )
+            await _worker_update_sync_status(
+                async_driver,
+                graph_id,
+                connector_id,
+                "failed",
+                error_msg="No credentials registered for this connector.",
+            )
+            return {"status": "failed", "error": "Missing credentials."}
+
+        db_user = (
+            creds.get("username") or creds.get("user") or creds.get("access_token", "")
+        )
+        db_password = creds.get("password") or creds.get("secret", "")
+
+        # ------------------------------------------------------------------
+        # Connect to source database
+        # ------------------------------------------------------------------
+        connector = make_connector(connector_type, config)
+        try:
+            await connector.connect(db_user, db_password)
+        except Exception as exc:
+            logger.error(f"DB connector {connector_id} connect failed: {exc}")
+            await _worker_record_sync_error(
+                async_driver, graph_id, connector_id, "connection_failed", str(exc)
+            )
+            await _worker_update_sync_status(
+                async_driver, graph_id, connector_id, "failed", error_msg=str(exc)
+            )
+            return {"status": "failed", "error": str(exc)}
+
+        total_entities = 0
+        tables_failed: list = []
+
+        try:
+            # ------------------------------------------------------------------
+            # Schema introspection
+            # ------------------------------------------------------------------
+            snapshot = await connector.introspect_schema()
+
+            # ------------------------------------------------------------------
+            # CDC: detect schema changes against previous snapshot
+            # ------------------------------------------------------------------
+            if sync_mode == DbSyncMode.CDC:
+                prev_snapshot_json = connector_node.get("last_schema_snapshot")
+                if prev_snapshot_json:
+                    prev_snapshot = SchemaSnapshot.from_json(prev_snapshot_json)
+                    changes = await connector.detect_schema_changes(prev_snapshot)
+                    # For CDC: only process added/altered tables, soft-delete removed ones
+                    added_names = set(changes.get("added_tables", []))
+                    removed_names = set(changes.get("removed_tables", []))
+                    altered_names = {
+                        a["table"] for a in changes.get("altered_tables", [])
+                    }
+                    snapshot.tables = [
+                        t
+                        for t in snapshot.tables
+                        if t.name in added_names or t.name in altered_names
+                    ]
+                    # Soft-delete entities from removed tables
+                    for tname in removed_names:
+                        try:
+                            await async_driver.execute_query(
+                                """
+                                MATCH (e:__Entity__ {
+                                    graph_id: $graph_id,
+                                    source_connector_id: $connector_id,
+                                    source_table: $table_name
+                                })
+                                SET e.staleAt = datetime().epochMillis
+                                """,
+                                {
+                                    "graph_id": graph_id,
+                                    "connector_id": connector_id,
+                                    "table_name": tname,
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"CDC soft-delete failed for {tname}: {e}")
+
+            # ------------------------------------------------------------------
+            # Write each table to Neo4j
+            # ------------------------------------------------------------------
+            for table in snapshot.tables:
+                sample_rows = []
+                if sync_mode != DbSyncMode.SCHEMA_ONLY:
+                    try:
+                        sample_rows = await connector.extract_sample_data(
+                            table.name, config["sample_row_limit"]
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Sample extraction failed for {table.name}: {e}"
+                        )
+                        tables_failed.append(table.name)
+                        continue
+
+                try:
+                    count = await write_table_to_kg(
+                        graph_id=graph_id,
+                        connector_id=connector_id,
+                        table=table,
+                        sync_mode=sync_mode,
+                        sample_rows=sample_rows,
+                        driver=async_driver,
+                    )
+                    total_entities += count
+                except Exception as e:
+                    logger.warning(f"KG write failed for {table.name}: {e}")
+                    tables_failed.append(table.name)
+
+            # Store snapshot for future CDC runs
+            await async_driver.execute_query(
+                """
+                MATCH (c:Connector {graph_id: $graph_id, connector_id: $connector_id})
+                SET c.last_schema_snapshot = $snapshot
+                """,
+                {
+                    "graph_id": graph_id,
+                    "connector_id": connector_id,
+                    "snapshot": snapshot.to_json(),
+                },
+            )
+
+            final_status = "success" if not tables_failed else "partial"
+            await _worker_update_sync_status(
+                async_driver,
+                graph_id,
+                connector_id,
+                final_status,
+                row_count=total_entities,
+            )
+            if tables_failed:
+                await _worker_record_sync_error(
+                    async_driver,
+                    graph_id,
+                    connector_id,
+                    "write_error",
+                    f"Failed to process {len(tables_failed)} table(s).",
+                    tables_failed=tables_failed,
+                )
+
+            logger.info(
+                f"DB connector sync complete: connector={connector_id} "
+                f"entities={total_entities} failed_tables={tables_failed}"
+            )
+            return {
+                "status": final_status,
+                "connector_id": connector_id,
+                "sync_mode": sync_mode.value,
+                "entities_written": total_entities,
+                "tables_failed": tables_failed,
+            }
+
+        except Exception as exc:
+            logger.error(f"DB connector sync failed: {exc}", exc_info=True)
+            await _worker_record_sync_error(
+                async_driver, graph_id, connector_id, "schema_error", str(exc)
+            )
+            await _worker_update_sync_status(
+                async_driver, graph_id, connector_id, "failed", error_msg=str(exc)
+            )
+            return {"status": "failed", "error": str(exc)}
+
+        finally:
+            await connector.close()
+
+
+async def _worker_update_sync_status(
+    driver,
+    graph_id: str,
+    connector_id: str,
+    sync_status: str,
+    row_count: int | None = None,
+    error_msg: str | None = None,
+) -> None:
+    """Update connector sync metadata using the worker's async driver."""
+    try:
+        await driver.execute_query(
+            """
+            MATCH (c:Connector {graph_id: $graph_id, connector_id: $connector_id})
+            SET c.last_sync_at        = datetime().epochMillis,
+                c.last_sync_status    = $sync_status,
+                c.last_sync_error     = $error_msg,
+                c.last_sync_row_count = $row_count,
+                c.updated_at          = datetime().epochMillis
+            """,
+            {
+                "graph_id": graph_id,
+                "connector_id": connector_id,
+                "sync_status": sync_status,
+                "error_msg": error_msg,
+                "row_count": row_count,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to update sync status for {connector_id}: {e}")
+
+
+async def _worker_record_sync_error(
+    driver,
+    graph_id: str,
+    connector_id: str,
+    error_type: str,
+    error_message: str,
+    tables_failed: list | None = None,
+) -> None:
+    """Record a ConnectorSyncError node using the worker's async driver."""
+    import json as _json
+    import uuid as _uuid
+
+    try:
+        await driver.execute_query(
+            """
+            MATCH (c:Connector {graph_id: $graph_id, connector_id: $connector_id})
+            CREATE (e:ConnectorSyncError {
+                error_id:      $error_id,
+                connector_id:  $connector_id,
+                graph_id:      $graph_id,
+                occurred_at:   datetime().epochMillis,
+                error_type:    $error_type,
+                error_message: $error_message,
+                tables_failed: $tables_failed
+            })
+            CREATE (c)-[:HAD_SYNC_ERROR {occurred_at: datetime().epochMillis}]->(e)
+            WITH c
+            MATCH (c)-[:HAD_SYNC_ERROR]->(old:ConnectorSyncError)
+            WITH c, old ORDER BY old.occurred_at ASC
+            WITH c, collect(old) AS all_errors
+            WHERE size(all_errors) > 10
+            UNWIND all_errors[..size(all_errors) - 10] AS stale
+            DETACH DELETE stale
+            """,
+            {
+                "graph_id": graph_id,
+                "connector_id": connector_id,
+                "error_id": str(_uuid.uuid4()),
+                "error_type": error_type,
+                "error_message": error_message,
+                "tables_failed": _json.dumps(tables_failed) if tables_failed else None,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to record sync error for {connector_id}: {e}")

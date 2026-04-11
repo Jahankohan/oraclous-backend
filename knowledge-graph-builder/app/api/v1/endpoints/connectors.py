@@ -1,13 +1,19 @@
-"""Connector management endpoints (ORA-78).
+"""Connector management endpoints (ORA-78, ORA-77).
 
 All endpoints enforce graph-level ownership via verify_graph_access (ReBAC).
+
+Routes:
+  /connector-templates             — built-in connector templates
+  /graphs/{id}/connectors/database — database connector CRUD (ORA-77, Neo4j-backed)
+  /graphs/{id}/connectors          — API/webhook connector CRUD (ORA-78, PostgreSQL-backed)
 """
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id, get_database, verify_graph_access
@@ -16,11 +22,22 @@ from app.schemas.connector_schemas import (
     ConnectorListResponse,
     ConnectorResponse,
     ConnectorTemplate,
+    DbConnectorDetailResponse,
+    DbConnectorListResponse,
+    DbConnectorResponse,
     RegisterConnectorRequest,
+    RegisterDbConnectorRequest,
     SyncLogListResponse,
+    TriggerDbSyncRequest,
+    TriggerDbSyncResponse,
     UpdateConnectorRequest,
 )
 from app.services.connector_service import connector_service
+from app.services.database_connector_service import (
+    DatabaseConnectorType,
+    DbSyncMode,
+    database_connector_service,
+)
 
 router = APIRouter()
 
@@ -54,8 +71,145 @@ async def get_connector_template(connector_type: str) -> ConnectorTemplate:
     return template
 
 
+# ===========================================================================
+# Database connector endpoints (ORA-77) — Neo4j-backed
+# NOTE: /connectors/database routes MUST appear before /connectors/{connector_id}
+#       to avoid FastAPI treating "database" as a connector_id path parameter.
+# ===========================================================================
+
+
+@router.post(
+    "/graphs/{graph_id}/connectors/database",
+    response_model=DbConnectorResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a database connector (PostgreSQL / MySQL / MongoDB)",
+    tags=["database-connectors"],
+)
+async def register_db_connector(
+    graph_id: str,
+    request: RegisterDbConnectorRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> DbConnectorResponse:
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
+    data = await database_connector_service.register(
+        graph_id=graph_id,
+        user_id=user_id,
+        display_name=request.display_name,
+        connector_type=DatabaseConnectorType(request.connector_type),
+        host=request.host,
+        port=request.port,
+        database=request.database,
+        sync_mode=DbSyncMode(request.sync_mode),
+        schema_filter=request.schema_filter,
+        table_filter=request.table_filter,
+        sample_row_limit=request.sample_row_limit,
+    )
+    return DbConnectorResponse(**data)
+
+
+@router.get(
+    "/graphs/{graph_id}/connectors/database",
+    response_model=DbConnectorListResponse,
+    summary="List database connectors for a graph",
+    tags=["database-connectors"],
+)
+async def list_db_connectors(
+    graph_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> DbConnectorListResponse:
+    await verify_graph_access(graph_id=graph_id, required_level="read", user_id=user_id)
+    connectors = await database_connector_service.list_connectors(graph_id)
+    return DbConnectorListResponse(
+        connectors=[DbConnectorResponse(**c) for c in connectors],
+        total=len(connectors),
+    )
+
+
+@router.get(
+    "/graphs/{graph_id}/connectors/database/{connector_id}",
+    response_model=DbConnectorDetailResponse,
+    summary="Get database connector detail (with last 5 sync errors)",
+    tags=["database-connectors"],
+)
+async def get_db_connector(
+    graph_id: str,
+    connector_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> DbConnectorDetailResponse:
+    await verify_graph_access(graph_id=graph_id, required_level="read", user_id=user_id)
+    data = await database_connector_service.get_connector(graph_id, connector_id)
+    return DbConnectorDetailResponse(**data)
+
+
+@router.delete(
+    "/graphs/{graph_id}/connectors/database/{connector_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+    summary="Soft-delete a database connector",
+    tags=["database-connectors"],
+)
+async def delete_db_connector(
+    graph_id: str,
+    connector_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> None:
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
+    await database_connector_service.delete_connector(graph_id, connector_id)
+
+
+@router.post(
+    "/graphs/{graph_id}/connectors/database/{connector_id}/sync",
+    response_model=TriggerDbSyncResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Trigger a database connector sync (enqueues Celery task)",
+    tags=["database-connectors"],
+)
+async def trigger_db_sync(
+    graph_id: str,
+    connector_id: str,
+    request: TriggerDbSyncRequest = TriggerDbSyncRequest(),
+    user_id: str = Depends(get_current_user_id),
+) -> TriggerDbSyncResponse:
+    from datetime import datetime
+
+    await verify_graph_access(
+        graph_id=graph_id, required_level="write", user_id=user_id
+    )
+
+    # Confirm connector exists and belongs to this graph before queuing
+    connector = await database_connector_service.get_connector(graph_id, connector_id)
+    sync_mode = request.sync_mode or connector["sync_mode"]
+
+    if not request.dry_run:
+        from app.services.background_jobs import sync_database_connector
+
+        task = sync_database_connector.delay(
+            graph_id=graph_id,
+            connector_id=connector_id,
+            user_id=user_id,
+            sync_mode_override=sync_mode,
+            table_filter_override=request.table_filter,
+        )
+        job_id = task.id
+    else:
+        job_id = "dry-run"
+
+    return TriggerDbSyncResponse(
+        job_id=job_id,
+        connector_id=connector_id,
+        sync_mode=sync_mode,
+        status="queued" if not request.dry_run else "dry_run",
+        queued_at=datetime.now(UTC).isoformat(),
+    )
+
+
 # ---------------------------------------------------------------------------
-# Connector CRUD
+# API/webhook connector CRUD (ORA-78) — PostgreSQL-backed
 # ---------------------------------------------------------------------------
 
 

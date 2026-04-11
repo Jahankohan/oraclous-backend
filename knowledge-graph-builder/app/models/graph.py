@@ -154,7 +154,7 @@ class ConnectorSyncLog(Base):
     items_processed = Column(Integer, nullable=False, server_default="0")
     entities_extracted = Column(Integer, nullable=False, server_default="0")
     error_message = Column(Text, nullable=True)
-    sync_metadata = Column("metadata", JSONB, nullable=True)
+    sync_metadata = Column("metadata", JSONB, nullable=True)  # reserved name workaround
 
 
 class WebhookEvent(Base):
