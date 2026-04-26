@@ -2001,35 +2001,28 @@ async def _worker_record_sync_error(
 # ==================== BITEMPORAL MIGRATION TASK ====================
 
 
-@celery_app.task(bind=True, name="app.services.background_jobs.run_bitemporal_migration_v1")
-def run_bitemporal_migration_v1(self) -> dict[str, Any]:
+@celery_app.task(
+    bind=True,
+    name="app.services.background_jobs._run_bitemporal_migration_for_graph",
+)
+def _run_bitemporal_migration_for_graph(self, graph_id: str) -> dict[str, Any]:
     """
-    One-off idempotent migration: backfill event_time, ingestion_time, and
-    ingestion_source onto all existing __Entity__ nodes and relationships that
-    were ingested before TASK-005 shipped.
+    Per-graph worker: backfill event_time, ingestion_time, and ingestion_source
+    onto __Entity__ nodes and relationships for a single graph_id.
 
-    Guard: the task checks for a (:Migration {id: 'bitemporal-v1', done: true})
-    node at the start and skips immediately if it exists.  On completion it
-    creates that node so re-runs are no-ops.
-
-    Migration Cypher applied:
-      MATCH (e:__Entity__) WHERE e.event_time IS NULL
-      SET e.event_time = e.ingested_at,
-          e.ingestion_time = e.ingested_at,
-          e.ingestion_source = 'pre-migration'
-
-      MATCH ()-[r]->() WHERE r.event_time IS NULL AND r.ingested_at IS NOT NULL
-      SET r.event_time = r.ingested_at,
-          r.ingestion_time = r.ingested_at,
-          r.ingestion_source = 'pre-migration'
+    Guard: atomic MERGE on (:Migration {id: 'bitemporal-v1-<graph_id>'}) with
+    ON CREATE SET done=false ensures only one worker runs per graph even under
+    concurrent dispatch.  Sets done=true on completion.
 
     Follows the dual-driver rule: task-scoped sync Neo4j driver with NullPool.
     """
     from neo4j import GraphDatabase
 
-    MIGRATION_ID = "bitemporal-v1"
+    migration_id = f"bitemporal-v1-{graph_id}"
 
-    logger.info(f"Starting bitemporal migration '{MIGRATION_ID}'")
+    logger.info(
+        f"Starting bitemporal migration for graph '{graph_id}' (guard={migration_id})"
+    )
 
     driver = GraphDatabase.driver(
         settings.NEO4J_URI,
@@ -2038,58 +2031,70 @@ def run_bitemporal_migration_v1(self) -> dict[str, Any]:
     )
     try:
         with driver.session(database=settings.NEO4J_DATABASE) as session:
-            # Guard: skip if migration already ran
+            # Atomic guard: create the Migration node if it doesn't exist and
+            # return whether it was already marked done.  A single MERGE avoids
+            # the TOCTOU race between a separate check and create.
             guard_result = session.run(
-                "MATCH (m:Migration {id: $migration_id, done: true}) RETURN count(m) AS cnt",
-                {"migration_id": MIGRATION_ID},
+                """
+                MERGE (m:Migration {id: $migration_id})
+                ON CREATE SET m.done = false, m.started_at = datetime()
+                RETURN m.done AS already_done
+                """,
+                {"migration_id": migration_id},
             ).single()
-            if guard_result and guard_result["cnt"] > 0:
+            if guard_result and guard_result["already_done"]:
                 logger.info(
-                    f"Bitemporal migration '{MIGRATION_ID}' already completed — skipping"
+                    f"Bitemporal migration '{migration_id}' already completed — skipping"
                 )
-                return {"status": "skipped", "migration_id": MIGRATION_ID}
+                return {
+                    "status": "skipped",
+                    "migration_id": migration_id,
+                    "graph_id": graph_id,
+                }
 
-            # Backfill entity nodes: set event_time, ingestion_time, ingestion_source
-            # where event_time is not yet set.  Use ingested_at as best-effort value.
+            # Backfill entity nodes scoped to this graph_id only.
             entity_result = session.run(
                 """
                 MATCH (e:__Entity__)
                 WHERE e.event_time IS NULL
+                  AND e.graph_id = $graph_id
                 SET e.event_time       = coalesce(e.ingested_at, e.ingestedAt, datetime()),
                     e.ingestion_time   = coalesce(e.ingested_at, e.ingestedAt, datetime()),
                     e.ingestion_source = 'pre-migration'
                 RETURN count(e) AS updated
-                """
+                """,
+                {"graph_id": graph_id},
             ).single()
             entities_updated = int(entity_result["updated"]) if entity_result else 0
 
-            # Backfill relationships: set event_time, ingestion_time, ingestion_source
-            # only where ingested_at exists (relationships without any timestamp are left alone).
+            # Backfill relationships scoped to this graph_id only.
             rel_result = session.run(
                 """
                 MATCH ()-[r]->()
                 WHERE r.event_time IS NULL
                   AND (r.ingested_at IS NOT NULL OR r.transaction_time IS NOT NULL)
+                  AND r.graph_id = $graph_id
                 SET r.event_time       = coalesce(r.ingested_at, r.transaction_time),
                     r.ingestion_time   = coalesce(r.ingested_at, r.transaction_time),
                     r.ingestion_source = 'pre-migration'
                 RETURN count(r) AS updated
-                """
+                """,
+                {"graph_id": graph_id},
             ).single()
             rels_updated = int(rel_result["updated"]) if rel_result else 0
 
-            # Create migration guard node — idempotent (CREATE OR MERGE)
+            # Mark migration complete with stats.
             ran_at = datetime.now(UTC).isoformat()
             session.run(
                 """
-                MERGE (m:Migration {id: $migration_id})
-                SET m.done   = true,
-                    m.ran_at = datetime($ran_at),
+                MATCH (m:Migration {id: $migration_id})
+                SET m.done                  = true,
+                    m.completed_at          = datetime($ran_at),
                     m.entities_updated      = $entities_updated,
                     m.relationships_updated = $rels_updated
                 """,
                 {
-                    "migration_id": MIGRATION_ID,
+                    "migration_id": migration_id,
                     "ran_at": ran_at,
                     "entities_updated": entities_updated,
                     "rels_updated": rels_updated,
@@ -2097,18 +2102,53 @@ def run_bitemporal_migration_v1(self) -> dict[str, Any]:
             )
 
         logger.info(
-            f"Bitemporal migration '{MIGRATION_ID}' complete: "
+            f"Bitemporal migration '{migration_id}' complete: "
             f"{entities_updated} entities, {rels_updated} relationships updated"
         )
         return {
             "status": "done",
-            "migration_id": MIGRATION_ID,
+            "migration_id": migration_id,
+            "graph_id": graph_id,
             "entities_updated": entities_updated,
             "relationships_updated": rels_updated,
         }
 
     except Exception as exc:
-        logger.error(f"Bitemporal migration '{MIGRATION_ID}' failed: {exc}")
+        logger.error(f"Bitemporal migration '{migration_id}' failed: {exc}")
         raise
     finally:
         driver.close()
+
+
+@celery_app.task(bind=True, name="app.services.background_jobs.run_bitemporal_migration_v1")
+def run_bitemporal_migration_v1(self) -> dict[str, Any]:
+    """
+    Fan-out orchestrator: fetch all distinct graph_ids from Neo4j and dispatch
+    one _run_bitemporal_migration_for_graph task per graph.
+
+    This ensures the migration never touches data across tenant boundaries —
+    each sub-task is scoped to a single graph_id.
+    """
+    from neo4j import GraphDatabase
+
+    logger.info("Starting bitemporal migration fan-out across all graphs")
+
+    driver = GraphDatabase.driver(
+        settings.NEO4J_URI,
+        auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
+        max_connection_pool_size=1,
+    )
+    try:
+        with driver.session(database=settings.NEO4J_DATABASE) as session:
+            records = session.run(
+                "MATCH (e:__Entity__) RETURN DISTINCT e.graph_id AS graph_id"
+            )
+            graph_ids = [r["graph_id"] for r in records if r["graph_id"]]
+    finally:
+        driver.close()
+
+    for gid in graph_ids:
+        _run_bitemporal_migration_for_graph.delay(gid)
+
+    logger.info(f"Bitemporal migration dispatched for {len(graph_ids)} graph(s)")
+    return {"status": "dispatched", "graphs_queued": len(graph_ids)}
