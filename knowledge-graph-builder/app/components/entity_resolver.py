@@ -60,6 +60,9 @@ CONTEXT_WEIGHT = 0.1
 STORE_THRESHOLD = 0.85        # create SAME_AS link immediately
 AMBIGUOUS_LOWER = 0.60        # pass to LLM disambiguation (TASK-011)
 
+# Name length cap — prevents CPU DoS via extremely long names before regex/Jaro-Winkler
+_MAX_NAME_LEN = 1000
+
 # Compatible type pairs (order-independent) that receive a partial type score
 _COMPATIBLE_TYPE_PAIRS: frozenset[frozenset[str]] = frozenset(
     [
@@ -81,6 +84,7 @@ _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
 
 def _normalize_name(name: str) -> str:
     """Lowercase, strip punctuation, remove common legal suffixes."""
+    name = name[:_MAX_NAME_LEN]
     name = name.lower()
     name = _LEGAL_SUFFIX_RE.sub("", name)
     name = _PUNCT_RE.sub("", name)
