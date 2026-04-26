@@ -1996,3 +1996,119 @@ async def _worker_record_sync_error(
         )
     except Exception as e:
         logger.error(f"Failed to record sync error for {connector_id}: {e}")
+
+
+# ==================== BITEMPORAL MIGRATION TASK ====================
+
+
+@celery_app.task(bind=True, name="app.services.background_jobs.run_bitemporal_migration_v1")
+def run_bitemporal_migration_v1(self) -> dict[str, Any]:
+    """
+    One-off idempotent migration: backfill event_time, ingestion_time, and
+    ingestion_source onto all existing __Entity__ nodes and relationships that
+    were ingested before TASK-005 shipped.
+
+    Guard: the task checks for a (:Migration {id: 'bitemporal-v1', done: true})
+    node at the start and skips immediately if it exists.  On completion it
+    creates that node so re-runs are no-ops.
+
+    Migration Cypher applied:
+      MATCH (e:__Entity__) WHERE e.event_time IS NULL
+      SET e.event_time = e.ingested_at,
+          e.ingestion_time = e.ingested_at,
+          e.ingestion_source = 'pre-migration'
+
+      MATCH ()-[r]->() WHERE r.event_time IS NULL AND r.ingested_at IS NOT NULL
+      SET r.event_time = r.ingested_at,
+          r.ingestion_time = r.ingested_at,
+          r.ingestion_source = 'pre-migration'
+
+    Follows the dual-driver rule: task-scoped sync Neo4j driver with NullPool.
+    """
+    from neo4j import GraphDatabase
+
+    MIGRATION_ID = "bitemporal-v1"
+
+    logger.info(f"Starting bitemporal migration '{MIGRATION_ID}'")
+
+    driver = GraphDatabase.driver(
+        settings.NEO4J_URI,
+        auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
+        max_connection_pool_size=1,
+    )
+    try:
+        with driver.session(database=settings.NEO4J_DATABASE) as session:
+            # Guard: skip if migration already ran
+            guard_result = session.run(
+                "MATCH (m:Migration {id: $migration_id, done: true}) RETURN count(m) AS cnt",
+                {"migration_id": MIGRATION_ID},
+            ).single()
+            if guard_result and guard_result["cnt"] > 0:
+                logger.info(
+                    f"Bitemporal migration '{MIGRATION_ID}' already completed — skipping"
+                )
+                return {"status": "skipped", "migration_id": MIGRATION_ID}
+
+            # Backfill entity nodes: set event_time, ingestion_time, ingestion_source
+            # where event_time is not yet set.  Use ingested_at as best-effort value.
+            entity_result = session.run(
+                """
+                MATCH (e:__Entity__)
+                WHERE e.event_time IS NULL
+                SET e.event_time       = coalesce(e.ingested_at, e.ingestedAt, datetime()),
+                    e.ingestion_time   = coalesce(e.ingested_at, e.ingestedAt, datetime()),
+                    e.ingestion_source = 'pre-migration'
+                RETURN count(e) AS updated
+                """
+            ).single()
+            entities_updated = int(entity_result["updated"]) if entity_result else 0
+
+            # Backfill relationships: set event_time, ingestion_time, ingestion_source
+            # only where ingested_at exists (relationships without any timestamp are left alone).
+            rel_result = session.run(
+                """
+                MATCH ()-[r]->()
+                WHERE r.event_time IS NULL
+                  AND (r.ingested_at IS NOT NULL OR r.transaction_time IS NOT NULL)
+                SET r.event_time       = coalesce(r.ingested_at, r.transaction_time),
+                    r.ingestion_time   = coalesce(r.ingested_at, r.transaction_time),
+                    r.ingestion_source = 'pre-migration'
+                RETURN count(r) AS updated
+                """
+            ).single()
+            rels_updated = int(rel_result["updated"]) if rel_result else 0
+
+            # Create migration guard node — idempotent (CREATE OR MERGE)
+            ran_at = datetime.now(UTC).isoformat()
+            session.run(
+                """
+                MERGE (m:Migration {id: $migration_id})
+                SET m.done   = true,
+                    m.ran_at = datetime($ran_at),
+                    m.entities_updated      = $entities_updated,
+                    m.relationships_updated = $rels_updated
+                """,
+                {
+                    "migration_id": MIGRATION_ID,
+                    "ran_at": ran_at,
+                    "entities_updated": entities_updated,
+                    "rels_updated": rels_updated,
+                },
+            )
+
+        logger.info(
+            f"Bitemporal migration '{MIGRATION_ID}' complete: "
+            f"{entities_updated} entities, {rels_updated} relationships updated"
+        )
+        return {
+            "status": "done",
+            "migration_id": MIGRATION_ID,
+            "entities_updated": entities_updated,
+            "relationships_updated": rels_updated,
+        }
+
+    except Exception as exc:
+        logger.error(f"Bitemporal migration '{MIGRATION_ID}' failed: {exc}")
+        raise
+    finally:
+        driver.close()
