@@ -249,6 +249,26 @@ def compute_prop_hash(properties: dict) -> str:
     return hashlib.md5(str(mutable).encode()).hexdigest()
 
 
+def _normalize_date(value: str | None) -> str | None:
+    """
+    Normalise an LLM-returned date string to YYYY-MM-DD.
+
+    - None / empty / non-string → None (do not substitute ingestion_time)
+    - Year-only "YYYY" → "YYYY-01-01" (start of year)
+    - Anything else → returned unchanged (assumed already ISO-8601)
+
+    Output is only ever used as a property value, never interpolated into Cypher.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if _re.fullmatch(r"\d{4}", stripped):
+        return f"{stripped}-01-01"
+    return stripped
+
+
 async def ensure_fingerprint_indexes() -> None:
     """
     Create Neo4j indexes required for fingerprint-based entity delta. Idempotent.
@@ -801,6 +821,26 @@ class MultiTenantGraphRAGPipeline:
         logger.info(
             f"After normalization: {len(graph.nodes)} nodes, {len(graph.relationships)} relationships"
         )
+
+        # 4.4. Normalize event_time / event_time_end extracted by the LLM.
+        # The prompt requests these fields on every relationship; here we coerce
+        # year-only strings ("2023") to full ISO-8601 dates ("2023-01-01") and
+        # drop any falsy value so null is stored rather than an empty string.
+        # event_time/event_time_end are pure property values — never interpolated
+        # into Cypher — so this is safe to do before the kg_writer write.
+        for rel in graph.relationships:
+            if not rel.properties:
+                continue
+            et = _normalize_date(rel.properties.get("event_time"))
+            et_end = _normalize_date(rel.properties.get("event_time_end"))
+            # Remove the key entirely when the LLM returned null/empty, so Neo4j
+            # does not persist a None property where the field is absent.
+            rel.properties.pop("event_time", None)
+            rel.properties.pop("event_time_end", None)
+            if et is not None:
+                rel.properties["event_time"] = et
+            if et_end is not None:
+                rel.properties["event_time_end"] = et_end
 
         # 4.5. Apply temporal_context overrides to relationships
         if temporal_context:
