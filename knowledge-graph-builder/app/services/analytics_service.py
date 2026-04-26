@@ -2,7 +2,7 @@
 Graph Analytics Service
 
 This service provides advanced graph analytics capabilities including:
-- Community detection using Neo4j GDS Louvain algorithm
+- Community detection using leidenalg at 5 resolutions (multi-resolution hierarchy)
 - Centrality analysis (PageRank and degree centrality)
 - Neighborhood analysis for entity relationships
 - Pathway discovery between entities
@@ -13,14 +13,9 @@ All methods are multi-tenant safe with proper graph_id filtering.
 """
 
 import hashlib
-import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
-
-# Only alphanumeric + underscore are safe to interpolate as Neo4j labels into GDS subquery strings.
-# GDS executes subquery strings internally — Cypher parameters cannot be used inside them.
-_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
@@ -431,13 +426,13 @@ class GraphAnalyticsService:
 
     async def create_community_nodes(self, graph_id: UUID) -> dict[str, Any]:
         """
-        Create persistent community nodes from detected communities.
+        Create persistent community nodes using leidenalg at 5 resolutions.
 
         This method:
-        1. Runs community detection on all entities
-        2. Creates __Community__ nodes for each detected community
-        3. Creates IN_COMMUNITY relationships between entities and communities
-        4. Generates community summaries and embeddings
+        1. Fetches __Entity__ nodes and relationships for the graph from Neo4j
+        2. Builds an igraph graph in-process (no GDS dependency)
+        3. Runs leidenalg.find_partition at 5 resolutions (0.25, 0.5, 1.0, 2.0, 4.0)
+        4. Writes __Community__ nodes with MEMBER_OF and PARENT_OF edges to Neo4j
 
         Args:
             graph_id: UUID of the specific graph to analyze
@@ -446,251 +441,178 @@ class GraphAnalyticsService:
             Dictionary containing creation results and statistics
         """
         try:
-            logger.info(f"Creating persistent community nodes for graph {graph_id}")
-
-            # First, check what entities exist and what labels they have
-            check_entities_query = """
-            MATCH (n)
-            WHERE n.graph_id = $graph_id
-            RETURN DISTINCT labels(n) as node_labels, count(n) as count
-            ORDER BY count DESC
-            """
-
-            entity_check = await neo4j_client.execute_query(
-                check_entities_query, {"graph_id": str(graph_id)}
-            )
-
-            if not entity_check:
-                return {
-                    "communities_created": 0,
-                    "relationships_created": 0,
-                    "message": "No entities found for this graph",
-                }
-
-            # Find the correct entity label (could be __Entity__, Entity, or something else)
-            entity_label = None
-            for result in entity_check:
-                labels = result["node_labels"]
-                if "__Entity__" in labels:
-                    entity_label = "__Entity__"
-                    break
-                elif "Entity" in labels:
-                    entity_label = "Entity"
-                    break
-                elif any(label not in ["__Community__", "Chunk"] for label in labels):
-                    # Use the first non-community, non-chunk label
-                    entity_label = next(
-                        label
-                        for label in labels
-                        if label not in ["__Community__", "Chunk"]
-                    )
-                    break
-
-            if not entity_label:
-                logger.warning(f"No suitable entity label found for graph {graph_id}")
-                return await self._create_simple_communities(graph_id)
-
-            # Validate label before interpolating into GDS subquery string.
-            # GDS executes subquery strings internally so $params cannot be used inside them;
-            # graph_id is a UUID (safe by type); entity_label must match [A-Za-z0-9_] only.
-            if not _SAFE_LABEL_RE.match(entity_label):
-                logger.error(
-                    f"Unsafe entity label '{entity_label}' rejected for graph {graph_id}"
-                )
-                return await self._create_simple_communities(graph_id)
-
-            logger.info(f"Using entity label: {entity_label}")
-
-            # Generate unique graph projection name
-            graph_name = f"temp_persist_{str(graph_id).replace('-', '_')}"
-
-            # Step 1: Create graph projection with correct syntax and parameter handling
-            projection_query = """
-            CALL gds.graph.project.cypher(
-                $graph_name,
-                $node_query,
-                $relationship_query
-            )
-            YIELD graphName
-            RETURN graphName
-            """
-
-            # GDS subquery strings are executed internally by the GDS library and cannot accept
-            # outer Cypher parameters — interpolation is unavoidable here.
-            # Safety: entity_label validated against _SAFE_LABEL_RE above;
-            # graph_id is a UUID type whose str() is always "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx".
-            graph_id_str = str(graph_id)
-            node_query = f"MATCH (n:{entity_label}) WHERE n.graph_id = '{graph_id_str}' RETURN id(n) AS id"
-            relationship_query = (
-                f"MATCH (a:{entity_label})-[r]->(b:{entity_label}) "
-                f"WHERE a.graph_id = '{graph_id_str}' AND b.graph_id = '{graph_id_str}' "
-                f"RETURN id(a) AS source, id(b) AS target"
-            )
-
-            try:
-                await neo4j_client.execute_query(
-                    projection_query,
-                    {
-                        "graph_name": graph_name,
-                        "node_query": node_query,
-                        "relationship_query": relationship_query,
-                    },
-                )
-            except Exception as projection_error:
-                logger.warning(f"GDS projection failed: {projection_error}")
-                return await self._create_simple_communities(graph_id)
-
-            # Step 2: Run Louvain community detection
-            community_detection_query = """
-            CALL gds.louvain.stream($graph_name)
-            YIELD nodeId, communityId
-            
-            // Get original nodes with their community assignments
-            MATCH (node)
-            WHERE id(node) = nodeId AND node.graph_id = $graph_id
-            
-            RETURN node.id as entity_id,
-                node.name as entity_name,
-                communityId,
-                labels(node) as entity_labels
-            """
-
-            try:
-                detection_results = await neo4j_client.execute_query(
-                    community_detection_query,
-                    {"graph_name": graph_name, "graph_id": str(graph_id)},
-                )
-            except Exception as detection_error:
-                logger.warning(f"Community detection failed: {detection_error}")
-                # Clean up and fallback
-                try:
-                    cleanup_query = (
-                        "CALL gds.graph.drop($graph_name, false) YIELD graphName"
-                    )
-                    await neo4j_client.execute_query(
-                        cleanup_query, {"graph_name": graph_name}
-                    )
-                except Exception:
-                    pass
-                return await self._create_simple_communities(graph_id)
-
-            # Step 3: Clean up the temporary graph
-            try:
-                cleanup_query = (
-                    "CALL gds.graph.drop($graph_name, false) YIELD graphName"
-                )
-                await neo4j_client.execute_query(
-                    cleanup_query, {"graph_name": graph_name}
-                )
-            except Exception as cleanup_error:
-                logger.warning(f"Graph cleanup failed: {cleanup_error}")
-
-            if not detection_results:
-                return {
-                    "communities_created": 0,
-                    "relationships_created": 0,
-                    "message": "No entities found for community detection",
-                }
-
-            # Step 4: Group entities by community
-            communities_map = {}
-            for result in detection_results:
-                community_id = result["communityId"]
-                if community_id not in communities_map:
-                    communities_map[community_id] = []
-
-                communities_map[community_id].append(
-                    {
-                        "entity_id": result["entity_id"],
-                        "entity_name": result["entity_name"],
-                        "entity_labels": result["entity_labels"],
-                    }
-                )
-
-            # Step 5: Create community nodes and relationships
-            communities_created = 0
-            relationships_created = 0
-
-            for community_id, members in communities_map.items():
-                if len(members) < 2:  # Skip single-entity communities
-                    continue
-
-                # Generate unique community ID
-                community_uuid = self._generate_community_id(
-                    graph_id, community_id, members
-                )
-
-                # Generate community summary
-                community_summary = self._generate_community_summary(members)
-
-                # Create community node
-                create_community_query = """
-                MERGE (community:__Community__ {
-                    id: $community_id,
-                    graph_id: $graph_id
-                })
-                SET community.summary = $summary,
-                    community.entity_count = $entity_count,
-                    community.detection_algorithm = $algorithm,
-                    community.weight = $weight,
-                    community.creation_date = datetime(),
-                    community.last_updated = datetime()
-                RETURN community
-                """
-
-                await neo4j_client.execute_query(
-                    create_community_query,
-                    {
-                        "community_id": community_uuid,
-                        "graph_id": str(graph_id),
-                        "summary": community_summary,
-                        "entity_count": len(members),
-                        "algorithm": "louvain",
-                        "weight": len(members)
-                        / len(detection_results),  # Relative size as weight
-                    },
-                )
-
-                communities_created += 1
-
-                # Create IN_COMMUNITY relationships
-                for member in members:
-                    # Use flexible entity matching since we might not know the exact label
-                    relationship_query = """
-                    MATCH (entity)
-                    WHERE entity.id = $entity_id AND entity.graph_id = $graph_id
-                    MATCH (community:__Community__ {id: $community_id, graph_id: $graph_id})
-                    MERGE (entity)-[:IN_COMMUNITY]->(community)
-                    """
-
-                    await neo4j_client.execute_query(
-                        relationship_query,
-                        {
-                            "entity_id": member["entity_id"],
-                            "community_id": community_uuid,
-                            "graph_id": str(graph_id),
-                        },
-                    )
-
-                    relationships_created += 1
-
-            logger.info(
-                f"Created {communities_created} communities and {relationships_created} relationships for graph {graph_id}"
-            )
-
-            return {
-                "communities_created": communities_created,
-                "relationships_created": relationships_created,
-                "total_entities_processed": len(detection_results),
-                "graph_id": str(graph_id),
-                "algorithm_used": "louvain",
-                "entity_label_used": entity_label,
-            }
-
+            logger.info(f"Creating Leiden community nodes for graph {graph_id}")
+            result = await self._run_leiden_community_detection(graph_id)
+            return result
         except Exception as e:
             logger.error(f"Failed to create community nodes: {e}")
-            # Fallback: create communities using simple method
             return await self._create_simple_communities(graph_id)
+
+    async def _run_leiden_community_detection(
+        self, graph_id: UUID
+    ) -> dict[str, Any]:
+        """
+        Run leidenalg at 5 resolutions and store hierarchical communities.
+
+        Uses igraph + leidenalg — no Neo4j GDS required.
+        All Cypher queries are parameterized and graph_id-scoped.
+
+        Args:
+            graph_id: UUID of the specific graph to analyze
+
+        Returns:
+            Dictionary with detection statistics
+        """
+        import igraph as ig
+        import leidenalg
+
+        graph_id_str = str(graph_id)
+
+        # Step 1 — Fetch entity nodes
+        nodes_result = await neo4j_client.execute_query(
+            "MATCH (e:__Entity__ {graph_id: $graph_id}) "
+            "RETURN elementId(e) AS eid, e.id AS entity_id, e.name AS name",
+            {"graph_id": graph_id_str},
+        )
+
+        if not nodes_result:
+            return {
+                "communities_created": 0,
+                "relationships_created": 0,
+                "algorithm_used": "leiden",
+                "message": "No entities found for this graph",
+            }
+
+        # Step 2 — Fetch relationships
+        edges_result = await neo4j_client.execute_query(
+            "MATCH (a:__Entity__ {graph_id: $graph_id})-[r]->(b:__Entity__ {graph_id: $graph_id}) "
+            "RETURN elementId(a) AS src, elementId(b) AS tgt",
+            {"graph_id": graph_id_str},
+        )
+
+        # Step 3 — Build igraph
+        eid_to_idx = {n["eid"]: i for i, n in enumerate(nodes_result)}
+        ig_edges = [
+            (eid_to_idx[e["src"]], eid_to_idx[e["tgt"]])
+            for e in edges_result
+            if e["src"] in eid_to_idx and e["tgt"] in eid_to_idx
+        ]
+
+        g = ig.Graph(n=len(nodes_result), edges=ig_edges, directed=False)
+
+        # Step 4 — Run at 5 resolutions
+        RESOLUTIONS = [0.25, 0.5, 1.0, 2.0, 4.0]
+        all_communities: dict[int, dict] = {}
+
+        for level, resolution in enumerate(RESOLUTIONS):
+            partition = leidenalg.find_partition(
+                g,
+                leidenalg.RBConfigurationVertexPartition,
+                resolution_parameter=resolution,
+                n_iterations=10,
+                seed=42,
+            )
+            all_communities[level] = {
+                "resolution": resolution,
+                "membership": partition.membership,  # list: vertex_index -> community_id
+            }
+
+        # Step 5 — Write __Community__ nodes and MEMBER_OF / PARENT_OF edges
+        total_communities = 0
+        total_relationships = 0
+
+        for level, data in all_communities.items():
+            resolution = data["resolution"]
+            membership = data["membership"]
+
+            # Group entities by community
+            community_groups: dict[int, list[str]] = {}
+            for idx, comm_id in enumerate(membership):
+                entity_id = nodes_result[idx].get("entity_id") or nodes_result[idx]["eid"]
+                community_groups.setdefault(comm_id, []).append(entity_id)
+
+            for comm_id, member_entity_ids in community_groups.items():
+                community_node_id = f"{graph_id_str}_l{level}_c{comm_id}"
+
+                # Create __Community__ node
+                await neo4j_client.execute_query(
+                    """
+                    MERGE (c:__Community__ {id: $community_id, graph_id: $graph_id})
+                    SET c.level = $level,
+                        c.resolution = $resolution,
+                        c.algorithm = 'leiden',
+                        c.entity_count = $member_count,
+                        c.status = 'active',
+                        c.last_updated = datetime()
+                    """,
+                    {
+                        "community_id": community_node_id,
+                        "graph_id": graph_id_str,
+                        "level": level,
+                        "resolution": resolution,
+                        "member_count": len(member_entity_ids),
+                    },
+                )
+                total_communities += 1
+
+                # Link entity members via MEMBER_OF
+                for entity_id in member_entity_ids:
+                    await neo4j_client.execute_query(
+                        """
+                        MATCH (e:__Entity__ {graph_id: $graph_id})
+                        WHERE e.id = $entity_id OR elementId(e) = $entity_id
+                        MATCH (c:__Community__ {id: $community_id, graph_id: $graph_id})
+                        MERGE (e)-[:MEMBER_OF {graph_id: $graph_id, level: $level}]->(c)
+                        """,
+                        {
+                            "graph_id": graph_id_str,
+                            "entity_id": entity_id,
+                            "community_id": community_node_id,
+                            "level": level,
+                        },
+                    )
+                    total_relationships += 1
+
+                # Link to parent community (level - 1) via PARENT_OF
+                if level > 0:
+                    first_idx = next(
+                        (
+                            i
+                            for i, n in enumerate(nodes_result)
+                            if (n.get("entity_id") or n["eid"]) == member_entity_ids[0]
+                        ),
+                        None,
+                    )
+                    if first_idx is not None:
+                        parent_comm_id = all_communities[level - 1]["membership"][first_idx]
+                        parent_node_id = f"{graph_id_str}_l{level - 1}_c{parent_comm_id}"
+                        await neo4j_client.execute_query(
+                            """
+                            MATCH (child:__Community__ {id: $child_id, graph_id: $graph_id})
+                            MATCH (parent:__Community__ {id: $parent_id, graph_id: $graph_id})
+                            MERGE (parent)-[:PARENT_OF {graph_id: $graph_id}]->(child)
+                            """,
+                            {
+                                "child_id": community_node_id,
+                                "parent_id": parent_node_id,
+                                "graph_id": graph_id_str,
+                            },
+                        )
+
+        logger.info(
+            f"Leiden detection complete for graph {graph_id}: "
+            f"{total_communities} communities across {len(RESOLUTIONS)} levels"
+        )
+
+        return {
+            "communities_created": total_communities,
+            "relationships_created": total_relationships,
+            "total_entities_processed": len(nodes_result),
+            "graph_id": graph_id_str,
+            "algorithm_used": "leiden",
+            "levels": len(RESOLUTIONS),
+            "resolutions": RESOLUTIONS,
+        }
 
     async def _create_simple_communities(self, graph_id: UUID) -> dict[str, Any]:
         """
