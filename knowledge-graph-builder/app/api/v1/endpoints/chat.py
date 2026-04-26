@@ -98,6 +98,9 @@ async def chat_with_graph(
             return_context=body.return_context,
             examples=body.examples,
             temporal_filter=body.temporal_filter,
+            temporal_mode=body.temporal_mode,
+            temporal_at=body.temporal_at,
+            temporal_since=body.temporal_since,
         )
 
         # Map GroundedSearchResult sources → SourceInfo schema objects.
@@ -131,6 +134,9 @@ async def chat_with_graph(
             retriever_type=result.retriever_used,
             is_grounded=result.is_grounded,
             confidence=result.confidence,
+            temporal_mode_applied=(
+                body.temporal_mode.value if body.temporal_mode else None
+            ),
             context=context,
             sources=sources if body.include_sources else None,
             conversation_id=body.conversation_id,

@@ -8,6 +8,7 @@ detection, multi-hop reasoning, and auto retriever selection.
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, cast
 
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
@@ -20,6 +21,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.telemetry import get_tracer
+from app.schemas.chat_schemas import TemporalMode
 from app.schemas.graph_schemas import TemporalFilter
 from app.schemas.retriever_schemas import (
     HybridCypherRetrieverConfig,
@@ -36,20 +38,12 @@ from app.services.retriever_factory import RetrieverType, retriever_factory
 logger = get_logger(__name__)
 _chat_tracer = get_tracer("oraclous.chat")
 
-# ---------------------------------------------------------------------------
-# Prompt template that strictly grounds responses to retrieved graph context.
-# Uses {context} and {query_text} placeholders consumed by neo4j-graphrag.
-# ---------------------------------------------------------------------------
-STRICT_GROUNDING_PROMPT = """\
-You are a knowledge graph assistant. Your ONLY job is to answer questions \
-using information explicitly present in the Context section below.
+STRICT_GROUNDING_PROMPT = """You are a knowledge graph assistant. Your ONLY job is to answer questions using information explicitly present in the Context section below.
 
 RULES (non-negotiable):
 1. Answer SOLELY from the Context. Do NOT use external knowledge or training data.
-2. For every factual claim, reference the specific graph node or relationship \
-that supports it (e.g. "[Entity: TechNova Corp]").
-3. If the Context does not contain enough information to answer the question, \
-respond EXACTLY with the following prefix and nothing else:
+2. For every factual claim, reference the specific graph node or relationship that supports it (e.g. "[Entity: TechNova Corp]").
+3. If the Context does not contain enough information to answer the question, respond EXACTLY with the following prefix and nothing else:
    INSUFFICIENT_DATA: <brief reason why context is inadequate>
 4. Never guess, speculate, or extrapolate beyond what is in the Context.
 
@@ -60,15 +54,9 @@ Question: {query_text}
 
 Answer (cite graph nodes/relationships for each fact):"""
 
-# Prefix used to detect insufficient-context responses from the LLM.
 _INSUFFICIENT_PREFIX = "INSUFFICIENT_DATA:"
-
-# Minimum number of retriever items required to attempt an answer.
 _MIN_CONTEXT_ITEMS = 1
 
-# --------------------------------------------------------------------------
-# Query heuristics for auto retriever selection
-# --------------------------------------------------------------------------
 _ANALYTIC_PATTERNS = re.compile(
     r"\b(list all|find all|show all|count|how many|enumerate|which .* are)\b",
     re.IGNORECASE,
@@ -82,7 +70,6 @@ _CYPHER_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-# Multi-hop 2-hop expansion query — always filters by graph_id (multi-tenancy).
 _MULTIHOP_CYPHER = """\
 MATCH (anchor:__Entity__ {graph_id: $graph_id})
 WHERE toLower(anchor.name) CONTAINS toLower($entity_name)
@@ -100,72 +87,15 @@ RETURN
 LIMIT 20
 """
 
-# Words that must not be treated as entity candidates.
 _STOPWORDS = frozenset(
     {
-        "the",
-        "a",
-        "an",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "have",
-        "has",
-        "had",
-        "do",
-        "does",
-        "did",
-        "will",
-        "would",
-        "shall",
-        "should",
-        "may",
-        "might",
-        "must",
-        "can",
-        "could",
-        "about",
-        "what",
-        "who",
-        "which",
-        "when",
-        "where",
-        "why",
-        "how",
-        "tell",
-        "me",
-        "give",
-        "show",
-        "find",
-        "list",
-        "explain",
-        "describe",
-        "in",
-        "on",
-        "at",
-        "to",
-        "for",
-        "of",
-        "and",
-        "or",
-        "but",
-        "not",
-        "with",
-        "from",
-        "by",
-        "its",
-        "their",
-        "this",
-        "that",
-        "these",
-        "those",
-        "any",
-        "all",
-        "some",
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+        "should", "may", "might", "must", "can", "could", "about", "what",
+        "who", "which", "when", "where", "why", "how", "tell", "me", "give",
+        "show", "find", "list", "explain", "describe", "in", "on", "at", "to",
+        "for", "of", "and", "or", "but", "not", "with", "from", "by", "its",
+        "their", "this", "that", "these", "those", "any", "all", "some",
     }
 )
 
@@ -185,15 +115,6 @@ class GroundedSearchResult:
 class ChatService:
     """
     Chat service using Neo4j GraphRAG with hallucination prevention.
-
-    Features:
-    - Support for all 5 Neo4j GraphRAG retriever types
-    - Strict graph-grounded prompt — LLM only uses retrieved context
-    - Structured source citation extracted from retriever results
-    - Insufficient-context detection with no-data response
-    - Confidence scoring based on retrieval relevance scores
-    - Multi-tenant isolation with graph_id
-    - Automatic full-text index management
     """
 
     def __init__(
@@ -293,6 +214,54 @@ class ChatService:
                 logger.error(f"Fallback retriever creation failed: {fallback_error}")
                 raise RuntimeError("Failed to create any retriever") from fallback_error
 
+    @staticmethod
+    def _build_temporal_filter(
+        temporal_mode: TemporalMode | None,
+        temporal_at: datetime | None,
+        temporal_since: datetime | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build a trusted Cypher WHERE clause fragment and parameter dict.
+
+        The clause text is constructed from internal constants only — it never
+        contains user-supplied strings.  All datetime values are bound as Cypher
+        parameters ($temporal_at / $temporal_since) and must be forwarded via
+        query_params; they are never interpolated into the query string.
+
+        Modes:
+            POINT_IN_TIME:   relationships where event_time <= $temporal_at
+                             AND (event_time_end IS NULL OR event_time_end >= $temporal_at)
+            KNOWLEDGE_AS_OF: relationships where ingestion_time <= $temporal_at
+            CHANGES_SINCE:   relationships where ingestion_time > $temporal_since
+
+        Returns:
+            (clause, params) — both empty when temporal_mode is None, preserving
+            identical behavior to pre-TASK-007 callers (backward compatible).
+        """
+        if temporal_mode == TemporalMode.POINT_IN_TIME:
+            clause = (
+                "(r.event_time IS NULL OR r.event_time <= $temporal_at)"
+                " AND (r.event_time_end IS NULL OR r.event_time_end >= $temporal_at)"
+            )
+            params: dict[str, Any] = {
+                "temporal_at": temporal_at.isoformat() if temporal_at else None
+            }
+        elif temporal_mode == TemporalMode.KNOWLEDGE_AS_OF:
+            clause = "r.ingestion_time <= $temporal_at"
+            params = {
+                "temporal_at": temporal_at.isoformat() if temporal_at else None
+            }
+        elif temporal_mode == TemporalMode.CHANGES_SINCE:
+            clause = "r.ingestion_time > $temporal_since"
+            params = {
+                "temporal_since": (
+                    temporal_since.isoformat() if temporal_since else None
+                )
+            }
+        else:
+            return "", {}
+
+        return clause, params
+
     async def search(
         self,
         query_text: str,
@@ -300,25 +269,31 @@ class ChatService:
         return_context: bool = False,
         examples: str = "",
         temporal_filter: TemporalFilter | None = None,
+        temporal_mode: TemporalMode | None = None,
+        temporal_at: datetime | None = None,
+        temporal_since: datetime | None = None,
     ) -> GroundedSearchResult:
         """
         Perform a graph-grounded GraphRAG search with hallucination prevention.
-
-        Always retrieves context internally to:
-        - Detect insufficient data before passing to the LLM
-        - Extract source citations from retrieved graph nodes
-        - Calculate confidence from retrieval scores
-        - Use the strict grounding prompt to prevent external knowledge leakage
 
         Args:
             query_text: User's question
             retriever_config: Configuration for retriever (e.g., top_k)
             return_context: Whether to include retriever_result in the returned object
             examples: Examples for few-shot learning
+            temporal_filter: Legacy TemporalFilter for multi-hop enrichment scoping
+            temporal_mode: Bitemporal query mode (point_in_time / knowledge_as_of /
+                changes_since). Omitting produces identical behavior to the baseline.
+            temporal_at: Reference timestamp for point_in_time and knowledge_as_of.
+            temporal_since: Reference timestamp for changes_since.
 
         Returns:
             GroundedSearchResult with answer, sources, confidence, and grounding flag
         """
+        temporal_clause, temporal_params = self._build_temporal_filter(
+            temporal_mode, temporal_at, temporal_since
+        )
+
         with _chat_tracer.start_as_current_span(
             "chat.query",
             kind=otel_trace.SpanKind.INTERNAL,
@@ -326,6 +301,8 @@ class ChatService:
             span.set_attribute("graph_id", self.graph_id)
             span.set_attribute("chat.retriever_type", self.retriever_type.value)
             span.set_attribute("chat.query.length", len(query_text))
+            if temporal_mode:
+                span.set_attribute("chat.temporal_mode", temporal_mode.value)
             return await self._search_inner(
                 span,
                 query_text,
@@ -333,6 +310,8 @@ class ChatService:
                 return_context,
                 examples,
                 temporal_filter,
+                temporal_clause,
+                temporal_params,
             )
 
     async def _search_inner(
@@ -343,6 +322,8 @@ class ChatService:
         return_context: bool,
         examples: str,
         temporal_filter: TemporalFilter | None,
+        temporal_clause: str = "",
+        temporal_params: dict[str, Any] | None = None,
     ) -> "GroundedSearchResult":
         try:
             if not self.rag:
@@ -353,16 +334,22 @@ class ChatService:
 
             logger.info(f"Processing grounded search for graph {self.graph_id}")
 
-            # Always request context so we can inspect retrieved items.
+            effective_retriever_config = dict(retriever_config or {"top_k": 5})
+            if temporal_clause and temporal_params:
+                existing_params = effective_retriever_config.get("query_params") or {}
+                effective_retriever_config["query_params"] = {
+                    **existing_params,
+                    **temporal_params,
+                }
+
             raw_result: RagResultModel = self.rag.search(
                 query_text=query_text,
-                retriever_config=retriever_config or {"top_k": 5},
+                retriever_config=effective_retriever_config,
                 return_context=True,
                 examples=examples,
                 prompt_template=STRICT_GROUNDING_PROMPT,
             )
 
-            # Collect and sort retriever items by relevance score (desc).
             retriever_items = []
             if raw_result.retriever_result:
                 retriever_items = list(
@@ -372,7 +359,6 @@ class ChatService:
                 key=lambda item: getattr(item, "score", None) or 0.0, reverse=True
             )
 
-            # If retrieval is sparse, attempt 2-hop entity-anchor enrichment.
             if len(retriever_items) < 3:
                 entity_candidates = self.detect_entity_candidates(query_text)
                 if entity_candidates:
@@ -384,9 +370,6 @@ class ChatService:
                             f"Multi-hop enrichment added {len(multihop_rows)} rows "
                             f"for graph {self.graph_id}"
                         )
-                        # Re-run GraphRAG with enriched context hint in retriever_config.
-                        # We append the hop data as additional context in a second pass
-                        # only when the original retrieval returned nothing useful.
                         if len(retriever_items) < _MIN_CONTEXT_ITEMS:
                             hop_context = "; ".join(
                                 f"{r['anchor']} -[{r['rel1']}]-> {r['hop1_name']}"
@@ -398,7 +381,7 @@ class ChatService:
                             )
                             raw_result = self.rag.search(
                                 query_text=augmented_query,
-                                retriever_config=retriever_config or {"top_k": 5},
+                                retriever_config=effective_retriever_config,
                                 return_context=True,
                                 examples=examples,
                                 prompt_template=STRICT_GROUNDING_PROMPT,
@@ -414,7 +397,6 @@ class ChatService:
                                     reverse=True,
                                 )
 
-            # No context retrieved — return structured no-data response.
             if len(retriever_items) < _MIN_CONTEXT_ITEMS:
                 logger.warning(
                     f"No graph context retrieved for graph {self.graph_id}. "
@@ -437,7 +419,6 @@ class ChatService:
             sources = self._extract_sources(retriever_items)
             confidence = self._calculate_confidence(retriever_items)
 
-            # Detect if the LLM itself signalled insufficient data.
             answer = raw_result.answer or ""
             is_grounded = not answer.strip().startswith(_INSUFFICIENT_PREFIX)
 
@@ -481,20 +462,10 @@ class ChatService:
                 retriever_used=self.retriever_type.value,
             )
 
-    # ------------------------------------------------------------------
-    # Auto retriever selection
-    # ------------------------------------------------------------------
-
     @staticmethod
     def auto_select_retriever_type(query: str) -> RetrieverType:
         """
         Choose the most appropriate retriever type based on query characteristics.
-
-        Rules (evaluated in priority order):
-        1. Cypher/graph-query keywords → TEXT2CYPHER for precise traversal
-        2. Analytic / enumeration keywords → HYBRID for broader coverage
-        3. Relationship / connectivity keywords → VECTOR_CYPHER for graph traversal
-        4. Default → VECTOR_CYPHER (balanced precision + context)
         """
         if _CYPHER_PATTERNS.search(query):
             return RetrieverType.TEXT2CYPHER
@@ -504,25 +475,15 @@ class ChatService:
             return RetrieverType.VECTOR_CYPHER
         return RetrieverType.VECTOR_CYPHER
 
-    # ------------------------------------------------------------------
-    # Entity anchor detection
-    # ------------------------------------------------------------------
-
     @staticmethod
     def detect_entity_candidates(query: str) -> list[str]:
         """
         Extract likely named-entity tokens from a query string.
-
-        Heuristic: consecutive capitalised words (e.g. "TechNova Corp")
-        that do not appear in the stopword list and have length > 2.
-        Returns de-duplicated candidates preserving order.
         """
-        # Split on whitespace/punctuation but keep original case.
-        tokens = re.split(r"[\s,;:!?.()\[\]\"']+", query)
+        tokens = re.split(r"[\s,;:!?()\[\]\"']+", query)
         candidates: list[str] = []
         seen: set = set()
 
-        # Merge consecutive capital-starting tokens into multi-word names.
         buffer: list[str] = []
         for tok in tokens:
             if len(tok) > 2 and tok[0].isupper() and tok.lower() not in _STOPWORDS:
@@ -541,10 +502,6 @@ class ChatService:
 
         return candidates
 
-    # ------------------------------------------------------------------
-    # Multi-hop enrichment
-    # ------------------------------------------------------------------
-
     async def _multihop_enrich(
         self,
         entity_candidates: list[str],
@@ -553,11 +510,6 @@ class ChatService:
     ) -> list[dict[str, Any]]:
         """
         Run 2-hop Cypher traversal anchored on detected entity candidates.
-
-        Uses the AsyncDriver (FastAPI-safe). Returns a list of context dicts
-        that can be injected alongside retriever results.
-        Always filters by self.graph_id — multi-tenancy enforced.
-        When temporal_filter is set, restricts r1 to facts valid at the given time.
         """
         enriched: list[dict[str, Any]] = []
         driver = neo4j_client.async_driver
@@ -565,9 +517,6 @@ class ChatService:
             logger.warning("Async driver unavailable — skipping multi-hop enrichment")
             return enriched
 
-        # Build optional temporal WHERE clause for the first-hop relationship.
-        # ORA-138: Use Cypher parameters ($tf_pit) instead of f-string datetime
-        # interpolation to avoid injection and enable rel_valid_from/to indexes.
         temporal_clause = ""
         temporal_params: dict[str, Any] = {}
         if temporal_filter:
@@ -635,10 +584,6 @@ LIMIT 20
 
         return enriched
 
-    # ------------------------------------------------------------------
-    # Streaming search
-    # ------------------------------------------------------------------
-
     async def stream_search(
         self,
         query_text: str,
@@ -646,14 +591,6 @@ LIMIT 20
     ) -> AsyncIterator[str]:
         """
         Streaming variant of search().
-
-        Yields Server-Sent Events (SSE) formatted strings:
-          - data: {"type": "source", ...}  — one per retrieved source
-          - data: {"type": "answer_chunk", "text": "..."}  — answer text chunks
-          - data: {"type": "done", "confidence": 0.9, "is_grounded": true}
-
-        Falls back to a single chunk if the underlying GraphRAG doesn't
-        support token-level streaming.
         """
         try:
             if not self.rag:
@@ -681,7 +618,6 @@ LIMIT 20
 
             import json
 
-            # Emit each source first.
             sources = self._extract_sources(retriever_items)
             for src in sources:
                 yield f"data: {json.dumps({'type': 'source', **src})}\n\n"
@@ -707,7 +643,6 @@ LIMIT 20
             if not is_grounded:
                 confidence = max(confidence * 0.3, 0.0)
 
-            # Emit answer in word-level chunks to simulate streaming.
             words = answer.split(" ")
             for i in range(0, len(words), 10):
                 chunk = " ".join(words[i : i + 10])
@@ -725,19 +660,9 @@ LIMIT 20
             logger.error(f"Streaming search failed for graph {self.graph_id}: {exc}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _extract_sources(retriever_items: list[Any]) -> list[dict[str, Any]]:
-        """
-        Extract structured source citations from retriever result items.
-
-        Each item's `metadata` dict typically contains node properties
-        (id, labels, name, text, score) depending on the retriever type
-        and the configured return_properties / retrieval_query.
-        """
+        """Extract structured source citations from retriever result items."""
         sources: list[dict[str, Any]] = []
         for item in retriever_items:
             metadata: dict[str, Any] = getattr(item, "metadata", {}) or {}
@@ -761,12 +686,7 @@ LIMIT 20
 
     @staticmethod
     def _calculate_confidence(retriever_items: list[Any]) -> float:
-        """
-        Compute a confidence score [0, 1] from retriever relevance scores.
-
-        Uses the mean of the top-3 scores (or fewer if less are available),
-        clamped to [0, 1].  Falls back to a low baseline if no scores exist.
-        """
+        """Compute a confidence score [0, 1] from retriever relevance scores."""
         scores: list[float] = []
         for item in retriever_items[:3]:
             score = getattr(item, "score", None)
@@ -777,7 +697,6 @@ LIMIT 20
                     pass
 
         if not scores:
-            # Context exists but scores are unavailable — moderate confidence.
             return 0.5
 
         return min(max(sum(scores) / len(scores), 0.0), 1.0)
