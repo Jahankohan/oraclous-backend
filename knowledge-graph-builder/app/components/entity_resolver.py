@@ -9,19 +9,287 @@ This approach creates a cleaner graph by:
 2. Merging them into a single canonical entity
 3. Linking the canonical entity to all relevant chunks
 4. Removing duplicate entity nodes
+
+Also provides EntityResolver (TASK-010): a four-signal scorer that combines
+embedding similarity, name similarity, type compatibility, and context overlap
+to produce a final confidence score for SAME_AS candidates, then creates
+SAME_AS links for scores above the store threshold.
 """
 
+import re
 import time
 from typing import Any
 
-from neo4j import Driver, Session
+import jellyfish
+from neo4j import AsyncSession, Driver, Session
 from neo4j.graph import Node
 from neo4j_graphrag.experimental.components.types import Neo4jGraph
 from neo4j_graphrag.experimental.pipeline.component import Component
 
 from app.core.logging import get_logger
+from app.schemas.federation_schemas import SameAsCandidate
 
 logger = get_logger(__name__)
+
+# ── EntityResolver — four-signal SAME_AS scorer ───────────────────────────────
+
+# Scoring weights (must sum to 1.0)
+EMBEDDING_WEIGHT = 0.4
+NAME_WEIGHT = 0.3
+TYPE_WEIGHT = 0.2
+CONTEXT_WEIGHT = 0.1
+
+# Decision thresholds
+STORE_THRESHOLD = 0.85        # create SAME_AS link immediately
+AMBIGUOUS_LOWER = 0.60        # pass to LLM disambiguation (TASK-011)
+
+# Compatible type pairs (order-independent) that receive a partial type score
+_COMPATIBLE_TYPE_PAIRS: frozenset[frozenset[str]] = frozenset(
+    [
+        frozenset({"organization", "company"}),
+        frozenset({"person", "individual"}),
+        frozenset({"location", "place"}),
+    ]
+)
+
+# Legal-suffix tokens stripped during name normalization
+_LEGAL_SUFFIX_RE = re.compile(
+    r"\b(inc|ltd|corp|llc|co|limited|incorporated|corporation|plc|gmbh|sa|srl|bv|nv|ag)\b\.?",
+    re.IGNORECASE,
+)
+
+# Punctuation strip pattern (keeps spaces and alphanumeric)
+_PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def _normalize_name(name: str) -> str:
+    """Lowercase, strip punctuation, remove common legal suffixes."""
+    name = name.lower()
+    name = _LEGAL_SUFFIX_RE.sub("", name)
+    name = _PUNCT_RE.sub("", name)
+    return " ".join(name.split())  # collapse whitespace
+
+
+class EntityResolver:
+    """Four-signal scorer for cross-graph SAME_AS candidate resolution.
+
+    Signals and weights:
+        embedding_similarity * 0.4  — cosine similarity from vector search
+        name_similarity      * 0.3  — Jaro-Winkler on normalized names
+        type_compatibility   * 0.2  — exact / compatible / incompatible type pairs
+        context_overlap      * 0.1  — Jaccard of 1-hop neighbor names
+
+    Decision thresholds:
+        final_score >= STORE_THRESHOLD (0.85)          → create SAME_AS link
+        AMBIGUOUS_LOWER (0.60) <= score < 0.85         → log for TASK-011
+        score < AMBIGUOUS_LOWER                        → discard
+    """
+
+    # ── Signal: embedding similarity ─────────────────────────────────────────
+
+    @staticmethod
+    def _embedding_score(candidate: SameAsCandidate) -> float:
+        """Return the cosine similarity score from the vector search (already in [0,1])."""
+        return float(candidate["score"])
+
+    # ── Signal: name similarity ───────────────────────────────────────────────
+
+    @staticmethod
+    def _name_score(entity_a: dict, entity_b: dict) -> float:
+        """Jaro-Winkler similarity on normalized entity names."""
+        name_a = _normalize_name(entity_a.get("name") or "")
+        name_b = _normalize_name(entity_b.get("name") or "")
+        if not name_a or not name_b:
+            return 0.0
+        return jellyfish.jaro_winkler_similarity(name_a, name_b)
+
+    # ── Signal: type compatibility ────────────────────────────────────────────
+
+    @staticmethod
+    def _type_score(entity_a: dict, entity_b: dict) -> float:
+        """1.0 for same type, 0.5 for compatible pairs, 0.0 otherwise."""
+        type_a = (entity_a.get("type") or "").strip().lower()
+        type_b = (entity_b.get("type") or "").strip().lower()
+        if not type_a or not type_b:
+            return 0.0
+        if type_a == type_b:
+            return 1.0
+        pair = frozenset({type_a, type_b})
+        if pair in _COMPATIBLE_TYPE_PAIRS:
+            return 0.5
+        return 0.0
+
+    # ── Signal: context overlap ───────────────────────────────────────────────
+
+    @staticmethod
+    async def _context_score(
+        entity_a: dict,
+        entity_b: dict,
+        session: AsyncSession,
+        graph_id_a: str,
+        graph_id_b: str,
+    ) -> float:
+        """Jaccard similarity of 1-hop neighbor entity names.
+
+        Returns 0.0 (no ZeroDivisionError) when either entity has no neighbors.
+        """
+        neighbors_a = await EntityResolver._get_neighbor_names(
+            session, entity_a.get("entity_id", ""), graph_id_a
+        )
+        neighbors_b = await EntityResolver._get_neighbor_names(
+            session, entity_b.get("entity_id", ""), graph_id_b
+        )
+        if not neighbors_a or not neighbors_b:
+            return 0.0
+        intersection = neighbors_a & neighbors_b
+        union = neighbors_a | neighbors_b
+        if not union:
+            return 0.0
+        return len(intersection) / len(union)
+
+    @staticmethod
+    async def _get_neighbor_names(
+        session: AsyncSession, entity_id: str, graph_id: str
+    ) -> set[str]:
+        """Return the set of normalized neighbor entity names for a given entity."""
+        if not entity_id:
+            return set()
+        query = """
+        MATCH (e:__Entity__)
+        WHERE elementId(e) = $entity_id AND e.graph_id = $graph_id
+        MATCH (e)-[]->(neighbor:__Entity__)
+        WHERE neighbor.graph_id = $graph_id
+        RETURN neighbor.name AS name
+        UNION
+        MATCH (e:__Entity__)
+        WHERE elementId(e) = $entity_id AND e.graph_id = $graph_id
+        MATCH (neighbor:__Entity__)-[]->(e)
+        WHERE neighbor.graph_id = $graph_id
+        RETURN neighbor.name AS name
+        """
+        try:
+            result = await session.run(
+                query, {"entity_id": entity_id, "graph_id": graph_id}
+            )
+            rows = await result.data()
+            return {_normalize_name(row["name"]) for row in rows if row["name"]}
+        except Exception as exc:
+            logger.warning(
+                "failed to fetch neighbor names for entity %s: %s", entity_id, exc
+            )
+            return set()
+
+    # ── Composite score ───────────────────────────────────────────────────────
+
+    @staticmethod
+    async def score(
+        entity_a: dict,
+        candidate: SameAsCandidate,
+        session: AsyncSession,
+        graph_id_a: str,
+        graph_id_b: str,
+    ) -> float:
+        """Return the weighted four-signal confidence score.
+
+        Weights: embedding=0.4, name=0.3, type=0.2, context=0.1  (sum=1.0)
+        """
+        entity_b = candidate["entity"]
+        embedding_sim = EntityResolver._embedding_score(candidate)
+        name_sim = EntityResolver._name_score(entity_a, entity_b)
+        type_compat = EntityResolver._type_score(entity_a, entity_b)
+        ctx_overlap = await EntityResolver._context_score(
+            entity_a, entity_b, session, graph_id_a, graph_id_b
+        )
+        return (
+            embedding_sim * EMBEDDING_WEIGHT
+            + name_sim * NAME_WEIGHT
+            + type_compat * TYPE_WEIGHT
+            + ctx_overlap * CONTEXT_WEIGHT
+        )
+
+    # ── Resolution & link creation ────────────────────────────────────────────
+
+    @staticmethod
+    async def resolve_and_link(
+        entity_a: dict,
+        candidates: list[SameAsCandidate],
+        session: AsyncSession,
+        graph_id_a: str,
+        target_graph_ids: list[str],
+    ) -> list[dict]:
+        """Score each candidate and create SAME_AS links for high-confidence pairs.
+
+        For each candidate:
+          - final_score >= STORE_THRESHOLD (0.85): create bidirectional SAME_AS link
+          - AMBIGUOUS_LOWER (0.60) <= final_score < 0.85: log at INFO for TASK-011
+          - final_score < AMBIGUOUS_LOWER: discard
+
+        Returns a list of ambiguous candidate dicts (score in [0.60, 0.85))
+        for downstream processing (TASK-011).
+        """
+        ambiguous: list[dict] = []
+
+        for candidate in candidates:
+            entity_b = candidate["entity"]
+            graph_id_b = entity_b.get("source_graph_id", target_graph_ids[0] if target_graph_ids else "")
+
+            final_score = await EntityResolver.score(
+                entity_a, candidate, session, graph_id_a, graph_id_b
+            )
+
+            if final_score >= STORE_THRESHOLD:
+                await EntityResolver._create_same_as_link(
+                    session,
+                    entity_a.get("entity_id", ""),
+                    entity_b.get("entity_id", ""),
+                    final_score,
+                )
+            elif final_score >= AMBIGUOUS_LOWER:
+                logger.info(
+                    "ambiguous candidate: %s <-> %s score=%.3f",
+                    entity_a.get("name", entity_a.get("entity_id", "?")),
+                    entity_b.get("name", entity_b.get("entity_id", "?")),
+                    final_score,
+                )
+                ambiguous.append(
+                    {
+                        "entity_a": entity_a,
+                        "entity_b": entity_b,
+                        "score": final_score,
+                        "graph_id_a": graph_id_a,
+                        "graph_id_b": graph_id_b,
+                    }
+                )
+            # else: discard — below AMBIGUOUS_LOWER
+
+        return ambiguous
+
+    @staticmethod
+    async def _create_same_as_link(
+        session: AsyncSession,
+        id_a: str,
+        id_b: str,
+        score: float,
+    ) -> None:
+        """Persist a bidirectional SAME_AS relationship using idempotent MERGE."""
+        query = """
+        MATCH (a:__Entity__) WHERE elementId(a) = $id_a
+        MATCH (b:__Entity__) WHERE elementId(b) = $id_b
+        MERGE (a)-[:SAME_AS {confidence: $score, method: 'multi-signal', created_at: datetime()}]->(b)
+        MERGE (b)-[:SAME_AS {confidence: $score, method: 'multi-signal', created_at: datetime()}]->(a)
+        """
+        try:
+            async def _write(tx) -> None:
+                await tx.run(query, {"id_a": id_a, "id_b": id_b, "score": score})
+
+            await session.execute_write(_write)
+            logger.info(
+                "created SAME_AS link: %s <-> %s confidence=%.3f", id_a, id_b, score
+            )
+        except Exception as exc:
+            logger.warning(
+                "failed to create SAME_AS link %s <-> %s: %s", id_a, id_b, exc
+            )
 
 
 class MultiTenantEntityDeduplicator(Component):
