@@ -34,6 +34,9 @@ _SAME_AS_CANDIDATE_THRESHOLD = 0.60
 # Over-fetch multiplier for vector search post-filter
 _VECTOR_OVERFETCH_MULTIPLIER = 1.5
 
+# Hard limit on target_graph_ids to prevent unbounded candidate_count (DoS guard)
+_MAX_TARGET_GRAPHS = 50
+
 
 class FederationError(Exception):
     """Raised for federation-specific validation failures."""
@@ -444,6 +447,12 @@ class FederationService:
 
         Only entities with similarity >= *threshold* are returned.
         """
+        if len(target_graph_ids) > _MAX_TARGET_GRAPHS:
+            raise ValueError(
+                f"target_graph_ids exceeds limit of {_MAX_TARGET_GRAPHS} "
+                f"(got {len(target_graph_ids)})"
+            )
+
         # Over-fetch to compensate for the graph_id post-filter recall loss.
         candidate_count = int(
             MAX_RESULTS_PER_GRAPH * len(target_graph_ids) * _VECTOR_OVERFETCH_MULTIPLIER
