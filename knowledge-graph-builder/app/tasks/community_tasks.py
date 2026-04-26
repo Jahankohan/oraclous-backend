@@ -47,8 +47,8 @@ COMMUNITY_DETECTION_CONCURRENCY: int = getattr(
 )
 LLM_SUMMARY_CONCURRENCY: int = getattr(settings, "LLM_SUMMARY_CONCURRENCY", 5)
 
-DEFAULT_LEVELS = [0, 1, 2]
-DEFAULT_RESOLUTIONS = [0.5, 1.0, 2.0]
+DEFAULT_LEVELS = [0, 1, 2, 3, 4]
+DEFAULT_RESOLUTIONS = [0.25, 0.5, 1.0, 2.0, 4.0]
 
 # Prompt template version — bump this to invalidate all cached summaries
 PROMPT_TEMPLATE_VERSION = "v1"

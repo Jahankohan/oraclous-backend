@@ -777,8 +777,8 @@ async def _maybe_trigger_community_detection(graph_id: str) -> None:
             detect_communities_task.apply_async(
                 args=[graph_id],
                 kwargs={
-                    "levels": [0, 1, 2],
-                    "resolutions": [0.5, 1.0, 2.0],
+                    "levels": [0, 1, 2, 3, 4],
+                    "resolutions": [0.25, 0.5, 1.0, 2.0, 4.0],
                     "force_rebuild": False,
                 },
                 countdown=30,
