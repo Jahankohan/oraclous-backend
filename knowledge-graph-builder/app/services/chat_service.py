@@ -33,7 +33,11 @@ from app.schemas.retriever_schemas import (
     get_default_retriever_config,
 )
 from app.services.fulltext_index_service import fulltext_index_manager
-from app.services.retriever_factory import RetrieverType, retriever_factory
+from app.services.retriever_factory import (
+    CommunitySummaryRetriever,
+    RetrieverType,
+    retriever_factory,
+)
 
 logger = get_logger(__name__)
 _chat_tracer = get_tracer("oraclous.chat")
@@ -99,6 +103,35 @@ _STOPWORDS = frozenset(
     }
 )
 
+# ---------------------------------------------------------------------------
+# Global query detection — routes broad/thematic questions to community
+# summaries instead of vector/fulltext retrieval.
+# ---------------------------------------------------------------------------
+_GLOBAL_KEYWORDS = frozenset(
+    {
+        "overview",
+        "themes",
+        "theme",
+        "main topics",
+        "across all",
+        "summarize",
+        "summarise",
+        "what are the",
+        "broad",
+        "general",
+        "landscape",
+        "areas",
+        "categories",
+        "domains",
+    }
+)
+
+
+def _is_global_query(query: str) -> bool:
+    """Return True when the query is broad/thematic and benefits from community summaries."""
+    q_lower = query.lower()
+    return any(kw in q_lower for kw in _GLOBAL_KEYWORDS)
+
 
 @dataclass
 class GroundedSearchResult:
@@ -127,24 +160,30 @@ class ChatService:
         self.retriever_type = retriever_type
         self.retriever_config_dict = retriever_config or {}
 
-        default_config = get_default_retriever_config(retriever_type, graph_id)
-
-        if retriever_type == RetrieverType.VECTOR:
-            typed_config = cast(VectorRetrieverConfig, default_config)
-        elif retriever_type == RetrieverType.VECTOR_CYPHER:
-            typed_config = cast(VectorCypherRetrieverConfig, default_config)
-        elif retriever_type == RetrieverType.HYBRID:
-            typed_config = cast(HybridRetrieverConfig, default_config)
-        elif retriever_type == RetrieverType.HYBRID_CYPHER:
-            typed_config = cast(HybridCypherRetrieverConfig, default_config)
-        elif retriever_type == RetrieverType.TEXT2CYPHER:
-            typed_config = cast(Text2CypherRetrieverConfig, default_config)
+        # COMMUNITY_SUMMARY bypasses the GraphRAG retriever pipeline — skip
+        # RetrieverConfig construction (CommunitySummaryRetriever is instantiated
+        # directly in _setup_retriever).
+        if retriever_type == RetrieverType.COMMUNITY_SUMMARY:
+            self.retriever_config = None  # type: ignore[assignment]
         else:
-            raise ValueError(f"Unsupported retriever type: {retriever_type}")
+            default_config = get_default_retriever_config(retriever_type, graph_id)
 
-        self.retriever_config = RetrieverConfig(
-            type=retriever_type, config=typed_config
-        )
+            if retriever_type == RetrieverType.VECTOR:
+                typed_config = cast(VectorRetrieverConfig, default_config)
+            elif retriever_type == RetrieverType.VECTOR_CYPHER:
+                typed_config = cast(VectorCypherRetrieverConfig, default_config)
+            elif retriever_type == RetrieverType.HYBRID:
+                typed_config = cast(HybridRetrieverConfig, default_config)
+            elif retriever_type == RetrieverType.HYBRID_CYPHER:
+                typed_config = cast(HybridCypherRetrieverConfig, default_config)
+            elif retriever_type == RetrieverType.TEXT2CYPHER:
+                typed_config = cast(Text2CypherRetrieverConfig, default_config)
+            else:
+                raise ValueError(f"Unsupported retriever type: {retriever_type}")
+
+            self.retriever_config = RetrieverConfig(
+                type=retriever_type, config=typed_config
+            )
 
         self.embedder = OpenAIEmbeddings(
             api_key=settings.OPENAI_API_KEY, model="text-embedding-3-large"
@@ -168,6 +207,13 @@ class ChatService:
         """Async initialization of retriever and GraphRAG components."""
         await self._setup_retriever()
 
+        if self.retriever_type == RetrieverType.COMMUNITY_SUMMARY:
+            # CommunitySummaryRetriever does not use GraphRAG — skip rag setup.
+            logger.info(
+                f"CommunitySummaryRetriever initialized for graph {self.graph_id}"
+            )
+            return
+
         if self.retriever:
             self.rag = GraphRAG(retriever=self.retriever, llm=self.llm)
             logger.info(f"GraphRAG initialized successfully for graph {self.graph_id}")
@@ -177,6 +223,15 @@ class ChatService:
     async def _setup_retriever(self):
         """Set up retriever using factory pattern with full-text index management."""
         try:
+            # CommunitySummaryRetriever is instantiated directly — it does not go
+            # through the RetrieverFactory / GraphRAG pipeline.
+            if self.retriever_type == RetrieverType.COMMUNITY_SUMMARY:
+                self.retriever = CommunitySummaryRetriever(graph_id=self.graph_id)
+                logger.info(
+                    f"Created CommunitySummaryRetriever for graph {self.graph_id}"
+                )
+                return
+
             if self.retriever_type in [
                 RetrieverType.HYBRID,
                 RetrieverType.HYBRID_CYPHER,
@@ -326,6 +381,12 @@ class ChatService:
         temporal_params: dict[str, Any] | None = None,
     ) -> "GroundedSearchResult":
         try:
+            # ------------------------------------------------------------------
+            # Community summary fast path — bypasses GraphRAG vector pipeline.
+            # ------------------------------------------------------------------
+            if self.retriever_type == RetrieverType.COMMUNITY_SUMMARY:
+                return await self._community_summary_search(span, query_text)
+
             if not self.rag:
                 await self.initialize()
 
@@ -462,11 +523,106 @@ class ChatService:
                 retriever_used=self.retriever_type.value,
             )
 
+    async def _community_summary_search(
+        self, span, query_text: str
+    ) -> GroundedSearchResult:
+        """
+        Retrieve Leiden community summaries and synthesise an answer via the LLM.
+
+        Bypasses the GraphRAG vector pipeline.  Summaries from Neo4j are passed
+        as plain text context; they are never interpolated into Cypher queries.
+        """
+        if not self.retriever:
+            await self.initialize()
+
+        assert isinstance(self.retriever, CommunitySummaryRetriever)
+
+        community_docs = await self.retriever.search(query_text)
+
+        if not community_docs:
+            logger.warning(
+                "No community summaries found for graph %s", self.graph_id
+            )
+            span.set_attribute("chat.is_grounded", False)
+            span.set_attribute("chat.confidence", 0.0)
+            span.set_attribute("chat.sources_count", 0)
+            span.set_attribute("chat.hallucination_flag", True)
+            return GroundedSearchResult(
+                answer=(
+                    "The knowledge graph does not contain sufficient data "
+                    "to answer this question."
+                ),
+                sources=[],
+                confidence=0.0,
+                is_grounded=False,
+                retriever_used=RetrieverType.COMMUNITY_SUMMARY.value,
+            )
+
+        # Build plain-text context from community summaries.
+        context_parts = [
+            f"[Community {doc['community_id']} — {doc['entity_count']} entities]\n"
+            f"{doc['summary']}"
+            for doc in community_docs
+        ]
+        context = "\n\n".join(context_parts)
+
+        prompt = STRICT_GROUNDING_PROMPT.format(
+            context=context, query_text=query_text
+        )
+        llm_response = await self.llm.ainvoke(prompt)
+        answer = llm_response.content
+
+        is_grounded = not answer.strip().startswith(_INSUFFICIENT_PREFIX)
+        if not is_grounded:
+            answer = (
+                "The knowledge graph does not contain sufficient data "
+                "to answer this question."
+            )
+
+        sources = [
+            {
+                "node_id": doc["community_id"],
+                "node_labels": ["__Community__"],
+                "content": doc["summary"][:500],
+                "relevance_score": None,
+                "properties": {"entity_count": doc["entity_count"]},
+            }
+            for doc in community_docs
+        ]
+        confidence = 0.7 if is_grounded else 0.0
+
+        logger.info(
+            "Community summary search complete — grounded=%s, sources=%d",
+            is_grounded,
+            len(sources),
+        )
+        span.set_attribute("chat.is_grounded", is_grounded)
+        span.set_attribute("chat.confidence", confidence)
+        span.set_attribute("chat.sources_count", len(sources))
+        span.set_attribute("chat.hallucination_flag", not is_grounded)
+
+        return GroundedSearchResult(
+            answer=answer,
+            sources=sources,
+            confidence=confidence,
+            is_grounded=is_grounded,
+            retriever_used=RetrieverType.COMMUNITY_SUMMARY.value,
+        )
+
     @staticmethod
     def auto_select_retriever_type(query: str) -> RetrieverType:
         """
         Choose the most appropriate retriever type based on query characteristics.
+
+        Rules (evaluated in priority order):
+        1. Global/thematic keywords → COMMUNITY_SUMMARY for broad overview queries
+        2. Cypher/graph-query keywords → TEXT2CYPHER for precise traversal
+        3. Analytic / enumeration keywords → HYBRID for broader coverage
+        4. Relationship / connectivity keywords → VECTOR_CYPHER for graph traversal
+        5. Default → VECTOR_CYPHER (balanced precision + context)
         """
+        if _is_global_query(query):
+            return RetrieverType.COMMUNITY_SUMMARY
         if _CYPHER_PATTERNS.search(query):
             return RetrieverType.TEXT2CYPHER
         if _ANALYTIC_PATTERNS.search(query):
