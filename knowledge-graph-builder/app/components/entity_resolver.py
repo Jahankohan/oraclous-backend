@@ -31,6 +31,23 @@ from app.schemas.federation_schemas import SameAsCandidate
 
 logger = get_logger(__name__)
 
+# Allowlisted relationship types for deduplication fallback — prevents Cypher injection
+# via runtime rel_type values passed to apoc.cypher.doIt() or string concatenation.
+_ALLOWED_REL_TYPES: frozenset[str] = frozenset({
+    "WORKS_FOR",
+    "FOUNDED",
+    "LEADS",
+    "MANAGES",
+    "DEVELOPED",
+    "PARTNERED_WITH",
+    "RELATED_TO",
+    "PART_OF",
+    "OWNS",
+    "LOCATED_IN",
+    "SAME_AS",
+    "SIMILAR_TO",
+})
+
 # ── EntityResolver — four-signal SAME_AS scorer ───────────────────────────────
 
 # Scoring weights (must sum to 1.0)
@@ -579,69 +596,18 @@ class MultiTenantEntityDeduplicator(Component):
         """
         Fallback method to create relationships without APOC procedures.
 
-        This method handles ANY relationship type dynamically by using
-        a generic approach that works for all relationship types.
+        Only relationship types in _ALLOWED_REL_TYPES are accepted; any other
+        type is silently skipped with a warning to prevent Cypher injection.
+        No apoc.cypher.doIt() or string concatenation into Cypher query text.
         """
-        # Use a generic approach that works for any relationship type
-        # We'll use a two-step process: create the relationship, then set properties
-        try:
-            # Step 1: Create the relationship using CALL procedure
-            # This approach works with any relationship type
-            query = """
-                MATCH (source) WHERE elementId(source) = $source_id
-                MATCH (target) WHERE elementId(target) = $target_id
-                CALL apoc.cypher.doIt(
-                    'MERGE (s)-[r:' + $rel_type + ']->(t) RETURN r',
-                    {s: source, t: target}
-                ) YIELD value
-                WITH value.r as rel
-                SET rel = $rel_props
-                RETURN rel
-            """
-
-            session.run(
-                query,
-                source_id=source_id,
-                target_id=target_id,
-                rel_type=rel_type,
-                rel_props=rel_props,
+        if rel_type not in _ALLOWED_REL_TYPES:
+            logger.warning(
+                "skipping relationship of unrecognised type %r during deduplication"
+                " -- not in allowlist",
+                rel_type,
             )
-
-        except Exception:
-            # Ultimate fallback: use known relationship types or create a generic one
-            if rel_type in [
-                "WORKS_FOR",
-                "FOUNDED",
-                "LEADS",
-                "MANAGES",
-                "DEVELOPED",
-                "PARTNERED_WITH",
-            ]:
-                # Use predefined relationship creation for known types
-                self._create_known_relationship(
-                    session, source_id, target_id, rel_type, rel_props
-                )
-            else:
-                # For unknown relationship types, log a warning and create a generic relationship
-                logger.warning(
-                    f"Unknown relationship type '{rel_type}' - creating generic relationship"
-                )
-
-                # Create a generic relationship with the original type as a property
-                query = """
-                    MATCH (source) WHERE elementId(source) = $source_id
-                    MATCH (target) WHERE elementId(target) = $target_id
-                    MERGE (source)-[r:RELATED_TO]->(target)
-                    SET r.original_type = $rel_type, r = $rel_props
-                    RETURN r
-                """
-                session.run(
-                    query,
-                    source_id=source_id,
-                    target_id=target_id,
-                    rel_type=rel_type,
-                    rel_props=rel_props,
-                )
+            return
+        self._create_known_relationship(session, source_id, target_id, rel_type, rel_props)
 
     def _create_known_relationship(
         self,
@@ -697,8 +663,55 @@ class MultiTenantEntityDeduplicator(Component):
                 MERGE (source)-[r:PARTNERED_WITH]->(target)
                 SET r = $rel_props
             """
+        elif rel_type == "RELATED_TO":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:RELATED_TO]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "PART_OF":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:PART_OF]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "OWNS":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:OWNS]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "LOCATED_IN":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:LOCATED_IN]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "SAME_AS":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:SAME_AS]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "SIMILAR_TO":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:SIMILAR_TO]->(target)
+                SET r = $rel_props
+            """
         else:
-            # This shouldn't happen since we check before calling this method
+            # _create_relationship_fallback() already checked the allowlist;
+            # this branch should never be reached.
+            logger.warning(
+                "skipping relationship of unrecognised type %r in _create_known_relationship",
+                rel_type,
+            )
             return
 
         session.run(
