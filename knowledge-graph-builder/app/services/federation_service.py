@@ -13,6 +13,7 @@ from typing import Any
 
 from neo4j import AsyncDriver
 
+from app.components.entity_resolver import EntityResolver
 from app.core.logging import get_logger
 from app.schemas.federation_schemas import (
     MAX_GRAPH_IDS,
@@ -377,6 +378,40 @@ class FederationService:
             SameAsCandidate(entity=c, score=c.get("similarity", 0.0), method="vector")
             for c in candidates
         ]
+
+    async def resolve_entity(
+        self,
+        entity: dict,
+        graph_id: str,
+        target_graph_ids: list[str],
+    ) -> list[dict]:
+        """Find SAME_AS candidates for *entity* and apply the four-signal scorer.
+
+        Orchestrates TASK-009's candidate retrieval with TASK-010's EntityResolver:
+        1. find_same_as_candidates — exact fast path + vector search
+        2. EntityResolver.resolve_and_link — score each candidate and either:
+             - create a SAME_AS link (score >= 0.85)
+             - log as ambiguous for TASK-011 (0.60 <= score < 0.85)
+             - discard (score < 0.60)
+
+        Returns the list of ambiguous candidates (in [0.60, 0.85)) for downstream
+        processing by TASK-011.  Callers do not need to inspect the return value
+        for the store-path — links are persisted inside resolve_and_link.
+        """
+        candidates = await self.find_same_as_candidates(entity, target_graph_ids)
+        if not candidates:
+            return []
+
+        async with self._driver.session(database=self._database) as session:
+            ambiguous = await EntityResolver.resolve_and_link(
+                entity_a=entity,
+                candidates=candidates,
+                session=session,
+                graph_id_a=graph_id,
+                target_graph_ids=target_graph_ids,
+            )
+
+        return ambiguous
 
     async def _find_exact_match(
         self, entity: dict, target_graph_ids: list[str]
