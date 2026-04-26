@@ -51,6 +51,9 @@ mcp[cli]>=1.0.0
 leidenalg>=0.10
 python-igraph>=0.10
 
+# String similarity — used by EntityResolver for name signal (TASK-010)
+jellyfish>=1.0.1
+
 # Code Knowledge Graphs — Tree-sitter parsing
 tree-sitter>=0.22.0
 tree-sitter-python>=0.23.0
