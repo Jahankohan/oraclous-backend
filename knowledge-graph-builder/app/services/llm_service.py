@@ -4,12 +4,108 @@ from langchain_anthropic import ChatAnthropic
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
+from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.credential_service import credential_service
 
 logger = get_logger(__name__)
+
+# ── SAME_AS disambiguation ────────────────────────────────────────────────────
+
+_DISAMBIGUATE_MODEL = "gpt-4o-mini"
+_DISAMBIGUATE_SYSTEM = (
+    "You are a precise entity disambiguation assistant. "
+    "Answer only in the structured format requested."
+)
+
+
+async def disambiguate_entities(
+    name_a: str,
+    type_a: str,
+    context_a: list[str],
+    name_b: str,
+    type_b: str,
+    context_b: list[str],
+) -> dict:
+    """Ask the LLM whether two entities refer to the same real-world entity.
+
+    Returns a dict with keys:
+        decision:   "YES" | "NO"
+        confidence: "HIGH" | "MEDIUM" | "LOW"
+        reason:     str (one sentence)
+
+    On any LLM failure or parse error, returns the fail-safe default:
+        {"decision": "NO", "confidence": "LOW", "reason": "parse_error"}
+
+    Security: name_a, name_b, context_a, context_b are only embedded in the
+    LLM prompt string — they are never interpolated into Cypher queries.
+    """
+    api_key = settings.OPENAI_API_KEY
+    if not api_key:
+        logger.warning("disambiguate_entities: OPENAI_API_KEY not set — returning NO/LOW")
+        return {"decision": "NO", "confidence": "LOW", "reason": "no_api_key"}
+
+    context_a_str = ", ".join(context_a[:3]) if context_a else "none"
+    context_b_str = ", ".join(context_b[:3]) if context_b else "none"
+
+    prompt = (
+        f'Are these two entities the same real-world entity? Answer YES or NO, '
+        f'and provide a brief reason.\n\n'
+        f'Entity A: "{name_a}" (type: {type_a})\n'
+        f'Context A: {context_a_str}\n\n'
+        f'Entity B: "{name_b}" (type: {type_b})\n'
+        f'Context B: {context_b_str}\n\n'
+        f'Answer format:\n'
+        f'DECISION: YES | NO\n'
+        f'CONFIDENCE: HIGH | MEDIUM | LOW\n'
+        f'REASON: <one sentence>'
+    )
+
+    try:
+        client = AsyncOpenAI(api_key=api_key)
+        response = await client.chat.completions.create(
+            model=_DISAMBIGUATE_MODEL,
+            messages=[
+                {"role": "system", "content": _DISAMBIGUATE_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=120,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+    except Exception as exc:
+        logger.warning("disambiguate_entities: LLM call failed: %s", exc)
+        return {"decision": "NO", "confidence": "LOW", "reason": "parse_error"}
+
+    # Defensive line-by-line parse
+    decision = "NO"
+    confidence = "LOW"
+    reason = "parse_error"
+    try:
+        for line in raw.splitlines():
+            line = line.strip()
+            upper = line.upper()
+            if upper.startswith("DECISION:"):
+                val = line[len("DECISION:"):].strip().upper()
+                if val in {"YES", "NO"}:
+                    decision = val
+            elif upper.startswith("CONFIDENCE:"):
+                val = line[len("CONFIDENCE:"):].strip().upper()
+                if val in {"HIGH", "MEDIUM", "LOW"}:
+                    confidence = val
+            elif upper.startswith("REASON:"):
+                reason = line[len("REASON:"):].strip()
+    except Exception as exc:
+        logger.warning("disambiguate_entities: parse failed on %r: %s", raw, exc)
+        return {"decision": "NO", "confidence": "LOW", "reason": "parse_error"}
+
+    logger.debug(
+        "disambiguate_entities: %r vs %r → decision=%s confidence=%s",
+        name_a, name_b, decision, confidence,
+    )
+    return {"decision": decision, "confidence": confidence, "reason": reason}
 
 
 class LLMService:
