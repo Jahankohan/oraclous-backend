@@ -813,6 +813,8 @@ class MultiTenantGraphRAGPipeline:
                 entity_delta_stats = await self._apply_entity_delta(graph, source)
 
         # 5. Multi-tenant metadata injection (automatic via kg_writer)
+        # Set ingestion_source per-document so every node/rel written carries provenance.
+        kg_writer.ingestion_source = source
         with _pipeline_tracer.start_as_current_span(
             "pipeline.stage.graph_write"
         ) as write_span:
@@ -895,7 +897,7 @@ class MultiTenantGraphRAGPipeline:
         # 6.5. Set provenance on entity nodes and FROM_CHUNK relationships
         if job_id and graph and graph.nodes:
             entity_ids = [n.id for n in graph.nodes if n.id]
-            await self._set_entity_provenance(entity_ids, job_id)
+            await self._set_entity_provenance(entity_ids, job_id, ingestion_source=source)
 
         # Return statistics
         return {
@@ -1371,13 +1373,18 @@ class MultiTenantGraphRAGPipeline:
             )
 
     async def _set_entity_provenance(
-        self, entity_ids: list[str], job_id: str | None
+        self,
+        entity_ids: list[str],
+        job_id: str | None,
+        ingestion_source: str | None = None,
     ) -> None:
         """
-        Set lastJobId, ingestedAt (first-seen only), and updatedAt on extracted entity nodes.
+        Set lastJobId, ingestedAt (first-seen only), updatedAt, ingestion_time, and
+        ingestion_source on extracted entity nodes.
 
-        Uses ON MATCH SET semantics: ingestedAt is only set when first created (preserves
-        original ingestion timestamp), while updatedAt and lastJobId are always refreshed.
+        Uses ON MATCH SET semantics: ingestedAt and ingestion_time are only set when
+        first created (preserves original ingestion timestamp), while updatedAt and
+        lastJobId are always refreshed.
         This ensures manually-added properties on entity nodes are never overwritten.
         """
         if not entity_ids or not job_id:
@@ -1386,9 +1393,12 @@ class MultiTenantGraphRAGPipeline:
             query = """
             UNWIND $entity_ids AS eid
             MATCH (n:__Entity__ {id: eid, graph_id: $graph_id})
-            SET n.lastJobId  = $job_id,
-                n.ingestedAt = CASE WHEN n.ingestedAt IS NULL THEN datetime() ELSE n.ingestedAt END,
-                n.updatedAt  = datetime()
+            SET n.lastJobId       = $job_id,
+                n.ingestedAt      = CASE WHEN n.ingestedAt IS NULL THEN datetime() ELSE n.ingestedAt END,
+                n.updatedAt       = datetime(),
+                n.ingestion_time  = CASE WHEN n.ingestion_time IS NULL THEN datetime() ELSE n.ingestion_time END,
+                n.ingestion_source = CASE WHEN n.ingestion_source IS NULL AND $ingestion_source IS NOT NULL
+                                         THEN $ingestion_source ELSE n.ingestion_source END
             """
             await neo4j_client.execute_query(
                 query,
@@ -1396,6 +1406,7 @@ class MultiTenantGraphRAGPipeline:
                     "entity_ids": entity_ids,
                     "graph_id": self.graph_id,
                     "job_id": job_id,
+                    "ingestion_source": ingestion_source,
                 },
             )
         except Exception as e:
