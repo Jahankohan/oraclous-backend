@@ -741,11 +741,11 @@ class GraphAnalyticsService:
             }
 
         except Exception as e:
-            logger.error(f"Failed to create simple communities: {e}")
+            logger.error(f"Failed to create simple communities for {graph_id}: {e}", exc_info=True)
             return {
                 "communities_created": 0,
                 "relationships_created": 0,
-                "error": str(e),
+                "error": "community_creation_failed",
                 "graph_id": str(graph_id),
             }
 
