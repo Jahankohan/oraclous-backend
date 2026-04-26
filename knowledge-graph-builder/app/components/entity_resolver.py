@@ -28,6 +28,7 @@ from neo4j_graphrag.experimental.pipeline.component import Component
 
 from app.core.logging import get_logger
 from app.schemas.federation_schemas import SameAsCandidate
+from app.services.llm_service import disambiguate_entities
 
 logger = get_logger(__name__)
 
@@ -254,12 +255,15 @@ class EntityResolver:
         """Score each candidate and create SAME_AS links for high-confidence pairs.
 
         For each candidate:
-          - final_score >= STORE_THRESHOLD (0.85): create bidirectional SAME_AS link
-          - AMBIGUOUS_LOWER (0.60) <= final_score < 0.85: log at INFO for TASK-011
+          - final_score >= STORE_THRESHOLD (0.85): create SAME_AS with method='multi-signal'
+          - AMBIGUOUS_LOWER (0.60) <= final_score < 0.85: send to LLM disambiguation
+            - YES + HIGH   → SAME_AS at original score, method='llm-disambiguated'
+            - YES + MEDIUM → SAME_AS at score * 0.9, method='llm-disambiguated'
+            - NO / LOW     → skip (appended to returned ambiguous list for audit)
           - final_score < AMBIGUOUS_LOWER: discard
 
-        Returns a list of ambiguous candidate dicts (score in [0.60, 0.85))
-        for downstream processing (TASK-011).
+        Returns a list of dicts for candidates in the ambiguous zone that the LLM
+        rejected (or that could not be resolved), for audit / downstream use.
         """
         ambiguous: list[dict] = []
 
@@ -287,21 +291,43 @@ class EntityResolver:
                     graph_id_b=graph_id_b,
                 )
             elif final_score >= AMBIGUOUS_LOWER:
+                # LLM disambiguation for the 0.60–0.85 ambiguous zone
                 logger.info(
-                    "ambiguous candidate: %s <-> %s score=%.3f",
+                    "ambiguous candidate — sending to LLM: %s <-> %s score=%.3f",
                     entity_a.get("name", entity_a.get("entity_id", "?")),
                     entity_b.get("name", entity_b.get("entity_id", "?")),
                     final_score,
                 )
-                ambiguous.append(
-                    {
-                        "entity_a": entity_a,
-                        "entity_b": entity_b,
-                        "score": final_score,
-                        "graph_id_a": graph_id_a,
-                        "graph_id_b": graph_id_b,
-                    }
+                should_link, multiplier = await EntityResolver._llm_disambiguate(
+                    entity_a, entity_b, session, graph_id_a, graph_id_b
                 )
+                if should_link:
+                    effective_score = final_score * multiplier
+                    await EntityResolver._create_same_as_link(
+                        session,
+                        entity_a.get("entity_id", ""),
+                        entity_b.get("entity_id", ""),
+                        effective_score,
+                        graph_id_a=graph_id_a,
+                        graph_id_b=graph_id_b,
+                        method="llm-disambiguated",
+                    )
+                else:
+                    logger.info(
+                        "LLM rejected SAME_AS: %s <-> %s score=%.3f",
+                        entity_a.get("name", entity_a.get("entity_id", "?")),
+                        entity_b.get("name", entity_b.get("entity_id", "?")),
+                        final_score,
+                    )
+                    ambiguous.append(
+                        {
+                            "entity_a": entity_a,
+                            "entity_b": entity_b,
+                            "score": final_score,
+                            "graph_id_a": graph_id_a,
+                            "graph_id_b": graph_id_b,
+                        }
+                    )
             # else: discard — below AMBIGUOUS_LOWER
 
         return ambiguous
@@ -314,6 +340,7 @@ class EntityResolver:
         score: float,
         graph_id_a: str,
         graph_id_b: str,
+        method: str = "multi-signal",
     ) -> None:
         """Persist a bidirectional SAME_AS relationship using idempotent MERGE.
 
@@ -323,8 +350,8 @@ class EntityResolver:
         query = """
         MATCH (a:__Entity__ {graph_id: $graph_id_a}) WHERE elementId(a) = $id_a
         MATCH (b:__Entity__ {graph_id: $graph_id_b}) WHERE elementId(b) = $id_b
-        MERGE (a)-[:SAME_AS {confidence: $score, method: 'multi-signal', created_at: datetime()}]->(b)
-        MERGE (b)-[:SAME_AS {confidence: $score, method: 'multi-signal', created_at: datetime()}]->(a)
+        MERGE (a)-[:SAME_AS {confidence: $score, method: $method, created_at: datetime()}]->(b)
+        MERGE (b)-[:SAME_AS {confidence: $score, method: $method, created_at: datetime()}]->(a)
         """
         try:
             async def _write(tx) -> None:
@@ -334,6 +361,7 @@ class EntityResolver:
                         "id_a": id_a,
                         "id_b": id_b,
                         "score": score,
+                        "method": method,
                         "graph_id_a": graph_id_a,
                         "graph_id_b": graph_id_b,
                     },
@@ -341,12 +369,90 @@ class EntityResolver:
 
             await session.execute_write(_write)
             logger.info(
-                "created SAME_AS link: %s <-> %s confidence=%.3f", id_a, id_b, score
+                "created SAME_AS link: %s <-> %s confidence=%.3f method=%s",
+                id_a, id_b, score, method,
             )
         except Exception as exc:
             logger.warning(
                 "failed to create SAME_AS link %s <-> %s: %s", id_a, id_b, exc
             )
+
+    # ── LLM disambiguation for ambiguous candidates ───────────────────────────
+
+    @staticmethod
+    async def _fetch_neighbor_names_for_context(
+        session: AsyncSession,
+        entity_id: str,
+        graph_id: str,
+    ) -> list[str]:
+        """Fetch up to 3 outgoing neighbor names for LLM context.
+
+        Uses parameterized Cypher with explicit graph_id filtering on both
+        anchor and neighbor nodes — tenant isolation is enforced at the query level.
+        The returned names are only used in the LLM prompt string; they are never
+        interpolated into Cypher query text.
+        """
+        if not entity_id:
+            return []
+        query = """
+        MATCH (e {graph_id: $graph_id})
+        WHERE elementId(e) = $entity_id
+        MATCH (e)-[]->(n:__Entity__ {graph_id: $graph_id})
+        RETURN n.name AS name
+        LIMIT 3
+        """
+        try:
+            result = await session.run(
+                query, {"graph_id": graph_id, "entity_id": entity_id}
+            )
+            rows = await result.data()
+            return [row["name"] for row in rows if row.get("name")]
+        except Exception as exc:
+            logger.warning(
+                "_fetch_neighbor_names_for_context failed for entity %s: %s",
+                entity_id, exc,
+            )
+            return []
+
+    @staticmethod
+    async def _llm_disambiguate(
+        entity_a: dict,
+        entity_b: dict,
+        session: AsyncSession,
+        graph_id_a: str,
+        graph_id_b: str,
+    ) -> tuple[bool, float]:
+        """Ask the LLM whether entity_a and entity_b are the same real-world entity.
+
+        Returns (should_link, score_multiplier):
+            (True, 1.0)   — YES + HIGH confidence
+            (True, 0.9)   — YES + MEDIUM confidence
+            (False, 0.0)  — NO, or YES + LOW, or any error (fail-safe)
+        """
+        context_a = await EntityResolver._fetch_neighbor_names_for_context(
+            session, entity_a.get("entity_id", ""), graph_id_a
+        )
+        context_b = await EntityResolver._fetch_neighbor_names_for_context(
+            session, entity_b.get("entity_id", ""), graph_id_b
+        )
+
+        result = await disambiguate_entities(
+            name_a=entity_a.get("name") or "",
+            type_a=entity_a.get("type") or "",
+            context_a=context_a,
+            name_b=entity_b.get("name") or "",
+            type_b=entity_b.get("type") or "",
+            context_b=context_b,
+        )
+
+        decision = result.get("decision", "NO")
+        confidence = result.get("confidence", "LOW")
+
+        if decision == "YES" and confidence == "HIGH":
+            return True, 1.0
+        if decision == "YES" and confidence == "MEDIUM":
+            return True, 0.9
+        return False, 0.0
 
 
 class MultiTenantEntityDeduplicator(Component):
