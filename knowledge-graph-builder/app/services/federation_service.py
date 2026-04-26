@@ -347,9 +347,19 @@ class FederationService:
     # ── SAME_AS candidate retrieval ───────────────────────────────────────────
 
     async def find_same_as_candidates(
-        self, entity: dict, target_graph_ids: list[str]
+        self,
+        source_entity_id: str,
+        source_graph_id: str,
+        target_graph_ids: list[str],
+        embedding: list[float],
+        user_id: str,
+        principal: dict | None = None,
     ) -> list[SameAsCandidate]:
         """Return SAME_AS candidates for *entity* across *target_graph_ids*.
+
+        Raises FederationError (400/403) if the caller does not have permission
+        to access any of *target_graph_ids* — mirrors the auth gate used by
+        federated_query() and federated_vector_search().
 
         Strategy (ordered):
         1. Exact name+type fast path — returns immediately with score 0.99.
@@ -359,13 +369,16 @@ class FederationService:
         This method only *identifies* candidates; it does NOT create SAME_AS
         links.  Link creation is deferred to TASK-010.
         """
+        await self._validate_and_filter(user_id, target_graph_ids, principal=principal)
+
+        entity = {"entity_id": source_entity_id, "embedding": embedding}
+
         # Fast path: exact name + type match — no vector search needed
         exact = await self._find_exact_match(entity, target_graph_ids)
         if exact:
             return [SameAsCandidate(entity=exact, score=0.99, method="exact")]
 
         # Vector search path
-        embedding = entity.get("embedding")
         if not embedding:
             # Cannot do vector search without an embedding — skip silently
             return []
