@@ -1496,6 +1496,200 @@ class GraphAnalyticsService:
         """
         return self.cached_statistics.get(str(graph_id))
 
+    # ==================== PER-LEVEL LLM SUMMARIES ====================
+
+    async def _generate_level_summaries(self, graph_id: str) -> dict[str, Any]:
+        """
+        Generate LLM summaries for every __Community__ node across all levels.
+
+        Strategy:
+        - Level 0 (finest): prompt built from member __Entity__ names + types.
+        - Level 1+: prompt built from child community summaries (hierarchical roll-up).
+          Children are linked via PARENT_COMMUNITY edges to their parent community.
+
+        Stale summaries are cleared before generation so that re-runs after new
+        community detection always produce fresh output.
+
+        Security rules enforced:
+        - Every Cypher query includes {graph_id: $graph_id} in MATCH clause.
+        - No f-strings in Cypher query text — all values passed as parameters.
+
+        Args:
+            graph_id: UUID string of the target graph.
+
+        Returns:
+            Dict with per-level counts of communities summarised.
+        """
+        import asyncio as _asyncio
+
+        from openai import AsyncOpenAI
+
+        openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        llm_model = "gpt-4o-mini"
+
+        # ── Step 1: Clear stale summaries ─────────────────────────────────────
+        await neo4j_client.execute_query(
+            "MATCH (c:__Community__ {graph_id: $graph_id}) SET c.summary = null",
+            {"graph_id": graph_id},
+        )
+
+        # ── Step 2: Discover all levels present (ascending order) ─────────────
+        level_rows = await neo4j_client.execute_query(
+            "MATCH (c:__Community__ {graph_id: $graph_id}) "
+            "RETURN DISTINCT c.level AS level ORDER BY level",
+            {"graph_id": graph_id},
+        )
+        levels = [r["level"] for r in level_rows if r["level"] is not None]
+
+        summaries_per_level: dict[str, int] = {}
+        LLM_CONCURRENCY = getattr(settings, "LLM_SUMMARY_CONCURRENCY", 5)
+        semaphore = _asyncio.Semaphore(LLM_CONCURRENCY)
+
+        async def _call_llm(prompt: str) -> str:
+            """Call the LLM with the given user prompt; return generated text."""
+            async with semaphore:
+                response = await openai_client.chat.completions.create(
+                    model=llm_model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a knowledge graph analyst. "
+                                "Generate a concise, informative summary of a cluster "
+                                "of related entities from a knowledge graph."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.3,
+                    max_tokens=200,
+                )
+                return response.choices[0].message.content.strip()
+
+        # Process levels in ascending order so child summaries exist before parents
+        for level in sorted(levels):
+            # Fetch all community IDs at this level
+            community_rows = await neo4j_client.execute_query(
+                "MATCH (c:__Community__ {graph_id: $graph_id, level: $level}) "
+                "RETURN c.id AS community_id",
+                {"graph_id": graph_id, "level": level},
+            )
+            community_ids = [r["community_id"] for r in community_rows]
+            count_written = 0
+
+            async def _summarise_community(cid: str, lvl: int) -> bool:
+                """Build prompt, call LLM, write summary. Returns True on success."""
+                if lvl == 0:
+                    # Level-0: summarise from raw entity names + types
+                    entity_rows = await neo4j_client.execute_query(
+                        """
+                        MATCH (e:__Entity__ {graph_id: $graph_id})
+                              -[:IN_COMMUNITY {graph_id: $graph_id, level: $level}]->
+                              (c:__Community__ {id: $community_id, graph_id: $graph_id})
+                        RETURN e.name AS name, labels(e) AS lbls
+                        LIMIT 50
+                        """,
+                        {
+                            "graph_id": graph_id,
+                            "level": lvl,
+                            "community_id": cid,
+                        },
+                    )
+                    entity_list = ", ".join(
+                        "{name} ({etype})".format(
+                            name=r["name"] or cid,
+                            etype=next(
+                                (
+                                    lbl
+                                    for lbl in (r["lbls"] or [])
+                                    if lbl != "__Entity__"
+                                ),
+                                "Entity",
+                            ),
+                        )
+                        for r in entity_rows
+                    )
+                    if not entity_list:
+                        return False
+                    prompt = (
+                        "Summarize the entities and their relationships in this group: "
+                        + entity_list
+                    )
+                else:
+                    # Level 1+: roll up from child community summaries.
+                    # Children (level lvl-1) link to parent via PARENT_COMMUNITY.
+                    child_rows = await neo4j_client.execute_query(
+                        """
+                        MATCH (child:__Community__ {graph_id: $graph_id, level: $child_level})
+                              -[:PARENT_COMMUNITY {graph_id: $graph_id}]->
+                              (parent:__Community__ {id: $community_id, graph_id: $graph_id})
+                        WHERE child.summary IS NOT NULL
+                        RETURN child.summary AS summary
+                        LIMIT 20
+                        """,
+                        {
+                            "graph_id": graph_id,
+                            "child_level": lvl - 1,
+                            "community_id": cid,
+                        },
+                    )
+                    child_summaries = [r["summary"] for r in child_rows if r["summary"]]
+                    if not child_summaries:
+                        return False
+                    joined = " | ".join(child_summaries)
+                    if lvl == 1:
+                        prompt = (
+                            "Summarize the themes and patterns across these sub-communities: "
+                            + joined
+                        )
+                    else:
+                        prompt = (
+                            "What are the overarching topics and insights? " + joined
+                        )
+
+                try:
+                    summary_text = await _call_llm(prompt)
+                except Exception as exc:
+                    logger.warning(
+                        f"LLM summary failed for community {cid} at level {lvl}: {exc}"
+                    )
+                    summary_text = f"Community at level {lvl} (summary unavailable)"
+
+                # Write summary back — all values as parameters, no Cypher interpolation
+                await neo4j_client.execute_query(
+                    """
+                    MATCH (c:__Community__ {id: $community_id, graph_id: $graph_id})
+                    SET c.summary = $summary,
+                        c.summary_level = $level,
+                        c.last_updated = datetime()
+                    """,
+                    {
+                        "community_id": cid,
+                        "graph_id": graph_id,
+                        "summary": summary_text,
+                        "level": lvl,
+                    },
+                )
+                return True
+
+            results = await _asyncio.gather(
+                *(_summarise_community(cid, level) for cid in community_ids),
+                return_exceptions=False,
+            )
+            count_written = sum(1 for r in results if r is True)
+            summaries_per_level[str(level)] = count_written
+            logger.info(
+                f"Level {level}: summarised {count_written}/{len(community_ids)} "
+                f"communities for graph {graph_id}"
+            )
+
+        return {
+            "status": "completed",
+            "graph_id": graph_id,
+            "summaries_per_level": summaries_per_level,
+            "total_summarised": sum(summaries_per_level.values()),
+        }
+
     # ==================== COMPREHENSIVE ANALYSIS ====================
 
     async def comprehensive_graph_analysis(
