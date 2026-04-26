@@ -11,9 +11,9 @@ Oraclous is an open-source, self-hosted FTOps (Fine-Tuning DevOps) platform: a t
 
 ## Single Source of Truth
 
-**Everything about this project lives in `wiki/`.**
+**Everything about this project lives in the wiki at `/Users/reza/workspace/Oraclous/wiki/`.**
 
-Start every session by reading [wiki/INDEX.md](wiki/INDEX.md) if you need project context.
+Start every session by reading `/Users/reza/workspace/Oraclous/wiki/INDEX.md` if you need project context.
 
 The wiki is maintained by the `/wiki` skill. To use it:
 ```
@@ -30,7 +30,7 @@ The wiki is maintained by the `/wiki` skill. To use it:
 ## Hierarchy of Truth
 
 When content conflicts, this order governs (higher wins):
-1. `wiki/0_foundation/` — immutable, highest authority
+1. `wiki/0_foundation/` — immutable, highest authority (at `/Users/reza/workspace/Oraclous/wiki/0_foundation/`)
 2. `wiki/1_architecture/` — structural
 3. `wiki/3_decisions/` — permanent record
 4. `wiki/2_product/` and `wiki/4_agents/`
@@ -38,30 +38,27 @@ When content conflicts, this order governs (higher wins):
 
 ## Agent Team
 
-Agents are added incrementally as the architecture demands them. See [wiki/4_agents/README.md](wiki/4_agents/README.md).
+Agents are added incrementally as the architecture demands them. See the wiki at `/Users/reza/workspace/Oraclous/wiki/4_agents/README.md`.
 
 **Current agents:**
 - `solution-architect` — evaluates architecture, detects conflicts, authors ADRs. First agent; all others are defined after SA validates the architecture.
 
 Invoke via `/sa evaluate` (Challenge Mode) or `/sa review <story>` (Review Mode).
 
-## Git Repository
+## Two Repositories — One Rule
 
-**This directory (`oraclous-data-studio/`) is the ONE AND ONLY git repository.**
+| Repo | Path | Contains |
+|------|------|----------|
+| **Wiki (monorepo)** | `/Users/reza/workspace/Oraclous/` | `wiki/` — the single source of truth |
+| **Code (this repo)** | `/Users/reza/workspace/Oraclous/oraclous-data-studio/` | All backend code |
 
-All git operations — branching, committing, logging — happen here.
-The parent directory (`/Users/reza/workspace/Oraclous/`) is NOT a git repo for agent work.
-Never run `git` commands from the parent directory. Never create branches there.
+**Wiki files** (`wiki/6_work/tasks/*.md`, `wiki/4_agents/security-findings.md`, etc.) live in the **outer monorepo** at `/Users/reza/workspace/Oraclous/wiki/`. Edit them there. Do **not** look for a `wiki/` directory inside this repo — it does not exist.
+
+**All git operations** (checkout, commit, branch, log) for code work happen inside `oraclous-data-studio/`. Never run `git` commands from the outer directory for code changes.
 
 ## Codebase Layout
 
 ```
-wiki/                           ← Single source of truth (lives HERE, inside oraclous-data-studio/)
-  0_foundation/                 ← Immutable architecture
-  1_architecture/               ← Structural docs
-  3_decisions/                  ← ADRs
-  4_agents/                     ← Agent definitions, security findings
-  6_work/                       ← Stories, tasks, AGENT_PROTOCOL.md
 knowledge-graph-builder/        ← Main backend service (Python, FastAPI, Neo4j, Celery)
 auth-service/                   ← Auth service
 credential-broker-service/      ← Credential broker
@@ -95,7 +92,7 @@ Every task execution by an AI agent must follow this convention:
 - **One commit per concern** — each commit covers one logical change; if the message needs "and", split into two commits
 - **No AI attribution** — never add `Co-Authored-By: Claude` or any AI/tool signature to commit messages
 
-Full convention: [wiki/5_research/agent-git-workflow.md](wiki/5_research/agent-git-workflow.md)
+Full convention: `/Users/reza/workspace/Oraclous/wiki/5_research/agent-git-workflow.md`
 
 ## Agent Coordination Protocol
 
@@ -106,7 +103,9 @@ Every task has a `status:` field (frontmatter) and an `## Agent Log` section.
 - On finish: set `status: in-review`, append a finish entry with files changed and decisions made
 - Security and QA agents append their verdict to the task file's `## Agent Log`
 
-Full rules: [wiki/6_work/AGENT_PROTOCOL.md](wiki/6_work/AGENT_PROTOCOL.md)
+**Wiki task file location:** `/Users/reza/workspace/Oraclous/wiki/6_work/tasks/TASK-XXX-*.md`
+
+Full rules: `/Users/reza/workspace/Oraclous/wiki/6_work/AGENT_PROTOCOL.md`
 
 ## Key Blocking Gates
 
