@@ -101,17 +101,37 @@ TEMPORAL EXTRACTION RULES:
 6. Put valid_from / valid_to on the RELATIONSHIP, not on entity nodes.
 7. If no temporal information is present, omit valid_from and valid_to entirely (do not default to null).
 
+EVENT-TIME EXTRACTION RULES (real-world event bounds — distinct from valid_from/valid_to):
+8. For each relationship, also determine the real-world temporal bounds of the underlying event:
+   - "event_time": ISO-8601 date (YYYY-MM-DD) when this relationship/event started in the real world.
+     Use the date explicitly mentioned in the source text. If not specified, return null.
+   - "event_time_end": ISO-8601 date (YYYY-MM-DD) when this relationship/event ended.
+     Return null if the relationship is still active, ongoing, or the end date is unknown.
+9. Put event_time / event_time_end on the RELATIONSHIP, never on entity nodes.
+10. Do not fabricate dates. If the text says "in 2020", use "2020-01-01". If no date is mentioned, return null.
+
+EXAMPLES — event_time / event_time_end:
+  "John was CEO of Acme from 2018 to 2022"
+  → event_time: "2018-01-01", event_time_end: "2022-12-31"
+
+  "Apple acquired Intel in March 2025"
+  → event_time: "2025-03-01", event_time_end: null
+
+  "John knows Mary" (no date mentioned)
+  → event_time: null, event_time_end: null
+
 EXAMPLE (correct — with temporal context):
   Text: "Alice Chen has been the CTO of Acme Corp since March 2021."
   Nodes: [{{"id":"alice","label":"Person","properties":{{"name":"Alice Chen"}}}},
           {{"id":"acme","label":"Company","properties":{{"name":"Acme Corp"}}}}]
   Relationships: [{{"start_node_id":"alice","end_node_id":"acme","type":"WORKS_FOR",
-                   "properties":{{"position":"CTO","valid_from":"2021-03-01"}}}}]
+                   "properties":{{"position":"CTO","valid_from":"2021-03-01","event_time":"2021-03-01"}}}}]
 
 EXAMPLE (correct — with ended relationship):
   Text: "Bob served as CFO of Acme from 2018 to 2022."
   Relationships: [{{"start_node_id":"bob","end_node_id":"acme","type":"WORKS_FOR",
-                   "properties":{{"position":"CFO","valid_from":"2018-01-01","valid_to":"2022-12-31"}}}}]
+                   "properties":{{"position":"CFO","valid_from":"2018-01-01","valid_to":"2022-12-31",
+                                  "event_time":"2018-01-01","event_time_end":"2022-12-31"}}}}]
 
 EXAMPLE (wrong — do not do this):
   Nodes: [{{"id":"alice","label":"Person","properties":{{"name":"Alice Chen","job_title":"CTO","employer":"Acme"}}}}]
