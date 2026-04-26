@@ -423,6 +423,10 @@ async def chat(
     graph_id: str,
     question: str,
     mode: str = "enhanced",
+    retriever_type: str | None = None,
+    temporal_mode: str | None = None,
+    temporal_at: str | None = None,
+    temporal_since: str | None = None,
 ) -> dict:
     """
     Ask a natural language question answered using the knowledge graph.
@@ -440,6 +444,19 @@ async def chat(
               'hybrid'      vector + full-text search,
               'hybrid_plus' hybrid with graph traversal,
               'natural'     natural language translated to Cypher.
+        retriever_type: Optional retriever override.  When provided, takes
+              precedence over mode on the backend.  Valid values:
+              'vector', 'hybrid', 'text2cypher', 'vector_cypher',
+              'hybrid_cypher', 'community_summary'.
+        temporal_mode: Optional temporal query mode — one of:
+              'point_in_time'   query the graph as it existed at temporal_at,
+              'knowledge_as_of' retrieve knowledge valid as of temporal_at,
+              'changes_since'   return changes that occurred since temporal_since.
+        temporal_at: ISO 8601 datetime string (e.g. '2023-06-01T00:00:00Z').
+              Required by the backend when temporal_mode is 'point_in_time'
+              or 'knowledge_as_of'.
+        temporal_since: ISO 8601 datetime string.  Required by the backend
+              when temporal_mode is 'changes_since'.
 
     Returns:
         Dict with answer (str), sources (list), is_grounded (bool),
@@ -454,15 +471,25 @@ async def chat(
             )
         }
 
+    body: dict = {
+        "query": question,
+        "graph_id": graph_id,
+        "mode": mode,
+        "include_sources": True,
+    }
+    if retriever_type is not None:
+        body["retriever_type"] = retriever_type
+    if temporal_mode is not None:
+        body["temporal_mode"] = temporal_mode
+    if temporal_at is not None:
+        body["temporal_at"] = temporal_at
+    if temporal_since is not None:
+        body["temporal_since"] = temporal_since
+
     resp = await _client().post(
         f"{_base_url()}/api/v1/chat",
         headers=_auth_headers(),
-        json={
-            "query": question,
-            "graph_id": graph_id,
-            "mode": mode,
-            "include_sources": True,
-        },
+        json=body,
     )
     if resp.status_code == 403:
         return {"error": "Graph not found or access denied."}
