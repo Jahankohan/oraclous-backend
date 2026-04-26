@@ -37,6 +37,9 @@ _VECTOR_OVERFETCH_MULTIPLIER = 1.5
 # Hard limit on target_graph_ids to prevent unbounded candidate_count (DoS guard)
 _MAX_TARGET_GRAPHS = 50
 
+# Required embedding dimensionality for the entity_embeddings vector index
+_EMBEDDING_DIM = 3072
+
 
 class FederationError(Exception):
     """Raised for federation-specific validation failures."""
@@ -452,6 +455,13 @@ class FederationService:
                 f"target_graph_ids exceeds limit of {_MAX_TARGET_GRAPHS} "
                 f"(got {len(target_graph_ids)})"
             )
+
+        if not embedding or len(embedding) != _EMBEDDING_DIM:
+            raise ValueError(
+                f"embedding must have exactly {_EMBEDDING_DIM} dimensions "
+                f"(got {len(embedding) if embedding else 0})"
+            )
+        embedding = [float(v) for v in embedding]
 
         # Over-fetch to compensate for the graph_id post-filter recall loss.
         candidate_count = int(
