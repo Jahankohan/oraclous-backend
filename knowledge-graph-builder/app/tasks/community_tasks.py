@@ -171,6 +171,18 @@ async def _detect_communities_async(
                 "graph_id": graph_id,
             }
 
+        MAX_ENTITIES = getattr(settings, "COMMUNITY_DETECTION_MAX_ENTITIES", 500_000)
+        if entity_count > MAX_ENTITIES:
+            logger.warning(
+                f"Graph {graph_id} has {entity_count} entities, exceeding max {MAX_ENTITIES}. "
+                "Skipping community detection."
+            )
+            return {
+                "status": "skipped",
+                "reason": f"entity_count_{entity_count}_exceeds_max_{MAX_ENTITIES}",
+                "graph_id": str(graph_id),
+            }
+
         # Check current status and Redis lock
         current_status = _get_communities_status_pg(pg_engine, graph_id)
         if current_status == "rebuilding" and not force_rebuild:

@@ -483,6 +483,19 @@ class GraphAnalyticsService:
                 "message": "No entities found for this graph",
             }
 
+        MAX_SYNC_ENTITIES = getattr(settings, "LEIDEN_SYNC_MAX_ENTITIES", 10_000)
+        if len(nodes_result) > MAX_SYNC_ENTITIES:
+            logger.warning(
+                f"Graph {graph_id} has {len(nodes_result)} entities, exceeding sync limit {MAX_SYNC_ENTITIES}. "
+                "Use async detect_communities_task for large graphs."
+            )
+            return {
+                "communities_created": 0,
+                "relationships_created": 0,
+                "message": f"Graph too large for sync detection ({len(nodes_result)} entities). Use async task.",
+                "graph_id": str(graph_id),
+            }
+
         # Step 2 — Fetch relationships
         edges_result = await neo4j_client.execute_query(
             "MATCH (a:__Entity__ {graph_id: $graph_id})-[r]->(b:__Entity__ {graph_id: $graph_id}) "
