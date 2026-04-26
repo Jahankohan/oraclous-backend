@@ -252,6 +252,19 @@ class MultiTenantKGWriter:
     - Compatible with Neo4j GraphRAG pipelines
     """
 
+    _MAX_INGESTION_SOURCE_LEN = 512
+
+    @staticmethod
+    def _sanitize_source(raw: str | None) -> str | None:
+        """Strip null bytes, leading/trailing whitespace, and enforce max length.
+
+        Returns None when the cleaned result is empty or the input was None.
+        """
+        if raw is None:
+            return None
+        cleaned = raw.replace("\x00", "").strip()[: MultiTenantKGWriter._MAX_INGESTION_SOURCE_LEN]
+        return cleaned or None
+
     def __init__(
         self,
         base_writer: Neo4jWriter,
@@ -281,6 +294,9 @@ class MultiTenantKGWriter:
         for node in graph.nodes:
             if not node.properties:
                 node.properties = {}
+            # graph_id: unconditional overwrite -- this IS the tenant isolation boundary.
+            # Never change to setdefault(); a caller-supplied graph_id in node.properties
+            # would bypass multi-tenancy. See security-findings.md Finding 4, TASK-005 review.
             node.properties.update(
                 {
                     "graph_id": self.graph_id,
@@ -289,8 +305,12 @@ class MultiTenantKGWriter:
                     "ingestion_time": now,
                 }
             )
-            if self.ingestion_source is not None:
-                node.properties.setdefault("ingestion_source", self.ingestion_source)
+            # Always strip any caller/LLM-provided ingestion_source and apply sanitized
+            # writer value to prevent prompt injection via long or null-byte-bearing strings.
+            node.properties.pop("ingestion_source", None)
+            safe = self._sanitize_source(self.ingestion_source)
+            if safe is not None:
+                node.properties["ingestion_source"] = safe
 
             # Add user_id if provided
             if self.user_id:
@@ -300,6 +320,9 @@ class MultiTenantKGWriter:
         for rel in graph.relationships:
             if not rel.properties:
                 rel.properties = {}
+            # graph_id: unconditional overwrite -- this IS the tenant isolation boundary.
+            # Never change to setdefault(); a caller-supplied graph_id in rel.properties
+            # would bypass multi-tenancy. See security-findings.md Finding 4, TASK-005 review.
             rel.properties.update(
                 {
                     "graph_id": self.graph_id,
@@ -308,8 +331,12 @@ class MultiTenantKGWriter:
                     "ingestion_time": now,
                 }
             )
-            if self.ingestion_source is not None:
-                rel.properties.setdefault("ingestion_source", self.ingestion_source)
+            # Always strip any caller/LLM-provided ingestion_source and apply sanitized
+            # writer value to prevent prompt injection via long or null-byte-bearing strings.
+            rel.properties.pop("ingestion_source", None)
+            safe = self._sanitize_source(self.ingestion_source)
+            if safe is not None:
+                rel.properties["ingestion_source"] = safe
 
             # Add user_id if provided
             if self.user_id:
