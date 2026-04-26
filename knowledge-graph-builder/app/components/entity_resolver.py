@@ -270,6 +270,8 @@ class EntityResolver:
                     entity_a.get("entity_id", ""),
                     entity_b.get("entity_id", ""),
                     final_score,
+                    graph_id_a=graph_id_a,
+                    graph_id_b=graph_id_b,
                 )
             elif final_score >= AMBIGUOUS_LOWER:
                 logger.info(
@@ -297,17 +299,32 @@ class EntityResolver:
         id_a: str,
         id_b: str,
         score: float,
+        graph_id_a: str,
+        graph_id_b: str,
     ) -> None:
-        """Persist a bidirectional SAME_AS relationship using idempotent MERGE."""
+        """Persist a bidirectional SAME_AS relationship using idempotent MERGE.
+
+        graph_id constraints on both MATCH clauses prevent cross-tenant writes:
+        a MATCH that mismatches graph_id returns no row and the MERGE is skipped.
+        """
         query = """
-        MATCH (a:__Entity__) WHERE elementId(a) = $id_a
-        MATCH (b:__Entity__) WHERE elementId(b) = $id_b
+        MATCH (a:__Entity__ {graph_id: $graph_id_a}) WHERE elementId(a) = $id_a
+        MATCH (b:__Entity__ {graph_id: $graph_id_b}) WHERE elementId(b) = $id_b
         MERGE (a)-[:SAME_AS {confidence: $score, method: 'multi-signal', created_at: datetime()}]->(b)
         MERGE (b)-[:SAME_AS {confidence: $score, method: 'multi-signal', created_at: datetime()}]->(a)
         """
         try:
             async def _write(tx) -> None:
-                await tx.run(query, {"id_a": id_a, "id_b": id_b, "score": score})
+                await tx.run(
+                    query,
+                    {
+                        "id_a": id_a,
+                        "id_b": id_b,
+                        "score": score,
+                        "graph_id_a": graph_id_a,
+                        "graph_id_b": graph_id_b,
+                    },
+                )
 
             await session.execute_write(_write)
             logger.info(
