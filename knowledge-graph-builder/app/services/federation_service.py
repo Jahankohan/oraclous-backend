@@ -384,8 +384,14 @@ class FederationService:
         entity: dict,
         graph_id: str,
         target_graph_ids: list[str],
+        user_id: str,
+        principal: dict | None = None,
     ) -> list[dict]:
         """Find SAME_AS candidates for *entity* and apply the four-signal scorer.
+
+        Raises FederationError (400/403) if the caller does not have permission
+        to access graph_id or any of target_graph_ids — mirrors the auth gate
+        used by federated_query() and federated_vector_search().
 
         Orchestrates TASK-009's candidate retrieval with TASK-010's EntityResolver:
         1. find_same_as_candidates — exact fast path + vector search
@@ -398,6 +404,9 @@ class FederationService:
         processing by TASK-011.  Callers do not need to inspect the return value
         for the store-path — links are persisted inside resolve_and_link.
         """
+        await self._validate_and_filter(
+            user_id, [graph_id] + target_graph_ids, principal=principal
+        )
         candidates = await self.find_same_as_candidates(entity, target_graph_ids)
         if not candidates:
             return []
