@@ -688,7 +688,118 @@ async def get_neighbors(
 
 
 # ===========================================================================
-# 5 – MCP Resources
+# 5 – Community Detection & Query
+# ===========================================================================
+
+
+@mcp.tool()
+async def detect_communities(
+    graph_id: str,
+    resolutions: list[float] | None = None,
+) -> dict:
+    """
+    Trigger Leiden hierarchical community detection for a graph.
+
+    Detection runs asynchronously.  The response includes a job_id that can
+    be used to poll the detection status endpoint.
+
+    Args:
+        graph_id: UUID of the graph to analyse.
+        resolutions: Optional list of Leiden resolution floats that control
+                     granularity at each hierarchy level (e.g. [1.0, 0.5]).
+                     Omit to use the server default resolutions.
+
+    Returns:
+        Job status dict with job_id, status, and graph_id.
+        On HTTP error: {"error": <message>, "status_code": <int>}.
+    """
+    body: dict = {}
+    if resolutions is not None:
+        body["resolutions"] = resolutions
+
+    resp = await _client().post(
+        f"{_base_url()}/api/v1/graphs/{graph_id}/communities/detect",
+        headers=_auth_headers(),
+        json=body,
+    )
+    if not resp.is_success:
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        return {"error": detail, "status_code": resp.status_code}
+    return resp.json()
+
+
+@mcp.tool()
+async def list_communities(
+    graph_id: str,
+    level: int | None = None,
+) -> dict:
+    """
+    List communities detected in a graph, optionally filtered by hierarchy level.
+
+    Always requests full summaries (include_summary=true) so callers receive
+    human-readable descriptions of each community.
+
+    Args:
+        graph_id: UUID of the graph.
+        level: Optional hierarchy level to filter by (0 = coarsest, higher
+               integers = finer-grained communities).  Omit to return all levels.
+
+    Returns:
+        Communities list response (items, total, level breakdown).
+        On HTTP error: {"error": <message>, "status_code": <int>}.
+    """
+    params: dict = {"include_summary": "true"}
+    if level is not None:
+        params["level"] = level
+
+    resp = await _client().get(
+        f"{_base_url()}/api/v1/graphs/{graph_id}/communities",
+        headers=_auth_headers(),
+        params=params,
+    )
+    if not resp.is_success:
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        return {"error": detail, "status_code": resp.status_code}
+    return resp.json()
+
+
+@mcp.tool()
+async def get_community(
+    graph_id: str,
+    community_id: str,
+) -> dict:
+    """
+    Get a specific community node together with its member entities.
+
+    Args:
+        graph_id: UUID of the graph the community belongs to.
+        community_id: UUID (or internal ID) of the community node.
+
+    Returns:
+        Community dict including id, level, summary, and members list.
+        On HTTP error: {"error": <message>, "status_code": <int>}.
+    """
+    resp = await _client().get(
+        f"{_base_url()}/api/v1/graphs/{graph_id}/communities/{community_id}",
+        headers=_auth_headers(),
+    )
+    if not resp.is_success:
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        return {"error": detail, "status_code": resp.status_code}
+    return resp.json()
+
+
+# ===========================================================================
+# 6 – MCP Resources
 # ===========================================================================
 
 
