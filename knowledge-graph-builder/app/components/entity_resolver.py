@@ -248,7 +248,13 @@ class EntityResolver:
 
         for candidate in candidates:
             entity_b = candidate["entity"]
-            graph_id_b = entity_b.get("source_graph_id", target_graph_ids[0] if target_graph_ids else "")
+            graph_id_b = entity_b.get("source_graph_id")
+            if not graph_id_b:
+                logger.warning(
+                    "skipping candidate with missing source_graph_id: %r",
+                    entity_b.get("entity_id", "?"),
+                )
+                continue
 
             final_score = await EntityResolver.score(
                 entity_a, candidate, session, graph_id_a, graph_id_b
