@@ -33,13 +33,26 @@ logger = get_logger(__name__)
 
 # Allowlisted relationship types for deduplication fallback — prevents Cypher injection
 # via runtime rel_type values passed to apoc.cypher.doIt() or string concatenation.
+# Must cover all types produced by the LLM extractor prompt in pipeline_service.py
+# (RELATIONSHIP_PROPERTY_PROMPT_TEMPLATE) plus any structural types used elsewhere.
 _ALLOWED_REL_TYPES: frozenset[str] = frozenset({
+    # ── LLM extractor types (pipeline_service.py RELATIONSHIP_PROPERTY_PROMPT_TEMPLATE) ──
     "WORKS_FOR",
+    "REPORTS_TO",
+    "HAS_SKILL",
+    "MEMBER_OF",
+    "INVESTED_IN",
+    "CITES",
+    "AUTHORED",
+    "WORKS_ON",
+    "DEPENDS_ON",
+    "ACQUIRED_BY",
+    "PARTNER_OF",
+    # ── Additional types used elsewhere in the codebase ──
     "FOUNDED",
     "LEADS",
     "MANAGES",
     "DEVELOPED",
-    "PARTNERED_WITH",
     "RELATED_TO",
     "PART_OF",
     "OWNS",
@@ -683,11 +696,74 @@ class MultiTenantEntityDeduplicator(Component):
                 MERGE (source)-[r:DEVELOPED]->(target)
                 SET r = $rel_props
             """
-        elif rel_type == "PARTNERED_WITH":
+        elif rel_type == "REPORTS_TO":
             query = """
                 MATCH (source) WHERE elementId(source) = $source_id
                 MATCH (target) WHERE elementId(target) = $target_id
-                MERGE (source)-[r:PARTNERED_WITH]->(target)
+                MERGE (source)-[r:REPORTS_TO]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "HAS_SKILL":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:HAS_SKILL]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "MEMBER_OF":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:MEMBER_OF]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "INVESTED_IN":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:INVESTED_IN]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "CITES":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:CITES]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "AUTHORED":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:AUTHORED]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "WORKS_ON":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:WORKS_ON]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "DEPENDS_ON":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:DEPENDS_ON]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "ACQUIRED_BY":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:ACQUIRED_BY]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "PARTNER_OF":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:PARTNER_OF]->(target)
                 SET r = $rel_props
             """
         elif rel_type == "RELATED_TO":
