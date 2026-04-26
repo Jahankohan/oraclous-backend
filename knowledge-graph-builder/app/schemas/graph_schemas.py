@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any, Optional
 from uuid import UUID
@@ -70,6 +70,7 @@ class RelationshipProperties(BaseModel):
     )
     ingestion_source: str | None = Field(
         None,
+        max_length=512,
         description="Which document, connector, or API provided this fact.",
     )
 
@@ -89,6 +90,21 @@ class RelationshipProperties(BaseModel):
             except ValueError:
                 return None  # Unparseable temporal string — treat as missing
         return None
+
+    @field_validator("ingestion_time", mode="before")
+    @classmethod
+    def bound_ingestion_time(cls, v):
+        """Reject implausible ingestion_time values outside [2020-01-01, now+1h].
+
+        Values outside this range indicate a bug or a clock-skew attack -- null them
+        out rather than raising so that ingestion is not blocked by a bad timestamp.
+        """
+        if isinstance(v, datetime):
+            _min = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            _max = datetime.now(timezone.utc) + timedelta(hours=1)
+            if v < _min or v > _max:
+                return None
+        return v
 
     @model_validator(mode="after")
     def validate_temporal_range(self) -> "RelationshipProperties":
@@ -118,8 +134,24 @@ class EntityNodeProperties(BaseModel):
     )
     ingestion_source: str | None = Field(
         None,
+        max_length=512,
         description="Which document, connector, or API provided this entity.",
     )
+
+    @field_validator("ingestion_time", mode="before")
+    @classmethod
+    def bound_ingestion_time(cls, v):
+        """Reject implausible ingestion_time values outside [2020-01-01, now+1h].
+
+        Values outside this range indicate a bug or a clock-skew attack -- null them
+        out rather than raising so that ingestion is not blocked by a bad timestamp.
+        """
+        if isinstance(v, datetime):
+            _min = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            _max = datetime.now(timezone.utc) + timedelta(hours=1)
+            if v < _min or v > _max:
+                return None
+        return v
 
     @field_validator("extra")
     @classmethod
