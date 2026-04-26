@@ -1,6 +1,6 @@
 """Pydantic schemas for cross-graph federation endpoints."""
 
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -8,6 +8,21 @@ MAX_GRAPH_IDS = 10
 MAX_RESULTS_PER_GRAPH = 100
 MAX_TOTAL_RESULTS = 500
 QUERY_TIMEOUT_MS = 8000
+
+
+# ─── SAME_AS candidate type ───────────────────────────────────────────────────
+
+
+class SameAsCandidate(TypedDict):
+    """A candidate entity pair for SAME_AS resolution.
+
+    Produced by find_same_as_candidates; consumed by TASK-010's scoring step.
+    SAME_AS links are NOT created here — only candidates are returned.
+    """
+
+    entity: dict[str, Any]
+    score: float
+    method: Literal["exact", "vector"]
 
 
 # ─── Request models ───────────────────────────────────────────────────────────
