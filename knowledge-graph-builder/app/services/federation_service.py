@@ -22,6 +22,7 @@ from app.schemas.federation_schemas import (
     FederatedEntity,
     FederatedQueryOptions,
     FederatedVectorResult,
+    SameAsCandidate,
 )
 
 logger = get_logger(__name__)
@@ -339,6 +340,119 @@ class FederationService:
             "federated_vector_search called without a real query vector; "
             "integrate with llm_service.get_embedding() before shipping"
         )
+        async with self._driver.session(database=self._database) as session:
+            result = await session.run(query, params)
+            return await result.data()
+
+    # ── SAME_AS candidate retrieval ───────────────────────────────────────────
+
+    async def find_same_as_candidates(
+        self, entity: dict, target_graph_ids: list[str]
+    ) -> list[SameAsCandidate]:
+        """Return SAME_AS candidates for *entity* across *target_graph_ids*.
+
+        Strategy (ordered):
+        1. Exact name+type fast path — returns immediately with score 0.99.
+        2. Vector search using the entity's stored embedding (threshold 0.60).
+           Returns an empty list when no embedding is present (no crash).
+
+        This method only *identifies* candidates; it does NOT create SAME_AS
+        links.  Link creation is deferred to TASK-010.
+        """
+        # Fast path: exact name + type match — no vector search needed
+        exact = await self._find_exact_match(entity, target_graph_ids)
+        if exact:
+            return [SameAsCandidate(entity=exact, score=0.99, method="exact")]
+
+        # Vector search path
+        embedding = entity.get("embedding")
+        if not embedding:
+            # Cannot do vector search without an embedding — skip silently
+            return []
+
+        candidates = await self._vector_search_candidates(
+            embedding, target_graph_ids, threshold=_SAME_AS_CANDIDATE_THRESHOLD
+        )
+        return [
+            SameAsCandidate(entity=c, score=c.get("similarity", 0.0), method="vector")
+            for c in candidates
+        ]
+
+    async def _find_exact_match(
+        self, entity: dict, target_graph_ids: list[str]
+    ) -> dict | None:
+        """Return the first entity in *target_graph_ids* that shares the same
+        normalised name and type as *entity*, or None if no match is found.
+
+        The source entity itself is excluded via its element id so that an
+        entity is never its own candidate.
+        """
+        name = (entity.get("name") or "").strip().lower()
+        etype = (entity.get("type") or "").strip().lower()
+        source_id = entity.get("entity_id", "")
+
+        if not name or not etype:
+            return None
+
+        query = """
+        MATCH (e:__Entity__)
+        WHERE e.graph_id IN $graph_ids
+          AND toLower(trim(e.name))  = $name
+          AND toLower(trim(coalesce(e.type, ''))) = $etype
+          AND elementId(e) <> $source_id
+        RETURN elementId(e) AS entity_id,
+               e.name       AS name,
+               e.type       AS type,
+               e.graph_id   AS source_graph_id
+        LIMIT 1
+        """
+        params = {
+            "graph_ids": target_graph_ids,
+            "name": name,
+            "etype": etype,
+            "source_id": source_id,
+        }
+        async with self._driver.session(database=self._database) as session:
+            result = await session.run(query, params)
+            rows = await result.data()
+        return rows[0] if rows else None
+
+    async def _vector_search_candidates(
+        self,
+        embedding: list[float],
+        target_graph_ids: list[str],
+        threshold: float,
+    ) -> list[dict[str, Any]]:
+        """Run a cosine-similarity vector search over __Entity__ nodes.
+
+        Uses the *entity_embeddings* index (cosine, 3072-dim) that is created
+        by app/scripts/create_vector_indexes.py.  Results are post-filtered to
+        *target_graph_ids* and sorted by similarity descending.
+
+        Only entities with similarity >= *threshold* are returned.
+        """
+        # Over-fetch to compensate for the graph_id post-filter recall loss.
+        candidate_count = int(
+            MAX_RESULTS_PER_GRAPH * len(target_graph_ids) * _VECTOR_OVERFETCH_MULTIPLIER
+        )
+        query = """
+        CALL db.index.vector.queryNodes('entity_embeddings', $candidate_count, $embedding)
+        YIELD node AS e, score AS similarity
+        WHERE e.graph_id IN $graph_ids
+          AND similarity >= $threshold
+        RETURN elementId(e) AS entity_id,
+               e.name       AS name,
+               e.type       AS type,
+               e.graph_id   AS source_graph_id,
+               similarity
+        ORDER BY similarity DESC
+        """
+        params: dict[str, Any] = {
+            "embedding": embedding,
+            "graph_ids": target_graph_ids,
+            "threshold": threshold,
+            "candidate_count": candidate_count,
+        }
         async with self._driver.session(database=self._database) as session:
             result = await session.run(query, params)
             return await result.data()
