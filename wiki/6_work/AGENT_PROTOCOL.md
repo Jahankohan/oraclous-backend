@@ -5,24 +5,21 @@ The task file is the single coordination artifact — all state, decisions, and 
 
 ---
 
-## Nested Git Repository Warning
+## Single Git Repository
 
-This project contains **two separate git repositories:**
+**`/Users/reza/workspace/Oraclous/oraclous-data-studio/` is the ONE AND ONLY git repository.**
 
-| Repo | Path | What it contains |
-|------|------|-----------------|
-| Outer (Oraclous monorepo) | `/Users/reza/workspace/Oraclous/` | `wiki/`, docs, this protocol |
-| Inner (backend code) | `/Users/reza/workspace/Oraclous/oraclous-data-studio/` | All Python backend code |
+- All git operations: branch, commit, log, diff — run from inside `oraclous-data-studio/`
+- Wiki files live at `oraclous-data-studio/wiki/` — edit and commit them there
+- CLAUDE.md lives at `oraclous-data-studio/CLAUDE.md`
+- The parent directory `/Users/reza/workspace/Oraclous/` is NOT a git repo for agent work
 
-**All backend code changes and git operations (checkout, commit, log, diff) must be run from inside `oraclous-data-studio/`.** Running `git log` from the outer repo will show only 1–2 monorepo commits and none of the backend history. This has caused false "STILL BLOCKED" security review verdicts.
-
-When asked to review backend code on a branch named `agent/STORY-XXX/TASK-XXX-*`:
+When asked to review code or update wiki files on a branch named `agent/STORY-XXX/TASK-XXX-*`:
 1. `cd /Users/reza/workspace/Oraclous/oraclous-data-studio`
 2. `git checkout agent/STORY-XXX/TASK-XXX-*`
-3. Read files from within this directory
-4. When done, restore the branch you found (`git checkout <original-branch>`)
-
-Wiki files (task files, security findings) live in the **outer** repo and are edited there.
+3. Read and edit files from within this directory
+4. Commit wiki + code changes together on the same branch
+5. When done reviewing, restore the original branch: `git checkout <previous-branch>`
 
 ---
 
