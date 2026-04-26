@@ -354,6 +354,57 @@ class RetrieverFactory:
             else:
                 return f"{retrieval_query}\nWHERE node.graph_id = $graph_id"
 
+    def inject_temporal_filter_into_retrieval_query(
+        self,
+        retrieval_query: str,
+        temporal_filter: str | None,
+        retriever_type: "RetrieverType | None" = None,
+    ) -> str:
+        """Inject a temporal WHERE clause into a Cypher retrieval query.
+
+        This method is used by Cypher-capable retrievers (VECTOR_CYPHER,
+        HYBRID_CYPHER) to scope results to a specific time window.
+        For vector-only retrievers (VECTOR, HYBRID, TEXT2CYPHER), calling this
+        method logs a warning and returns the query unchanged.
+
+        Security: ``temporal_filter`` must be a trusted clause constructed by
+        ``ChatService._build_temporal_filter()`` — it is NEVER derived from
+        raw user input.  Datetime values must always be passed as Cypher
+        parameters (via ``query_params`` at search time), never interpolated.
+
+        Args:
+            retrieval_query: The base Cypher retrieval query string.
+            temporal_filter: A trusted WHERE-clause fragment, e.g.
+                "(r.event_time IS NULL OR r.event_time <= $temporal_at)".
+                Pass None or empty string to return the query unchanged.
+            retriever_type: The retriever type — used to log a warning for
+                vector-only retrievers that cannot apply relationship filters.
+
+        Returns:
+            The retrieval query with the temporal clause appended to the WHERE
+            block, or the original query if no filter is provided.
+        """
+        if not temporal_filter:
+            return retrieval_query
+
+        # Vector-only retrievers have no relationship traversal — filter is a no-op.
+        _vector_only = {RetrieverType.VECTOR, RetrieverType.HYBRID, RetrieverType.TEXT2CYPHER}
+        if retriever_type in _vector_only:
+            logger.warning(
+                "Temporal filter not supported for %s retriever; ignoring",
+                retriever_type.value if retriever_type else "unknown",
+            )
+            return retrieval_query
+
+        # Append the temporal clause after the existing WHERE predicate(s).
+        # The clause references relationship alias `r` which is present in
+        # all default VECTOR_CYPHER / HYBRID_CYPHER retrieval queries.
+        if "WHERE" in retrieval_query.upper():
+            # Append with AND to keep existing predicates intact.
+            return retrieval_query.rstrip() + f"\n    AND {temporal_filter}"
+        else:
+            return retrieval_query.rstrip() + f"\nWHERE {temporal_filter}"
+
     async def create_memory_retriever(
         self,
         config: MemoryRetrieverConfig,
