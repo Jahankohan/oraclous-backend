@@ -107,3 +107,19 @@ class NodeResult(BaseModel):
 class PathResult(BaseModel):
     nodes: list[NodeResult]
     hop_count: int
+
+
+class ProvenancePayload(BaseModel):
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    queries_executed: list[str] = []
+    nodes_used_in_response: list[str] = []
+    total_nodes_traversed: int = 0
+    reasoning_steps: int = 0
+    tools_called: list[str] = []
+
+
+class AgentChatResponse(BaseModel):
+    response: str
+    session_id: str | None = None
+    provenance: ProvenancePayload
