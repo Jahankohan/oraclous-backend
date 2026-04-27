@@ -117,3 +117,114 @@ class FederatedVectorSearchResponse(BaseModel):
     total_results: int
     results: list[FederatedVectorResult]
     query_meta: QueryMeta
+
+
+# ─── Federation candidates endpoint schemas (TASK-016) ───────────────────────
+
+
+class FederationCandidatesRequest(BaseModel):
+    """Request body for POST /graphs/{graph_id}/federation/candidates."""
+
+    target_graph_ids: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_GRAPH_IDS,
+        description="Graph IDs to search for SAME_AS candidates against graph_id.",
+        examples=[["graph-Y", "graph-Z"]],
+    )
+    entity_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+        description="Optional name filter. When provided, only entities whose name "
+        "contains this string (case-insensitive) are considered.",
+        examples=["Acme Corp"],
+    )
+
+    @field_validator("target_graph_ids")
+    @classmethod
+    def no_duplicate_target_graph_ids(cls, v: list[str]) -> list[str]:
+        if len(v) != len(set(v)):
+            raise ValueError("target_graph_ids must be unique")
+        return v
+
+
+class SignalScores(BaseModel):
+    """Per-signal breakdown of a federation candidate score."""
+
+    embedding: float = Field(
+        ...,
+        description="Cosine similarity of entity embeddings (0.0 = not available).",
+    )
+    name: float = Field(..., description="Normalised name-match score.")
+    type: float = Field(
+        ...,
+        description="Type-match score (1.0 = exact match, 0.0 = mismatch or missing).",
+    )
+    shared_relations: float = Field(
+        ...,
+        description="Fraction of shared relation types (0.0 = not yet computed).",
+    )
+
+
+class FederationCandidateResult(BaseModel):
+    """A single SAME_AS candidate pair returned by the candidates endpoint."""
+
+    entity_a: dict[str, Any] = Field(
+        ...,
+        description="Source entity: {id, name, graph_id}.",
+        examples=[{"id": "4:abc:1", "name": "Acme Corp", "graph_id": "graph-X"}],
+    )
+    entity_b: dict[str, Any] = Field(
+        ...,
+        description="Target entity: {id, name, graph_id}.",
+        examples=[{"id": "4:def:2", "name": "Acme Corp", "graph_id": "graph-Y"}],
+    )
+    score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Combined SAME_AS confidence score. Only candidates with score >= 0.60 "
+            "are returned by this endpoint."
+        ),
+    )
+    signals: SignalScores
+
+
+# ─── Federation resolve schemas (TASK-017) ────────────────────────────────────
+
+
+class FederationResolveRequest(BaseModel):
+    """Request body for POST /graphs/{graph_id}/federation/resolve."""
+
+    target_graph_id: str = Field(
+        ...,
+        description="ID of the target graph to resolve entities against",
+        examples=["graph-Y"],
+    )
+    confidence_threshold: float = Field(
+        default=0.85,
+        description="Minimum confidence score for creating SAME_AS links. Clamped to [0.60, 1.0].",
+        examples=[0.85],
+    )
+
+    @field_validator("confidence_threshold")
+    @classmethod
+    def clamp_threshold(cls, v: float) -> float:
+        return max(0.60, min(1.0, v))
+
+
+class FederationResolveResponse(BaseModel):
+    """Immediate response for POST /graphs/{graph_id}/federation/resolve."""
+
+    task_id: str = Field(
+        ...,
+        description="Celery task ID; poll GET /tasks/{task_id} for result",
+        examples=["3c8a2b4e-1234-5678-abcd-ef0123456789"],
+    )
+    status: str = Field(
+        default="queued",
+        description="Task dispatch status; always 'queued' on success",
+        examples=["queued"],
+    )

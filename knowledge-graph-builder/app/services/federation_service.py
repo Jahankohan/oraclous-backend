@@ -575,15 +575,26 @@ class FederationService:
                         )
                     )
                     if confidence >= _SAME_AS_STORE_THRESHOLD:
-                        merge_tasks.append((a.entity_id, b.entity_id, confidence))
+                        merge_tasks.append(
+                            (a.entity_id, b.entity_id, confidence,
+                             a.source_graph_id, b.source_graph_id)
+                        )
 
         if merge_tasks:
             await self._store_same_as_links(merge_tasks)
 
         return links
 
-    async def _store_same_as_links(self, pairs: list[tuple[str, str, float]]) -> None:
-        """Persist SAME_AS relationship pairs in Neo4j using MERGE (idempotent)."""
+    async def _store_same_as_links(
+        self,
+        pairs: list[tuple[str, str, float, str, str]],
+    ) -> None:
+        """Persist SAME_AS relationship pairs in Neo4j using MERGE (idempotent).
+
+        Each tuple is (id_a, id_b, confidence, source_graph_id, target_graph_id).
+        Both graph IDs are stamped onto the relationship for ownership context,
+        satisfying the SA blocking concern CROSS-GRAPH-WRITE-NO-GRAPH-ID.
+        """
         query = """
         UNWIND $pairs AS pair
         MATCH (a:__Entity__) WHERE elementId(a) = pair.id_a
@@ -592,11 +603,19 @@ class FederationService:
         SET s.confidence = CASE WHEN s.confidence IS NULL OR pair.confidence > s.confidence
                                 THEN pair.confidence ELSE s.confidence END,
             s.match_method = 'exact_name',
+            s.source_graph_id = pair.source_graph_id,
+            s.target_graph_id = pair.target_graph_id,
             s.detected_at = datetime()
         """
         pair_params = [
-            {"id_a": id_a, "id_b": id_b, "confidence": conf}
-            for id_a, id_b, conf in pairs
+            {
+                "id_a": id_a,
+                "id_b": id_b,
+                "confidence": conf,
+                "source_graph_id": src_gid,
+                "target_graph_id": tgt_gid,
+            }
+            for id_a, id_b, conf, src_gid, tgt_gid in pairs
         ]
         try:
             async with self._driver.session(database=self._database) as session:
@@ -607,6 +626,110 @@ class FederationService:
                 await session.execute_write(_write)
         except Exception as exc:
             logger.warning("Failed to store SAME_AS links: %s", exc)
+
+    # ── Federation candidates endpoint ────────────────────────────────────────
+
+    async def find_federation_candidates(
+        self,
+        graph_id: str,
+        target_graph_ids: list[str],
+        entity_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Find SAME_AS candidate pairs between graph_id and target_graph_ids.
+
+        Uses exact name+type matching across the specified graphs and returns
+        candidate pairs with per-signal scores.  Auth validation is the
+        caller's responsibility (endpoint calls _validate_and_filter first).
+
+        Signals returned:
+          - name: 1.0 for exact normalised match
+          - type: 1.0 when types match, 0.0 when either type is empty
+          - embedding: 0.0 (stub — requires vector index integration)
+          - shared_relations: 0.0 (stub — requires graph traversal)
+
+        Combined score: name×0.4 + type×0.3 + embedding×0.2 + shared_rel×0.1.
+        At least one entity in each pair must belong to graph_id.
+
+        Returns raw dicts; the endpoint applies the 0.60 score threshold filter.
+        """
+        all_graph_ids = [graph_id] + target_graph_ids
+
+        params: dict[str, Any] = {"graph_ids": all_graph_ids}
+        name_filter = ""
+        if entity_name:
+            name_filter = "AND toLower(e.name) CONTAINS toLower($entity_name)"
+            params["entity_name"] = entity_name
+
+        query = f"""
+        MATCH (e:__Entity__)
+        WHERE e.graph_id IN $graph_ids
+          {name_filter}
+        RETURN elementId(e) AS entity_id,
+               e.name AS name,
+               coalesce(e.type, labels(e)[-1]) AS type,
+               e.graph_id AS graph_id
+        """
+
+        async with self._driver.session(database=self._database) as session:
+            result = await session.run(query, params)
+            rows = await result.data()
+
+        from collections import defaultdict
+
+        buckets: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            key = (row["name"].strip().lower(), (row["type"] or "").strip().lower())
+            buckets[key].append(row)
+
+        candidates: list[dict[str, Any]] = []
+        for (norm_name, norm_type), group in buckets.items():
+            if len(group) < 2:
+                continue
+            for i in range(len(group)):
+                for j in range(i + 1, len(group)):
+                    a, b = group[i], group[j]
+                    if a["graph_id"] == b["graph_id"]:
+                        continue  # same graph — skip
+                    # Ensure one entity originates from the source graph
+                    if graph_id not in (a["graph_id"], b["graph_id"]):
+                        continue
+
+                    name_score: float = 1.0  # exact normalised match
+                    type_score: float = 1.0 if norm_type else 0.0
+                    embedding_score: float = 0.0   # stub
+                    shared_rel_score: float = 0.0  # stub
+
+                    score = round(
+                        name_score * 0.4
+                        + type_score * 0.3
+                        + embedding_score * 0.2
+                        + shared_rel_score * 0.1,
+                        4,
+                    )
+
+                    candidates.append(
+                        {
+                            "entity_a": {
+                                "id": a["entity_id"],
+                                "name": a["name"],
+                                "graph_id": a["graph_id"],
+                            },
+                            "entity_b": {
+                                "id": b["entity_id"],
+                                "name": b["name"],
+                                "graph_id": b["graph_id"],
+                            },
+                            "score": score,
+                            "signals": {
+                                "embedding": embedding_score,
+                                "name": name_score,
+                                "type": type_score,
+                                "shared_relations": shared_rel_score,
+                            },
+                        }
+                    )
+
+        return candidates
 
 
 def _now_ms() -> int:
