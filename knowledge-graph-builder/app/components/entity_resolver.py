@@ -9,19 +9,344 @@ This approach creates a cleaner graph by:
 2. Merging them into a single canonical entity
 3. Linking the canonical entity to all relevant chunks
 4. Removing duplicate entity nodes
+
+Also provides EntityResolver (TASK-010): a four-signal scorer that combines
+embedding similarity, name similarity, type compatibility, and context overlap
+to produce a final confidence score for SAME_AS candidates, then creates
+SAME_AS links for scores above the store threshold.
 """
 
+import re
 import time
 from typing import Any
 
-from neo4j import Driver, Session
+import jellyfish
+from neo4j import AsyncSession, Driver, Session
 from neo4j.graph import Node
 from neo4j_graphrag.experimental.components.types import Neo4jGraph
 from neo4j_graphrag.experimental.pipeline.component import Component
 
 from app.core.logging import get_logger
+from app.schemas.federation_schemas import SameAsCandidate
 
 logger = get_logger(__name__)
+
+# Allowlisted relationship types for deduplication fallback — prevents Cypher injection
+# via runtime rel_type values passed to apoc.cypher.doIt() or string concatenation.
+# Must cover all types produced by the LLM extractor prompt in pipeline_service.py
+# (RELATIONSHIP_PROPERTY_PROMPT_TEMPLATE) plus any structural types used elsewhere.
+_ALLOWED_REL_TYPES: frozenset[str] = frozenset({
+    # ── LLM extractor types (pipeline_service.py RELATIONSHIP_PROPERTY_PROMPT_TEMPLATE) ──
+    "WORKS_FOR",
+    "REPORTS_TO",
+    "HAS_SKILL",
+    "MEMBER_OF",
+    "INVESTED_IN",
+    "CITES",
+    "AUTHORED",
+    "WORKS_ON",
+    "DEPENDS_ON",
+    "ACQUIRED_BY",
+    "PARTNER_OF",
+    # ── Additional types used elsewhere in the codebase ──
+    "FOUNDED",
+    "LEADS",
+    "MANAGES",
+    "DEVELOPED",
+    "RELATED_TO",
+    "PART_OF",
+    "OWNS",
+    "LOCATED_IN",
+    "SAME_AS",
+    "SIMILAR_TO",
+})
+
+# ── EntityResolver — four-signal SAME_AS scorer ───────────────────────────────
+
+# Scoring weights (must sum to 1.0)
+EMBEDDING_WEIGHT = 0.4
+NAME_WEIGHT = 0.3
+TYPE_WEIGHT = 0.2
+CONTEXT_WEIGHT = 0.1
+
+# Decision thresholds
+STORE_THRESHOLD = 0.85        # create SAME_AS link immediately
+AMBIGUOUS_LOWER = 0.60        # pass to LLM disambiguation (TASK-011)
+
+# Name length cap — prevents CPU DoS via extremely long names before regex/Jaro-Winkler
+_MAX_NAME_LEN = 1000
+
+# Compatible type pairs (order-independent) that receive a partial type score
+_COMPATIBLE_TYPE_PAIRS: frozenset[frozenset[str]] = frozenset(
+    [
+        frozenset({"organization", "company"}),
+        frozenset({"person", "individual"}),
+        frozenset({"location", "place"}),
+    ]
+)
+
+# Legal-suffix tokens stripped during name normalization
+_LEGAL_SUFFIX_RE = re.compile(
+    r"\b(inc|ltd|corp|llc|co|limited|incorporated|corporation|plc|gmbh|sa|srl|bv|nv|ag)\b\.?",
+    re.IGNORECASE,
+)
+
+# Punctuation strip pattern (keeps spaces and alphanumeric)
+_PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def _normalize_name(name: str) -> str:
+    """Lowercase, strip punctuation, remove common legal suffixes."""
+    name = name[:_MAX_NAME_LEN]
+    name = name.lower()
+    name = _LEGAL_SUFFIX_RE.sub("", name)
+    name = _PUNCT_RE.sub("", name)
+    return " ".join(name.split())  # collapse whitespace
+
+
+class EntityResolver:
+    """Four-signal scorer for cross-graph SAME_AS candidate resolution.
+
+    Signals and weights:
+        embedding_similarity * 0.4  — cosine similarity from vector search
+        name_similarity      * 0.3  — Jaro-Winkler on normalized names
+        type_compatibility   * 0.2  — exact / compatible / incompatible type pairs
+        context_overlap      * 0.1  — Jaccard of 1-hop neighbor names
+
+    Decision thresholds:
+        final_score >= STORE_THRESHOLD (0.85)          → create SAME_AS link
+        AMBIGUOUS_LOWER (0.60) <= score < 0.85         → log for TASK-011
+        score < AMBIGUOUS_LOWER                        → discard
+    """
+
+    # ── Signal: embedding similarity ─────────────────────────────────────────
+
+    @staticmethod
+    def _embedding_score(candidate: SameAsCandidate) -> float:
+        """Return the cosine similarity score from the vector search (already in [0,1])."""
+        return float(candidate["score"])
+
+    # ── Signal: name similarity ───────────────────────────────────────────────
+
+    @staticmethod
+    def _name_score(entity_a: dict, entity_b: dict) -> float:
+        """Jaro-Winkler similarity on normalized entity names."""
+        name_a = _normalize_name(entity_a.get("name") or "")
+        name_b = _normalize_name(entity_b.get("name") or "")
+        if not name_a or not name_b:
+            return 0.0
+        return jellyfish.jaro_winkler_similarity(name_a, name_b)
+
+    # ── Signal: type compatibility ────────────────────────────────────────────
+
+    @staticmethod
+    def _type_score(entity_a: dict, entity_b: dict) -> float:
+        """1.0 for same type, 0.5 for compatible pairs, 0.0 otherwise."""
+        type_a = (entity_a.get("type") or "").strip().lower()
+        type_b = (entity_b.get("type") or "").strip().lower()
+        if not type_a or not type_b:
+            return 0.0
+        if type_a == type_b:
+            return 1.0
+        pair = frozenset({type_a, type_b})
+        if pair in _COMPATIBLE_TYPE_PAIRS:
+            return 0.5
+        return 0.0
+
+    # ── Signal: context overlap ───────────────────────────────────────────────
+
+    @staticmethod
+    async def _context_score(
+        entity_a: dict,
+        entity_b: dict,
+        session: AsyncSession,
+        graph_id_a: str,
+        graph_id_b: str,
+    ) -> float:
+        """Jaccard similarity of 1-hop neighbor entity names.
+
+        Returns 0.0 (no ZeroDivisionError) when either entity has no neighbors.
+        """
+        neighbors_a = await EntityResolver._get_neighbor_names(
+            session, entity_a.get("entity_id", ""), graph_id_a
+        )
+        neighbors_b = await EntityResolver._get_neighbor_names(
+            session, entity_b.get("entity_id", ""), graph_id_b
+        )
+        if not neighbors_a or not neighbors_b:
+            return 0.0
+        intersection = neighbors_a & neighbors_b
+        union = neighbors_a | neighbors_b
+        if not union:
+            return 0.0
+        return len(intersection) / len(union)
+
+    @staticmethod
+    async def _get_neighbor_names(
+        session: AsyncSession, entity_id: str, graph_id: str
+    ) -> set[str]:
+        """Return the set of normalized neighbor entity names for a given entity."""
+        if not entity_id:
+            return set()
+        query = """
+        MATCH (e:__Entity__)
+        WHERE elementId(e) = $entity_id AND e.graph_id = $graph_id
+        MATCH (e)-[]->(neighbor:__Entity__)
+        WHERE neighbor.graph_id = $graph_id
+        RETURN neighbor.name AS name
+        UNION
+        MATCH (e:__Entity__)
+        WHERE elementId(e) = $entity_id AND e.graph_id = $graph_id
+        MATCH (neighbor:__Entity__)-[]->(e)
+        WHERE neighbor.graph_id = $graph_id
+        RETURN neighbor.name AS name
+        """
+        try:
+            result = await session.run(
+                query, {"entity_id": entity_id, "graph_id": graph_id}
+            )
+            rows = await result.data()
+            return {_normalize_name(row["name"]) for row in rows if row["name"]}
+        except Exception as exc:
+            logger.warning(
+                "failed to fetch neighbor names for entity %s: %s", entity_id, exc
+            )
+            return set()
+
+    # ── Composite score ───────────────────────────────────────────────────────
+
+    @staticmethod
+    async def score(
+        entity_a: dict,
+        candidate: SameAsCandidate,
+        session: AsyncSession,
+        graph_id_a: str,
+        graph_id_b: str,
+    ) -> float:
+        """Return the weighted four-signal confidence score.
+
+        Weights: embedding=0.4, name=0.3, type=0.2, context=0.1  (sum=1.0)
+        """
+        entity_b = candidate["entity"]
+        embedding_sim = EntityResolver._embedding_score(candidate)
+        name_sim = EntityResolver._name_score(entity_a, entity_b)
+        type_compat = EntityResolver._type_score(entity_a, entity_b)
+        ctx_overlap = await EntityResolver._context_score(
+            entity_a, entity_b, session, graph_id_a, graph_id_b
+        )
+        return (
+            embedding_sim * EMBEDDING_WEIGHT
+            + name_sim * NAME_WEIGHT
+            + type_compat * TYPE_WEIGHT
+            + ctx_overlap * CONTEXT_WEIGHT
+        )
+
+    # ── Resolution & link creation ────────────────────────────────────────────
+
+    @staticmethod
+    async def resolve_and_link(
+        entity_a: dict,
+        candidates: list[SameAsCandidate],
+        session: AsyncSession,
+        graph_id_a: str,
+        target_graph_ids: list[str],
+    ) -> list[dict]:
+        """Score each candidate and create SAME_AS links for high-confidence pairs.
+
+        For each candidate:
+          - final_score >= STORE_THRESHOLD (0.85): create bidirectional SAME_AS link
+          - AMBIGUOUS_LOWER (0.60) <= final_score < 0.85: log at INFO for TASK-011
+          - final_score < AMBIGUOUS_LOWER: discard
+
+        Returns a list of ambiguous candidate dicts (score in [0.60, 0.85))
+        for downstream processing (TASK-011).
+        """
+        ambiguous: list[dict] = []
+
+        for candidate in candidates:
+            entity_b = candidate["entity"]
+            graph_id_b = entity_b.get("source_graph_id")
+            if not graph_id_b:
+                logger.warning(
+                    "skipping candidate with missing source_graph_id: %r",
+                    entity_b.get("entity_id", "?"),
+                )
+                continue
+
+            final_score = await EntityResolver.score(
+                entity_a, candidate, session, graph_id_a, graph_id_b
+            )
+
+            if final_score >= STORE_THRESHOLD:
+                await EntityResolver._create_same_as_link(
+                    session,
+                    entity_a.get("entity_id", ""),
+                    entity_b.get("entity_id", ""),
+                    final_score,
+                    graph_id_a=graph_id_a,
+                    graph_id_b=graph_id_b,
+                )
+            elif final_score >= AMBIGUOUS_LOWER:
+                logger.info(
+                    "ambiguous candidate: %s <-> %s score=%.3f",
+                    entity_a.get("name", entity_a.get("entity_id", "?")),
+                    entity_b.get("name", entity_b.get("entity_id", "?")),
+                    final_score,
+                )
+                ambiguous.append(
+                    {
+                        "entity_a": entity_a,
+                        "entity_b": entity_b,
+                        "score": final_score,
+                        "graph_id_a": graph_id_a,
+                        "graph_id_b": graph_id_b,
+                    }
+                )
+            # else: discard — below AMBIGUOUS_LOWER
+
+        return ambiguous
+
+    @staticmethod
+    async def _create_same_as_link(
+        session: AsyncSession,
+        id_a: str,
+        id_b: str,
+        score: float,
+        graph_id_a: str,
+        graph_id_b: str,
+    ) -> None:
+        """Persist a bidirectional SAME_AS relationship using idempotent MERGE.
+
+        graph_id constraints on both MATCH clauses prevent cross-tenant writes:
+        a MATCH that mismatches graph_id returns no row and the MERGE is skipped.
+        """
+        query = """
+        MATCH (a:__Entity__ {graph_id: $graph_id_a}) WHERE elementId(a) = $id_a
+        MATCH (b:__Entity__ {graph_id: $graph_id_b}) WHERE elementId(b) = $id_b
+        MERGE (a)-[:SAME_AS {confidence: $score, method: 'multi-signal', created_at: datetime()}]->(b)
+        MERGE (b)-[:SAME_AS {confidence: $score, method: 'multi-signal', created_at: datetime()}]->(a)
+        """
+        try:
+            async def _write(tx) -> None:
+                await tx.run(
+                    query,
+                    {
+                        "id_a": id_a,
+                        "id_b": id_b,
+                        "score": score,
+                        "graph_id_a": graph_id_a,
+                        "graph_id_b": graph_id_b,
+                    },
+                )
+
+            await session.execute_write(_write)
+            logger.info(
+                "created SAME_AS link: %s <-> %s confidence=%.3f", id_a, id_b, score
+            )
+        except Exception as exc:
+            logger.warning(
+                "failed to create SAME_AS link %s <-> %s: %s", id_a, id_b, exc
+            )
 
 
 class MultiTenantEntityDeduplicator(Component):
@@ -311,69 +636,18 @@ class MultiTenantEntityDeduplicator(Component):
         """
         Fallback method to create relationships without APOC procedures.
 
-        This method handles ANY relationship type dynamically by using
-        a generic approach that works for all relationship types.
+        Only relationship types in _ALLOWED_REL_TYPES are accepted; any other
+        type is silently skipped with a warning to prevent Cypher injection.
+        No apoc.cypher.doIt() or string concatenation into Cypher query text.
         """
-        # Use a generic approach that works for any relationship type
-        # We'll use a two-step process: create the relationship, then set properties
-        try:
-            # Step 1: Create the relationship using CALL procedure
-            # This approach works with any relationship type
-            query = """
-                MATCH (source) WHERE elementId(source) = $source_id
-                MATCH (target) WHERE elementId(target) = $target_id
-                CALL apoc.cypher.doIt(
-                    'MERGE (s)-[r:' + $rel_type + ']->(t) RETURN r',
-                    {s: source, t: target}
-                ) YIELD value
-                WITH value.r as rel
-                SET rel = $rel_props
-                RETURN rel
-            """
-
-            session.run(
-                query,
-                source_id=source_id,
-                target_id=target_id,
-                rel_type=rel_type,
-                rel_props=rel_props,
+        if rel_type not in _ALLOWED_REL_TYPES:
+            logger.warning(
+                "skipping relationship of unrecognised type %r during deduplication"
+                " -- not in allowlist",
+                rel_type,
             )
-
-        except Exception:
-            # Ultimate fallback: use known relationship types or create a generic one
-            if rel_type in [
-                "WORKS_FOR",
-                "FOUNDED",
-                "LEADS",
-                "MANAGES",
-                "DEVELOPED",
-                "PARTNERED_WITH",
-            ]:
-                # Use predefined relationship creation for known types
-                self._create_known_relationship(
-                    session, source_id, target_id, rel_type, rel_props
-                )
-            else:
-                # For unknown relationship types, log a warning and create a generic relationship
-                logger.warning(
-                    f"Unknown relationship type '{rel_type}' - creating generic relationship"
-                )
-
-                # Create a generic relationship with the original type as a property
-                query = """
-                    MATCH (source) WHERE elementId(source) = $source_id
-                    MATCH (target) WHERE elementId(target) = $target_id
-                    MERGE (source)-[r:RELATED_TO]->(target)
-                    SET r.original_type = $rel_type, r = $rel_props
-                    RETURN r
-                """
-                session.run(
-                    query,
-                    source_id=source_id,
-                    target_id=target_id,
-                    rel_type=rel_type,
-                    rel_props=rel_props,
-                )
+            return
+        self._create_known_relationship(session, source_id, target_id, rel_type, rel_props)
 
     def _create_known_relationship(
         self,
@@ -422,15 +696,125 @@ class MultiTenantEntityDeduplicator(Component):
                 MERGE (source)-[r:DEVELOPED]->(target)
                 SET r = $rel_props
             """
-        elif rel_type == "PARTNERED_WITH":
+        elif rel_type == "REPORTS_TO":
             query = """
                 MATCH (source) WHERE elementId(source) = $source_id
                 MATCH (target) WHERE elementId(target) = $target_id
-                MERGE (source)-[r:PARTNERED_WITH]->(target)
+                MERGE (source)-[r:REPORTS_TO]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "HAS_SKILL":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:HAS_SKILL]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "MEMBER_OF":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:MEMBER_OF]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "INVESTED_IN":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:INVESTED_IN]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "CITES":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:CITES]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "AUTHORED":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:AUTHORED]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "WORKS_ON":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:WORKS_ON]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "DEPENDS_ON":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:DEPENDS_ON]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "ACQUIRED_BY":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:ACQUIRED_BY]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "PARTNER_OF":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:PARTNER_OF]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "RELATED_TO":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:RELATED_TO]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "PART_OF":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:PART_OF]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "OWNS":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:OWNS]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "LOCATED_IN":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:LOCATED_IN]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "SAME_AS":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:SAME_AS]->(target)
+                SET r = $rel_props
+            """
+        elif rel_type == "SIMILAR_TO":
+            query = """
+                MATCH (source) WHERE elementId(source) = $source_id
+                MATCH (target) WHERE elementId(target) = $target_id
+                MERGE (source)-[r:SIMILAR_TO]->(target)
                 SET r = $rel_props
             """
         else:
-            # This shouldn't happen since we check before calling this method
+            # _create_relationship_fallback() already checked the allowlist;
+            # this branch should never be reached.
+            logger.warning(
+                "skipping relationship of unrecognised type %r in _create_known_relationship",
+                rel_type,
+            )
             return
 
         session.run(

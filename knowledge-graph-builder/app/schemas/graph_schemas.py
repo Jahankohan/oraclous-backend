@@ -55,6 +55,23 @@ class RelationshipProperties(BaseModel):
         description="When this fact was recorded in the graph (server-set)",
     )
     extra: dict[str, Any] | None = Field(default_factory=dict)
+    # Bitemporal provenance fields (TASK-005)
+    event_time: datetime | None = Field(
+        None,
+        description="When this fact was true in the real world (nullable; set by LLM or caller).",
+    )
+    event_time_end: datetime | None = Field(
+        None,
+        description="When this fact stopped being true in the real world (null = still true).",
+    )
+    ingestion_time: datetime | None = Field(
+        None,
+        description="When the system first learned this fact (server-set at write time).",
+    )
+    ingestion_source: str | None = Field(
+        None,
+        description="Which document, connector, or API provided this fact.",
+    )
 
     @field_validator("valid_from", "valid_to", mode="before")
     @classmethod
@@ -86,6 +103,23 @@ class EntityNodeProperties(BaseModel):
     name: str
     description: str | None = None
     extra: dict[str, Any] | None = Field(default_factory=dict)
+    # Bitemporal provenance fields (TASK-005)
+    event_time: datetime | None = Field(
+        None,
+        description="When this entity fact was true in the real world (nullable).",
+    )
+    event_time_end: datetime | None = Field(
+        None,
+        description="When this entity fact stopped being true (null = still true).",
+    )
+    ingestion_time: datetime | None = Field(
+        None,
+        description="When the system first learned about this entity (server-set at write time).",
+    )
+    ingestion_source: str | None = Field(
+        None,
+        description="Which document, connector, or API provided this entity.",
+    )
 
     @field_validator("extra")
     @classmethod
