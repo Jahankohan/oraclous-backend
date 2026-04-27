@@ -7,6 +7,12 @@ Fallback model: GPT-4o (via OpenAI SDK)
 The extractor returns a structured dict with "entities" and "relationships"
 and also provides a helper to serialise that output as human-readable text
 so it can be fed directly into the existing text-based ingestion pipeline.
+
+Diagram mode (added by TASK-025):
+    When the image is identified as a technical diagram — either through the
+    ``likely_diagram`` flag in metadata (set by pdf_extractor / TASK-024) or
+    through filename heuristics — the extractor switches to a structured prompt
+    that returns nodes + edges instead of entities + relationships.
 """
 
 import base64
@@ -42,6 +48,24 @@ Rules:
 Context: {context}
 """
 
+_DIAGRAM_PROMPT = """\
+This image appears to be a technical diagram (architecture, UML, flowchart, or similar).
+Extract the components and their relationships in this exact JSON structure:
+{
+  "nodes": [{"id": "...", "label": "...", "type": "component|service|database|process|actor|other"}],
+  "edges": [{"from": "...", "to": "...", "label": "...", "type": "connection|data_flow|dependency|inheritance|other"}],
+  "diagram_type": "architecture|uml_class|uml_sequence|flowchart|er|other",
+  "description": "one-sentence summary"
+}
+Only return valid JSON. If you cannot identify structured components, return {"nodes": [], "edges": [], "diagram_type": "other", "description": "..."}.
+"""
+
+# Keywords in filenames that suggest a technical diagram
+_DIAGRAM_FILENAME_KEYWORDS = {"arch", "diagram", "flow", "uml", "schema", "model"}
+
+# File extensions that may carry diagram images (SVG is treated as image/png for API)
+_DIAGRAM_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg"}
+
 _SUPPORTED_EXTENSIONS = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -49,6 +73,29 @@ _SUPPORTED_EXTENSIONS = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
+
+
+def _is_diagram_mode(
+    image_path: str, metadata: dict[str, Any] | None
+) -> bool:
+    """
+    Return True when diagram-structured extraction should be used.
+
+    Triggers:
+    1. ``metadata["likely_diagram"]`` is True (set by pdf_extractor / TASK-024).
+    2. File extension is in _DIAGRAM_IMAGE_EXTENSIONS AND the filename (stem)
+       contains one of the _DIAGRAM_FILENAME_KEYWORDS.
+    """
+    if metadata and metadata.get("likely_diagram"):
+        return True
+
+    path = Path(image_path)
+    if path.suffix.lower() in _DIAGRAM_IMAGE_EXTENSIONS:
+        stem_lower = path.stem.lower()
+        if any(kw in stem_lower for kw in _DIAGRAM_FILENAME_KEYWORDS):
+            return True
+
+    return False
 
 
 class VisionExtractor:
@@ -63,7 +110,43 @@ class VisionExtractor:
         )
         text = vision_extractor.to_text(result)
         # Feed `text` into the standard ingestion pipeline
+
+    Diagram mode::
+
+        result = vision_extractor.extract(
+            "/tmp/arch_overview.png",
+            metadata={"likely_diagram": True},
+        )
+        # Returns {"nodes": [...], "edges": [...], "diagram_type": "...", "description": "..."}
     """
+
+    def extract(
+        self,
+        image_path: str,
+        context: str = "",
+        model: str = "claude",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Extract structured information from an image.
+
+        When diagram mode is triggered (via ``metadata["likely_diagram"]`` or
+        filename heuristics), returns a diagram-structured dict with ``nodes``
+        and ``edges``.  Otherwise delegates to ``extract_from_image`` and
+        returns the standard ``{"entities": [...], "relationships": [...]}``.
+
+        Args:
+            image_path: Absolute path to the image.
+            context: Optional domain hint.
+            model: "claude" (default) or "gpt4o".
+            metadata: Optional dict; ``likely_diagram`` key triggers diagram mode.
+
+        Returns:
+            Diagram dict OR standard entities/relationships dict.
+        """
+        if _is_diagram_mode(image_path, metadata):
+            return self._extract_diagram(image_path, model)
+        return self.extract_from_image(image_path, context=context, model=model)
 
     def extract_from_image(
         self,
@@ -133,9 +216,8 @@ class VisionExtractor:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _extract_claude(
-        self, image_b64: str, media_type: str, prompt: str
-    ) -> dict[str, Any]:
+    def _call_claude(self, image_b64: str, media_type: str, prompt: str) -> str:
+        """Call Claude vision API and return raw text response."""
         try:
             import anthropic
         except ImportError:
@@ -171,11 +253,10 @@ class VisionExtractor:
                 }
             ],
         )
-        return self._parse(response.content[0].text)
+        return response.content[0].text
 
-    def _extract_gpt4o(
-        self, image_b64: str, media_type: str, prompt: str
-    ) -> dict[str, Any]:
+    def _call_gpt4o(self, image_b64: str, media_type: str, prompt: str) -> str:
+        """Call GPT-4o vision API and return raw text response."""
         try:
             from openai import OpenAI
         except ImportError:
@@ -209,7 +290,17 @@ class VisionExtractor:
                 }
             ],
         )
-        return self._parse(response.choices[0].message.content)
+        return response.choices[0].message.content
+
+    def _extract_claude(
+        self, image_b64: str, media_type: str, prompt: str
+    ) -> dict[str, Any]:
+        return self._parse(self._call_claude(image_b64, media_type, prompt))
+
+    def _extract_gpt4o(
+        self, image_b64: str, media_type: str, prompt: str
+    ) -> dict[str, Any]:
+        return self._parse(self._call_gpt4o(image_b64, media_type, prompt))
 
     @staticmethod
     def _to_base64(image_path: str) -> str:
@@ -222,13 +313,19 @@ class VisionExtractor:
         return _SUPPORTED_EXTENSIONS.get(suffix, "image/png")
 
     @staticmethod
-    def _parse(text: str) -> dict[str, Any]:
-        """Parse JSON from LLM response, stripping markdown fences if present."""
+    def _strip_fences(text: str) -> str:
+        """Strip markdown code fences from an LLM response."""
         stripped = text.strip()
         if stripped.startswith("```"):
             lines = stripped.split("\n")
             inner = lines[1:-1] if stripped.endswith("```") else lines[1:]
             stripped = "\n".join(inner)
+        return stripped
+
+    @staticmethod
+    def _parse(text: str) -> dict[str, Any]:
+        """Parse JSON from LLM response, stripping markdown fences if present."""
+        stripped = VisionExtractor._strip_fences(text)
         try:
             data = json.loads(stripped)
             return {
@@ -241,6 +338,43 @@ class VisionExtractor:
                 f"Response (first 500 chars): {stripped[:500]}"
             )
             return {"entities": [], "relationships": []}
+
+    def _extract_diagram(
+        self,
+        image_path: str,
+        model: str = "claude",
+    ) -> dict[str, Any]:
+        """
+        Run diagram-specific structured extraction.
+
+        Returns a dict with ``nodes``, ``edges``, ``diagram_type``,
+        and ``description``.
+        """
+        image_b64 = self._to_base64(image_path)
+        media_type = self._media_type(image_path)
+        prompt = _DIAGRAM_PROMPT
+
+        if model == "gpt4o":
+            raw_text = self._call_gpt4o(image_b64, media_type, prompt)
+        else:
+            raw_text = self._call_claude(image_b64, media_type, prompt)
+
+        stripped = self._strip_fences(raw_text)
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                f"Failed to parse diagram response as JSON: {exc}\n"
+                f"Response (first 500 chars): {stripped[:500]}"
+            )
+            data = {}
+
+        return {
+            "nodes": data.get("nodes", []),
+            "edges": data.get("edges", []),
+            "diagram_type": data.get("diagram_type", "other"),
+            "description": data.get("description", ""),
+        }
 
 
 vision_extractor = VisionExtractor()
