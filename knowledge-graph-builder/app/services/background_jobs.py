@@ -603,6 +603,10 @@ async def _process_pipeline_ingestion_async(
         # STEP 8: Auto-snapshot (if enabled and 24h cap not exceeded)
         await _maybe_auto_snapshot(str(job.graph_id))
 
+        # STEP 9: Invalidate query cache for this graph so stale results
+        # are not served after new documents are ingested.
+        await _invalidate_query_cache(str(job.graph_id))
+
         return {
             "status": "completed",
             "job_id": job_id,
@@ -791,6 +795,44 @@ async def _maybe_trigger_community_detection(graph_id: str) -> None:
     except Exception as exc:
         # Non-critical — ingestion already completed
         logger.warning(f"Post-ingestion community trigger failed for {graph_id}: {exc}")
+
+
+# ==================== QUERY CACHE INVALIDATION ====================
+
+
+async def _invalidate_query_cache(graph_id: str) -> None:
+    """
+    Invalidate all Redis query cache entries for graph_id after ingest.
+
+    Uses redis.asyncio directly — not the FastAPI singleton — to avoid sharing
+    an async connection across the Celery worker fork boundary.
+
+    Non-critical: failures are logged as warnings and never propagate.
+    """
+    try:
+        import redis.asyncio as _aioredis
+
+        from app.services.query_cache_service import QueryCacheService
+
+        r = _aioredis.from_url(
+            settings.REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        cache = QueryCacheService(r)
+        try:
+            deleted = await cache.invalidate_graph(graph_id)
+            logger.info(
+                f"Query cache invalidated for graph {graph_id}: {deleted} key(s) deleted"
+            )
+        finally:
+            await r.aclose()
+    except Exception as exc:
+        logger.warning(
+            f"Query cache invalidation failed for graph {graph_id}: {exc}"
+        )
 
 
 # ==================== VERSIONING TASKS ====================
@@ -1375,6 +1417,7 @@ async def _process_image_ingestion_async(
 
         await _maybe_trigger_community_detection(str(job.graph_id))
         await _maybe_auto_snapshot(str(job.graph_id))
+        await _invalidate_query_cache(str(job.graph_id))
 
         logger.info(
             f"✅ Image ingestion job {job_id} complete: "

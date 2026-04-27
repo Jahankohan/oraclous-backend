@@ -33,6 +33,7 @@ from app.schemas.retriever_schemas import (
     get_default_retriever_config,
 )
 from app.services.fulltext_index_service import fulltext_index_manager
+from app.services.query_cache_service import QueryCacheService
 from app.services.retriever_factory import (
     CommunitySummaryRetriever,
     RetrieverType,
@@ -236,6 +237,7 @@ class ChatService:
         graph_id: str,
         retriever_type: RetrieverType = RetrieverType.VECTOR_CYPHER,
         retriever_config: dict[str, Any] | None = None,
+        cache: QueryCacheService | None = None,
     ):
         self.graph_id = graph_id
         self.retriever_type = retriever_type
@@ -278,6 +280,7 @@ class ChatService:
 
         self.retriever = None
         self.rag = None
+        self._cache: QueryCacheService | None = cache
 
         logger.info(
             f"ChatService initialized for graph {graph_id} "
@@ -401,6 +404,83 @@ class ChatService:
             return "", {}
 
         return clause, params
+
+    async def search_cached(
+        self,
+        query_text: str,
+        retriever_config: dict[str, Any] | None = None,
+        return_context: bool = False,
+        examples: str = "",
+        temporal_filter: TemporalFilter | None = None,
+        temporal_mode: TemporalMode | None = None,
+        temporal_at: datetime | None = None,
+        temporal_since: datetime | None = None,
+    ) -> "tuple[GroundedSearchResult, bool]":
+        """Cache-aware wrapper around search().
+
+        Checks the Redis query cache before invoking the full RAG pipeline.
+        Cache key includes graph_id and retriever_type — guarantees cross-tenant
+        isolation (Architecture Rule: graph_id on every key).
+
+        Temporal queries are NOT cached: a temporal filter changes the result set
+        and would require a different key per timestamp, making invalidation
+        impractical. Only stateless (non-temporal) queries are cached.
+
+        Returns:
+            (result, cache_hit) — cache_hit is True when the result came from Redis.
+        """
+        # Skip cache entirely when temporal filtering is active:
+        # results are time-scoped and may change without a new ingest event.
+        is_temporal = bool(temporal_mode or temporal_filter)
+
+        if self._cache and not is_temporal:
+            cached_dict = await self._cache.get(
+                self.graph_id, query_text, self.retriever_type.value
+            )
+            if cached_dict is not None:
+                logger.info(
+                    "Cache HIT for graph %s retriever %s",
+                    self.graph_id,
+                    self.retriever_type.value,
+                )
+                result = GroundedSearchResult(
+                    answer=cached_dict.get("answer", ""),
+                    sources=cached_dict.get("sources", []),
+                    confidence=cached_dict.get("confidence", 0.0),
+                    is_grounded=cached_dict.get("is_grounded", True),
+                    retriever_used=cached_dict.get(
+                        "retriever_used", self.retriever_type.value
+                    ),
+                )
+                return result, True
+
+        # Cache miss (or cache disabled / temporal query) — run full pipeline.
+        result = await self.search(
+            query_text=query_text,
+            retriever_config=retriever_config,
+            return_context=return_context,
+            examples=examples,
+            temporal_filter=temporal_filter,
+            temporal_mode=temporal_mode,
+            temporal_at=temporal_at,
+            temporal_since=temporal_since,
+        )
+
+        if self._cache and not is_temporal:
+            await self._cache.set(
+                self.graph_id,
+                query_text,
+                self.retriever_type.value,
+                {
+                    "answer": result.answer,
+                    "sources": result.sources,
+                    "confidence": result.confidence,
+                    "is_grounded": result.is_grounded,
+                    "retriever_used": result.retriever_used,
+                },
+            )
+
+        return result, False
 
     async def search(
         self,

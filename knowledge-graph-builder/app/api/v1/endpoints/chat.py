@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.api.dependencies import security, verify_graph_access
+from app.core.database import redis_client
 from app.core.logging import get_logger
 from app.core.rate_limiter import limiter
 from app.schemas.chat_schemas import (
@@ -21,7 +22,10 @@ from app.schemas.chat_schemas import (
 )
 from app.services.auth_service import auth_service
 from app.services.chat_service import ChatService
+from app.services.query_cache_service import QueryCacheService
 from app.services.retriever_factory import RetrieverType
+
+_query_cache = QueryCacheService(redis_client)
 
 logger = get_logger(__name__)
 
@@ -85,10 +89,11 @@ async def chat_with_graph(
             retriever_config=(
                 body.retriever_config.model_dump() if body.retriever_config else None
             ),
+            cache=_query_cache,
         )
         await chat_service.initialize()
 
-        result = await chat_service.search(
+        result, cache_hit = await chat_service.search_cached(
             query_text=body.query,
             retriever_config=(
                 body.retriever_config.model_dump()
@@ -134,6 +139,7 @@ async def chat_with_graph(
             retriever_type=result.retriever_used,
             is_grounded=result.is_grounded,
             confidence=result.confidence,
+            cache_hit=cache_hit,
             temporal_mode_applied=(
                 body.temporal_mode.value if body.temporal_mode else None
             ),
