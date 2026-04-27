@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api import schema
 from app.api.v1.endpoints import (
+    agents,
     chat,
     code_graphs,
     connectors,
@@ -22,6 +23,7 @@ api_router = APIRouter()
 # Include all endpoint routers
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(graphs.router, tags=["graphs"])
+api_router.include_router(agents.router, prefix="/api/v1", tags=["agents"])
 api_router.include_router(multimodal.router, tags=["multimodal"])
 api_router.include_router(code_graphs.router, tags=["code-knowledge-graph"])
 api_router.include_router(chat.router, prefix="/api/v1", tags=["chat"])
