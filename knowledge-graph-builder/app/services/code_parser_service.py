@@ -1294,10 +1294,7 @@ def write_code_graph_sync(
                 c.end_line = row.end_line,
                 c.docstring = row.docstring,
                 c.stale_at = null
-            WITH c, row
-            CALL { WITH c, row
-                   WHERE row.embedding IS NOT NULL
-                   SET c.embedding = row.embedding } IN TRANSACTIONS
+            SET c.embedding = CASE WHEN row.embedding IS NOT NULL THEN row.embedding ELSE c.embedding END
             """,
             {"rows": params},
         )
@@ -1351,10 +1348,7 @@ def write_code_graph_sync(
                 f.is_method = row.is_method,
                 f.is_test = row.is_test,
                 f.stale_at = null
-            WITH f, row
-            CALL { WITH f, row
-                   WHERE row.embedding IS NOT NULL
-                   SET f.embedding = row.embedding } IN TRANSACTIONS
+            SET f.embedding = CASE WHEN row.embedding IS NOT NULL THEN row.embedding ELSE f.embedding END
             """,
             {"rows": params},
         )
@@ -1411,29 +1405,41 @@ def write_code_graph_sync(
             }
             for s in batch
         ]
-        session.run(
-            """
-            UNWIND $rows AS row
-            MATCH (f:File {graph_id: row.graph_id, path: row.file_path})
-            CALL {
-                WITH row, f
-                WHERE row.sym_type = 'Class'
+        # Neo4j 5.x disallows WHERE inside the importing WITH of CALL subqueries,
+        # so filter by type in Python and run three separate queries.
+        class_rows = [p for p in params if p["sym_type"] == "Class"]
+        fn_rows = [p for p in params if p["sym_type"] == "Function"]
+        var_rows = [p for p in params if p["sym_type"] == "Variable"]
+        if class_rows:
+            session.run(
+                """
+                UNWIND $rows AS row
+                MATCH (f:File {graph_id: row.graph_id, path: row.file_path})
                 MATCH (c:Class {graph_id: row.graph_id, qualified_name: row.qualified_name})
                 MERGE (c)-[:DEFINED_IN {start_line: row.start_line, end_line: row.end_line}]->(f)
-              UNION
-                WITH row, f
-                WHERE row.sym_type = 'Function'
+                """,
+                {"rows": class_rows},
+            )
+        if fn_rows:
+            session.run(
+                """
+                UNWIND $rows AS row
+                MATCH (f:File {graph_id: row.graph_id, path: row.file_path})
                 MATCH (fn:Function {graph_id: row.graph_id, qualified_name: row.qualified_name})
                 MERGE (fn)-[:DEFINED_IN {start_line: row.start_line, end_line: row.end_line}]->(f)
-              UNION
-                WITH row, f
-                WHERE row.sym_type = 'Variable'
+                """,
+                {"rows": fn_rows},
+            )
+        if var_rows:
+            session.run(
+                """
+                UNWIND $rows AS row
+                MATCH (f:File {graph_id: row.graph_id, path: row.file_path})
                 MATCH (v:Variable {graph_id: row.graph_id, qualified_name: row.qualified_name})
                 MERGE (v)-[:DEFINED_IN]->(f)
-            } IN TRANSACTIONS
-            """,
-            {"rows": params},
-        )
+                """,
+                {"rows": var_rows},
+            )
         # METHOD_OF
         methods = [
             p for p in params if p["sym_type"] == "Function" and p["parent_class"]
@@ -1463,29 +1469,34 @@ def write_code_graph_sync(
                 {"rows": scoped_vars, "graph_id": graph_id},
             )
 
-    # 8. IMPORTS relationships
+    # 8. IMPORTS relationships — split into internal vs external to avoid
+    # CALL { WITH ... WHERE ... } which Neo4j 5.x disallows.
     for batch in _chunks(imports_edges, batch_size):
-        session.run(
-            """
-            UNWIND $rows AS row
-            MATCH (src:File {graph_id: $graph_id, path: row.source_file})
-            CALL {
-                WITH src, row
-                WHERE row.is_internal = true
+        internal = [r for r in batch if r.get("is_internal")]
+        external = [r for r in batch if not r.get("is_internal")]
+        if internal:
+            session.run(
+                """
+                UNWIND $rows AS row
+                MATCH (src:File {graph_id: $graph_id, path: row.source_file})
                 MATCH (tgt:Module {graph_id: $graph_id, name: row.target})
                 MERGE (src)-[:IMPORTS {line_number: row.line_number, alias: row.alias,
                                         is_relative: row.is_relative}]->(tgt)
-              UNION
-                WITH src, row
-                WHERE row.is_internal = false
+                """,
+                {"rows": internal, "graph_id": graph_id},
+            )
+        if external:
+            session.run(
+                """
+                UNWIND $rows AS row
+                MATCH (src:File {graph_id: $graph_id, path: row.source_file})
                 MERGE (d:Dependency {graph_id: $graph_id, name: row.target})
                 ON CREATE SET d.dep_id = randomUUID(), d.dep_type = 'runtime', d.version_constraint = ''
                 MERGE (src)-[:IMPORTS {line_number: row.line_number, alias: row.alias,
                                         is_relative: row.is_relative}]->(d)
-            } IN TRANSACTIONS
-            """,
-            {"rows": batch, "graph_id": graph_id},
-        )
+                """,
+                {"rows": external, "graph_id": graph_id},
+            )
 
     # 9. INHERITS relationships
     for batch in _chunks(inherits_edges, batch_size):

@@ -24,11 +24,9 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-import pytest_asyncio
 
 # ---------------------------------------------------------------------------
 # Constants — all ids are unique per test run
@@ -142,44 +140,107 @@ def _make_junction_rows(
 
 
 # ---------------------------------------------------------------------------
-# Neo4j query helpers (direct — not via FastAPI)
+# Neo4j query helpers — sync, using direct driver (avoids async event-loop
+# conflicts between pytest-asyncio and the neo4j async driver singleton)
 # ---------------------------------------------------------------------------
 
 
-async def _count_entities(neo4j_client, graph_id: str, source_table: str | None = None) -> int:
+def _count_entities(driver, graph_id: str, source_table: str | None = None) -> int:
     """Count __Entity__ nodes for the given graph_id (and optionally table)."""
-    if source_table:
-        records = await neo4j_client.execute_query(
-            "MATCH (e:__Entity__ {graph_id: $gid, source_table: $tbl}) RETURN count(e) AS cnt",
-            {"gid": graph_id, "tbl": source_table},
-        )
-    else:
-        records = await neo4j_client.execute_query(
-            "MATCH (e:__Entity__ {graph_id: $gid}) RETURN count(e) AS cnt",
+    with driver.session() as session:
+        if source_table:
+            result = session.run(
+                "MATCH (e:__Entity__ {graph_id: $gid, source_table: $tbl}) RETURN count(e) AS cnt",
+                {"gid": graph_id, "tbl": source_table},
+            )
+        else:
+            result = session.run(
+                "MATCH (e:__Entity__ {graph_id: $gid}) RETURN count(e) AS cnt",
+                {"gid": graph_id},
+            )
+        record = result.single()
+        return int(record["cnt"]) if record else 0
+
+
+def _count_relationships(driver, graph_id: str) -> int:
+    """Count all relationships scoped to graph_id."""
+    with driver.session() as session:
+        result = session.run(
+            "MATCH (a:__Entity__ {graph_id: $gid})-[r {graph_id: $gid}]->(b:__Entity__ {graph_id: $gid}) "
+            "RETURN count(r) AS cnt",
             {"gid": graph_id},
         )
-    return int(records[0]["cnt"]) if records else 0
+        record = result.single()
+        return int(record["cnt"]) if record else 0
 
 
-async def _count_relationships(neo4j_client, graph_id: str) -> int:
-    """Count all relationships scoped to graph_id."""
-    records = await neo4j_client.execute_query(
-        "MATCH (a:__Entity__ {graph_id: $gid})-[r {graph_id: $gid}]->(b:__Entity__ {graph_id: $gid}) "
-        "RETURN count(r) AS cnt",
-        {"gid": graph_id},
-    )
-    return int(records[0]["cnt"]) if records else 0
-
-
-async def _get_entity(neo4j_client, entity_id: str, graph_id: str) -> dict | None:
+def _get_entity(driver, entity_id: str, graph_id: str) -> dict | None:
     """Fetch a single __Entity__ node by its composite id and graph_id."""
-    records = await neo4j_client.execute_query(
-        "MATCH (e:__Entity__ {id: $eid, graph_id: $gid}) RETURN e",
-        {"eid": entity_id, "gid": graph_id},
-    )
-    if not records:
-        return None
-    return dict(records[0]["e"])
+    with driver.session() as session:
+        result = session.run(
+            "MATCH (e:__Entity__ {id: $eid, graph_id: $gid}) RETURN e",
+            {"eid": entity_id, "gid": graph_id},
+        )
+        record = result.single()
+        if not record:
+            return None
+        return dict(record["e"])
+
+
+def _query_relationships(driver, gid: str, from_id: str, to_id: str):
+    """Return relationship records between two entity nodes in the given graph."""
+    with driver.session() as session:
+        result = session.run(
+            """
+            MATCH (a:__Entity__ {id: $from_id, graph_id: $gid})
+                  -[r {graph_id: $gid}]->
+                  (b:__Entity__ {id: $to_id, graph_id: $gid})
+            RETURN type(r) AS rel_type, r.graph_id AS edge_graph_id, r.ingestion_time AS ts
+            """,
+            {"gid": gid, "from_id": from_id, "to_id": to_id},
+        )
+        return result.data()
+
+
+def _query_manages(driver, gid: str, from_id: str, to_id: str):
+    """Return MANAGES relationship records between two entity nodes."""
+    with driver.session() as session:
+        result = session.run(
+            """
+            MATCH (a:__Entity__ {id: $from_id, graph_id: $gid})
+                  -[r:MANAGES {graph_id: $gid}]->
+                  (b:__Entity__ {id: $to_id, graph_id: $gid})
+            RETURN r.graph_id AS gid
+            """,
+            {"gid": gid, "from_id": from_id, "to_id": to_id},
+        )
+        return result.data()
+
+
+def _count_missing_entity_gid(driver, gid: str) -> int:
+    """Count __Entity__ nodes where graph_id does not match expected value."""
+    with driver.session() as session:
+        result = session.run(
+            "MATCH (e:__Entity__ {graph_id: $gid}) WHERE e.graph_id <> $gid RETURN count(e) AS cnt",
+            {"gid": gid},
+        )
+        record = result.single()
+        return int(record["cnt"]) if record else 0
+
+
+def _count_missing_rel_gid(driver, gid: str) -> int:
+    """Count relationships missing or mismatching graph_id."""
+    with driver.session() as session:
+        result = session.run(
+            """
+            MATCH (a:__Entity__ {graph_id: $gid})-[r]->(b:__Entity__ {graph_id: $gid})
+            WHERE r.graph_id <> $gid OR r.graph_id IS NULL
+            RETURN count(r) AS cnt
+            """,
+            {"gid": gid},
+        )
+        record = result.single()
+        return int(record["cnt"]) if record else 0
 
 
 # ---------------------------------------------------------------------------
@@ -187,22 +248,31 @@ async def _get_entity(neo4j_client, entity_id: str, graph_id: str) -> dict | Non
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
-async def neo4j(request):
-    """Return the shared neo4j_client and clean up test data after the test."""
-    from app.core.neo4j_client import neo4j_client
+@pytest.fixture
+def neo4j(request):
+    """Return a sync Neo4j driver and clean up test data after the test.
 
-    # Collect graph_ids to clean from the test's own tracking attribute
+    Uses a direct sync driver (same pattern as _run_pipeline) to avoid
+    mixing pytest-asyncio event loops with the neo4j async driver singleton.
+    """
+    from neo4j import GraphDatabase
+
+    from app.core.config import settings
+
+    driver = GraphDatabase.driver(
+        settings.NEO4J_URI,
+        auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
+    )
     graph_ids: list[str] = []
-    request.node._test_graph_ids = graph_ids
 
-    yield neo4j_client, graph_ids
+    yield driver, graph_ids
 
     # Teardown: delete all nodes for every graph_id used in this test
     for gid in graph_ids:
-        await neo4j_client.execute_write_query(
-            "MATCH (n {graph_id: $gid}) DETACH DELETE n", {"gid": gid}
-        )
+        with driver.session() as session:
+            session.run("MATCH (n {graph_id: $gid}) DETACH DELETE n", {"gid": gid})
+
+    driver.close()
 
 
 def _make_worker_neo4j_manager():
@@ -290,10 +360,9 @@ def _run_pipeline(
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_entity_table_nodes_written(neo4j):
+def test_entity_table_nodes_written(neo4j):
     """Entity rows → __Entity__ nodes with correct id format and graph_id."""
-    client, graph_ids = neo4j
+    driver, graph_ids = neo4j
     graph_id = _unique_graph_id()
     graph_ids.append(graph_id)
 
@@ -313,12 +382,12 @@ async def test_entity_table_nodes_written(neo4j):
     )
 
     # 3 employees + 2 projects = 5 entity nodes
-    total = await _count_entities(client, graph_id)
+    total = _count_entities(driver, graph_id)
     assert total == 5, f"Expected 5 entity nodes, got {total}"
 
     # Verify id format: {connector_id}:{table}:{pk}
     emp1_id = f"{_CONNECTOR_ID}:employees:1"
-    node = await _get_entity(client, emp1_id, graph_id)
+    node = _get_entity(driver, emp1_id, graph_id)
     assert node is not None, f"Entity node {emp1_id!r} not found in graph {graph_id!r}"
     assert node["graph_id"] == graph_id
     assert node["source_table"] == "employees"
@@ -329,10 +398,9 @@ async def test_entity_table_nodes_written(neo4j):
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_entity_node_id_format(neo4j):
+def test_entity_node_id_format(neo4j):
     """Entity id must be '{connector_id}:{table_name}:{pk_value}'."""
-    client, graph_ids = neo4j
+    driver, graph_ids = neo4j
     graph_id = _unique_graph_id()
     graph_ids.append(graph_id)
 
@@ -346,16 +414,15 @@ async def test_entity_node_id_format(neo4j):
     )
 
     expected_id = f"{_CONNECTOR_ID}:projects:42"
-    node = await _get_entity(client, expected_id, graph_id)
+    node = _get_entity(driver, expected_id, graph_id)
     assert node is not None, f"Expected entity id {expected_id!r} not found"
     assert node["graph_id"] == graph_id
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_junction_relationship_edges(neo4j):
+def test_junction_relationship_edges(neo4j):
     """Junction table rows → relationship edges between correct entity nodes."""
-    client, graph_ids = neo4j
+    driver, graph_ids = neo4j
     graph_id = _unique_graph_id()
     graph_ids.append(graph_id)
 
@@ -377,23 +444,15 @@ async def test_junction_relationship_edges(neo4j):
         },
     )
 
-    rel_count = await _count_relationships(client, graph_id)
+    rel_count = _count_relationships(driver, graph_id)
     # 2 junction edges + edges from manager_id self-ref (employee 2 → employee 1)
     assert rel_count >= 2, f"Expected at least 2 relationship edges, got {rel_count}"
 
     # Verify junction edge exists
-    records = await client.execute_query(
-        """
-        MATCH (a:__Entity__ {id: $from_id, graph_id: $gid})
-              -[r {graph_id: $gid}]->
-              (b:__Entity__ {id: $to_id, graph_id: $gid})
-        RETURN type(r) AS rel_type, r.graph_id AS edge_graph_id, r.ingestion_time AS ts
-        """,
-        {
-            "gid": graph_id,
-            "from_id": f"{_CONNECTOR_ID}:employees:1",
-            "to_id": f"{_CONNECTOR_ID}:projects:1",
-        },
+    records = _query_relationships(
+        driver, graph_id,
+        f"{_CONNECTOR_ID}:employees:1",
+        f"{_CONNECTOR_ID}:projects:1",
     )
     assert records, "Junction edge employees:1 → projects:1 not found"
     edge = records[0]
@@ -402,10 +461,9 @@ async def test_junction_relationship_edges(neo4j):
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_self_referential_edges(neo4j):
+def test_self_referential_edges(neo4j):
     """Self-ref FK (manager_id) → MANAGES edge from manager → report."""
-    client, graph_ids = neo4j
+    driver, graph_ids = neo4j
     graph_id = _unique_graph_id()
     graph_ids.append(graph_id)
 
@@ -422,31 +480,20 @@ async def test_self_referential_edges(neo4j):
         rows_by_table={"employees": employee_rows, "projects": [], "emp_project": []},
     )
 
-    # Self-ref edge: employee:1 → employee:2 (MANAGES from employee with pk=1 to pk=2?
-    # Actually: self_ref row param uses pk as from_id, fk (manager_id) as to_id
-    # So: employee 2 (pk=2) has manager_id=1 → edge from employee:2 → employee:1
-    records = await client.execute_query(
-        """
-        MATCH (a:__Entity__ {id: $from_id, graph_id: $gid})
-              -[r:MANAGES {graph_id: $gid}]->
-              (b:__Entity__ {id: $to_id, graph_id: $gid})
-        RETURN r.graph_id AS gid
-        """,
-        {
-            "gid": graph_id,
-            "from_id": f"{_CONNECTOR_ID}:employees:2",
-            "to_id": f"{_CONNECTOR_ID}:employees:1",
-        },
+    # employee 2 (pk=2) has manager_id=1 → edge from employee:2 → employee:1
+    records = _query_manages(
+        driver, graph_id,
+        f"{_CONNECTOR_ID}:employees:2",
+        f"{_CONNECTOR_ID}:employees:1",
     )
     assert records, "Expected MANAGES self-ref edge (employee:2 → employee:1) not found"
     assert records[0]["gid"] == graph_id
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_graph_id_on_every_node_and_relationship(neo4j):
+def test_graph_id_on_every_node_and_relationship(neo4j):
     """graph_id must appear on every written __Entity__ node and relationship."""
-    client, graph_ids = neo4j
+    driver, graph_ids = neo4j
     graph_id = _unique_graph_id()
     graph_ids.append(graph_id)
 
@@ -465,30 +512,14 @@ async def test_graph_id_on_every_node_and_relationship(neo4j):
         },
     )
 
-    # All entity nodes must have graph_id set
-    missing_entity_gid = await client.execute_query(
-        "MATCH (e:__Entity__ {graph_id: $gid}) WHERE e.graph_id <> $gid RETURN count(e) AS cnt",
-        {"gid": graph_id},
-    )
-    assert int((missing_entity_gid[0]["cnt"]) if missing_entity_gid else 0) == 0
-
-    # All relationships must have graph_id set
-    missing_rel_gid = await client.execute_query(
-        """
-        MATCH (a:__Entity__ {graph_id: $gid})-[r]->(b:__Entity__ {graph_id: $gid})
-        WHERE r.graph_id <> $gid OR r.graph_id IS NULL
-        RETURN count(r) AS cnt
-        """,
-        {"gid": graph_id},
-    )
-    assert int((missing_rel_gid[0]["cnt"]) if missing_rel_gid else 0) == 0
+    assert _count_missing_entity_gid(driver, graph_id) == 0
+    assert _count_missing_rel_gid(driver, graph_id) == 0
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_cross_tenant_isolation(neo4j):
+def test_cross_tenant_isolation(neo4j):
     """Sync into graph A must not affect graph B — zero nodes from graph A in graph B."""
-    client, graph_ids = neo4j
+    driver, graph_ids = neo4j
     graph_id_a = _unique_graph_id()
     graph_id_b = _unique_graph_id()
     graph_ids.extend([graph_id_a, graph_id_b])
@@ -510,21 +541,20 @@ async def test_cross_tenant_isolation(neo4j):
     )
 
     # Graph B must have zero nodes
-    count_b = await _count_entities(client, graph_id_b)
+    count_b = _count_entities(driver, graph_id_b)
     assert count_b == 0, (
         f"Cross-tenant leak: graph_id_b has {count_b} nodes after syncing into graph_id_a"
     )
 
     # Graph A must have the expected nodes
-    count_a = await _count_entities(client, graph_id_a)
+    count_a = _count_entities(driver, graph_id_a)
     assert count_a == 8, f"Expected 8 entity nodes in graph A (5 employees + 3 projects), got {count_a}"
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_1000_row_sync_completes_in_under_30s(neo4j):
+def test_1000_row_sync_completes_in_under_30s(neo4j):
     """1000 employee rows + 1000 junction rows synced in <30s total."""
-    client, graph_ids = neo4j
+    driver, graph_ids = neo4j
     graph_id = _unique_graph_id()
     graph_ids.append(graph_id)
 
@@ -551,7 +581,7 @@ async def test_1000_row_sync_completes_in_under_30s(neo4j):
     ]
 
     start = time.monotonic()
-    result = _run_pipeline(
+    _run_pipeline(
         graph_id=graph_id,
         snapshot=snapshot,
         rows_by_table={
@@ -568,17 +598,16 @@ async def test_1000_row_sync_completes_in_under_30s(neo4j):
     )
 
     # Verify counts
-    total_entities = await _count_entities(client, graph_id)
+    total_entities = _count_entities(driver, graph_id)
     assert total_entities == 1003, (
         f"Expected 1003 entity nodes (1000 employees + 3 projects), got {total_entities}"
     )
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_no_entity_for_row_missing_pk(neo4j):
+def test_no_entity_for_row_missing_pk(neo4j):
     """Rows without a PK value must not produce any __Entity__ node."""
-    client, graph_ids = neo4j
+    driver, graph_ids = neo4j
     graph_id = _unique_graph_id()
     graph_ids.append(graph_id)
 
@@ -596,15 +625,14 @@ async def test_no_entity_for_row_missing_pk(neo4j):
         rows_by_table={"employees": [], "projects": project_rows, "emp_project": []},
     )
 
-    count = await _count_entities(client, graph_id, source_table="projects")
+    count = _count_entities(driver, graph_id, source_table="projects")
     assert count == 2, f"Expected 2 project nodes (row without PK skipped), got {count}"
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_schema_mapper_graph_id_in_rules(neo4j):
+def test_schema_mapper_graph_id_in_rules(neo4j):
     """GraphMappingRules.graph_id must equal the injected graph_id."""
-    _client, graph_ids = neo4j
+    _driver, graph_ids = neo4j
     graph_id = _unique_graph_id()
     graph_ids.append(graph_id)
 

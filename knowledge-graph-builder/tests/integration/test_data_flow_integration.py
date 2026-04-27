@@ -21,8 +21,11 @@ Architecture invariants verified:
 
 from __future__ import annotations
 
+import shutil
 import textwrap
 import time
+import uuid
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -33,13 +36,72 @@ import requests
 # ─────────────────────────────────────────────────────────────────────────────
 
 _API_BASE = "http://localhost:8000/api/v1"
-_NEO4J_BOLT = "bolt://localhost:7687"
+_AUTH_SERVICE_URL = "http://auth-service:8000"
+_NEO4J_BOLT = "bolt://neo4j:7687"
 _NEO4J_USER = "neo4j"
 _NEO4J_PASS = "password"
 
-# Unique per-test-run graph IDs prevent cross-run pollution
-_GRAPH_ID_A = f"test-task023-{uuid4().hex[:8]}"
-_GRAPH_ID_B = f"test-task023-{uuid4().hex[:8]}"  # cross-tenant isolation
+# Temp directory shared between the kg-builder and kg-worker containers
+# via the /app/app bind mount.  Tests write source fixtures here so the
+# Celery worker (a separate container) can scan them.
+_SHARED_TEST_DIR = Path("/app/app/_integration_test_scratch")
+
+_TEST_USER_EMAIL = f"inttest-task023-{uuid.uuid4().hex[:8]}@example.com"
+_TEST_USER_PASSWORD = "IntTest123!"
+
+
+def _get_integration_token() -> str:
+    """Register (or re-use) an integration test user and return a JWT."""
+    reg = requests.post(
+        f"{_AUTH_SERVICE_URL}/register/",
+        json={"email": _TEST_USER_EMAIL, "password": _TEST_USER_PASSWORD},
+        timeout=10,
+    )
+    if reg.status_code == 200:
+        return reg.json()["access_token"]
+
+    # User may already exist — try login instead
+    login = requests.post(
+        f"{_AUTH_SERVICE_URL}/login/",
+        json={"email": _TEST_USER_EMAIL, "password": _TEST_USER_PASSWORD},
+        timeout=10,
+    )
+    if login.status_code == 200:
+        return login.json()["access_token"]
+
+    raise RuntimeError(
+        f"Cannot obtain integration test token: "
+        f"register={reg.status_code} login={login.status_code}"
+    )
+
+
+_INTEGRATION_TOKEN: str | None = None
+
+
+def _token() -> str:
+    global _INTEGRATION_TOKEN
+    if _INTEGRATION_TOKEN is None:
+        _INTEGRATION_TOKEN = _get_integration_token()
+    return _INTEGRATION_TOKEN
+
+# Graph IDs — populated by create_test_graphs fixture (server assigns the UUID)
+_GRAPH_ID_A: str = ""
+_GRAPH_ID_B: str = ""
+
+
+def _create_graph(name: str) -> str:
+    """Create a graph via the API and return the server-assigned graph_id."""
+    resp = requests.post(
+        f"{_API_BASE}/graphs",
+        headers=_api_headers(),
+        json={"name": name, "description": "integration test graph"},
+        timeout=10,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Graph creation failed: {resp.status_code} {resp.text}"
+        )
+    return resp.json()["id"]
 
 # Minimal Python source with one taintable function
 _TAINT_SOURCE = textwrap.dedent("""\
@@ -74,8 +136,8 @@ def _neo4j_driver():
     )
 
 
-def _api_headers(user_token: str = "integration-test-token") -> dict:
-    return {"Authorization": f"Bearer {user_token}"}
+def _api_headers(user_token: str | None = None) -> dict:
+    return {"Authorization": f"Bearer {user_token or _token()}"}
 
 
 def _wait_for_api(timeout: float = 30.0) -> None:
@@ -97,26 +159,35 @@ def _wait_for_api(timeout: float = 30.0) -> None:
 def _ingest_python_source(
     graph_id: str,
     source_code: str,
-    tmp_path,
-    user_token: str = "integration-test-token",
-) -> None:
+    tmp_path=None,
+    user_token: str | None = None,
+) -> str:
     """
-    Write source_code to a temp file and trigger code ingestion via the API.
+    Write source_code to a shared temp dir accessible to the Celery worker
+    container, then trigger code ingestion via the API.  Returns the dir path.
     Polls until the job completes.
+
+    tmp_path is kept for backwards compatibility but ignored — both containers
+    share /app/app via bind mount, so we write there instead of /tmp.
     """
-    py_file = tmp_path / "test_module.py"
+    # Use the shared bind-mount so the Celery worker container can read the files
+    test_dir = _SHARED_TEST_DIR / uuid.uuid4().hex
+    test_dir.mkdir(parents=True, exist_ok=True)
+
+    py_file = test_dir / "test_module.py"
     py_file.write_text(source_code)
 
     resp = requests.post(
         f"{_API_BASE}/graphs/{graph_id}/code-ingest",
         headers=_api_headers(user_token),
-        json={"repo_path": str(tmp_path), "mode": "full"},
+        json={"repo_path": str(test_dir), "mode": "full"},
         timeout=10,
     )
     assert resp.status_code == 202, f"Ingest failed: {resp.status_code} {resp.text}"
 
     job_id = resp.json()["job_id"]
     _wait_for_job(graph_id, job_id, user_token)
+    return str(test_dir)
 
 
 def _wait_for_job(
@@ -179,15 +250,24 @@ def wait_for_api_ready():
     _wait_for_api()
 
 
+@pytest.fixture(scope="module", autouse=True)
+def create_test_graphs():
+    """Create the test graphs via the API; store server-assigned UUIDs in module globals."""
+    global _GRAPH_ID_A, _GRAPH_ID_B
+    _GRAPH_ID_A = _create_graph("task023-graph-a")
+    # Graph B intentionally not ingested — used for cross-tenant isolation tests
+    _GRAPH_ID_B = _create_graph("task023-graph-b")
+
+
 @pytest.fixture(scope="module")
-def ingested_graph_a(tmp_path_factory, neo4j_driver_fixture):
+def ingested_graph_a(neo4j_driver_fixture):
     """
     Ingest _COMBINED_SOURCE into GRAPH_ID_A once for the whole module.
     Yields graph_id for use in tests.
     """
-    tmp = tmp_path_factory.mktemp("data_flow_int_a")
-    _ingest_python_source(_GRAPH_ID_A, _COMBINED_SOURCE, tmp)
+    test_dir_path = _ingest_python_source(_GRAPH_ID_A, _COMBINED_SOURCE)
     yield _GRAPH_ID_A
+    shutil.rmtree(test_dir_path, ignore_errors=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -243,7 +323,7 @@ def test_flows_to_edges_have_graph_id_property(neo4j_driver_fixture, ingested_gr
             f"Edge graph_id mismatch: expected {_GRAPH_ID_A}, "
             f"got {rec['edge_graph_id']}"
         )
-        assert rec["via"] in ("assignment", "return", "argument"), (
+        assert rec["via"] in ("assignment", "return", "argument", "parameter"), (
             f"Unexpected FLOWS_TO via value: {rec['via']}"
         )
 
@@ -461,14 +541,12 @@ def test_cross_tenant_isolation_api_data_flow(ingested_graph_a):
 
 
 @pytest.mark.integration
-def test_500_line_file_analysis_under_10_seconds(
-    tmp_path_factory, neo4j_driver_fixture
-):
+def test_500_line_file_analysis_under_10_seconds(neo4j_driver_fixture):
     """
     STORY-004 acceptance criterion: analysis of a 500-line Python file completes
     in under 10 seconds end-to-end (ingest + FLOWS_TO edge writing).
     """
-    perf_graph_id = f"test-task023-perf-{uuid4().hex[:8]}"
+    perf_graph_id = _create_graph("task023-perf")
 
     # Generate a ~500-line Python file: 25 functions, each ~20 lines
     lines = []
@@ -484,17 +562,17 @@ def test_500_line_file_analysis_under_10_seconds(
 
     source = "\n".join(lines)
 
-    tmp = tmp_path_factory.mktemp("perf_test")
-
+    perf_dir: str | None = None
     start = time.monotonic()
     try:
-        _ingest_python_source(perf_graph_id, source, tmp)
+        perf_dir = _ingest_python_source(perf_graph_id, source)
     finally:
-        # Always cleanup — even if assertion fails
         try:
             _delete_test_graph(neo4j_driver_fixture, perf_graph_id)
         except Exception:
             pass
+        if perf_dir:
+            shutil.rmtree(perf_dir, ignore_errors=True)
     elapsed = time.monotonic() - start
 
     assert elapsed < 10.0, (

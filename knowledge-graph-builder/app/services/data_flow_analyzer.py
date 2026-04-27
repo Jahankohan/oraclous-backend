@@ -134,12 +134,30 @@ class _FunctionFlowVisitor(ast.NodeVisitor):
         self.is_taint_source = is_taint_source
         self.param_names = param_names
         for pname in param_names:
-            # In the graph, function parameters are not separate Variable nodes;
-            # we model them as flowing from the Function node itself.
-            self.tracked_vars[pname] = func_qname
+            # Each parameter tracks its own Variable node qname so that
+            # FLOWS_TO edges start from the param node (required for taint
+            # traversal: MATCH (src {taint:'user_input'})-[:FLOWS_TO*]->).
+            self.tracked_vars[pname] = f"{func_qname}.{pname}"
 
         self.edges: list[_FlowEdge] = []
         self.taint_marks: list[_TaintMark] = []
+
+        # Emit Function → param_Variable edges so that API queries starting
+        # from the Function node (source_symbol = func_qname) can traverse
+        # into the parameter flow graph.  These are written before any
+        # assignment edges, so subsequent MATCH (src = param_Variable) finds
+        # the node already created by the MERGE in this earlier edge row.
+        for pname in param_names:
+            param_qname = f"{func_qname}.{pname}"
+            self.edges.append(
+                _FlowEdge(
+                    source_qualified_name=func_qname,
+                    target_qualified_name=param_qname,
+                    via="parameter",
+                    source_line=0,
+                    source_file=source_file,
+                )
+            )
 
         # If taint source, the first non-self parameter carries taint.
         # The Variable node qualified_name would be module_qname.func_qname.param
@@ -248,11 +266,12 @@ class _FunctionFlowVisitor(ast.NodeVisitor):
         rhs_tracked = self._expr_refs_tracked(node.value)
         for src_name in rhs_tracked:
             src_qname = self.tracked_vars[src_name]
-            # Target is the Function node itself (represents its return value)
+            # Use a synthetic .__return__ node to avoid colliding with the
+            # existing Function node that already has the same qualified_name.
             self.edges.append(
                 _FlowEdge(
                     source_qualified_name=src_qname,
-                    target_qualified_name=self.func_qname,
+                    target_qualified_name=f"{self.func_qname}.__return__",
                     via="return",
                     source_line=node.lineno,
                     source_file=self.source_file,
@@ -356,7 +375,12 @@ def _module_qname_from_path(file_path: str) -> str:
 _MERGE_FLOWS_TO = """
 UNWIND $edges AS e
 MATCH (src {graph_id: $graph_id, qualified_name: e.src_qname})
-MATCH (tgt {graph_id: $graph_id, qualified_name: e.tgt_qname})
+MERGE (tgt:Variable {graph_id: $graph_id, qualified_name: e.tgt_qname})
+ON CREATE SET
+    tgt.variable_id  = randomUUID(),
+    tgt.name         = split(e.tgt_qname, '.')[-1],
+    tgt.is_local     = true,
+    tgt.source_file  = e.source_file
 MERGE (src)-[r:FLOWS_TO {
     via: e.via,
     graph_id: $graph_id,
@@ -368,7 +392,11 @@ RETURN count(r) AS written
 
 _MARK_TAINT = """
 UNWIND $marks AS m
-MATCH (n {graph_id: $graph_id, qualified_name: m.qname})
+MERGE (n:Variable {graph_id: $graph_id, qualified_name: m.qname})
+ON CREATE SET
+    n.variable_id = randomUUID(),
+    n.name        = split(m.qname, '.')[-1],
+    n.is_local    = true
 SET n.taint = 'user_input'
 """
 
@@ -383,7 +411,18 @@ def _write_edges_sync(
     """Write FLOWS_TO edges + taint marks using a sync Neo4j session."""
     total_written = 0
 
-    # Write edges in batches
+    # Write taint marks FIRST so that param Variable nodes exist before edges
+    # try to MATCH them as src.  Without this ordering, edges whose src is a
+    # tainted parameter would fail with "node not found" because the Variable
+    # node is only created by the taint-mark MERGE.
+    if taint_marks:
+        mark_rows = [{"qname": m.qualified_name} for m in taint_marks]
+        try:
+            session.run(_MARK_TAINT, {"marks": mark_rows, "graph_id": graph_id})
+        except Exception as exc:
+            logger.warning(f"Taint mark write failed (non-fatal): {exc}")
+
+    # Write edges in batches (src Variable nodes from taint marks now exist)
     edge_rows = [
         {
             "src_qname": e.source_qualified_name,
@@ -404,14 +443,6 @@ def _write_edges_sync(
         rec = result.single()
         if rec:
             total_written += int(rec["written"])
-
-    # Write taint marks (best-effort: nodes may not exist)
-    if taint_marks:
-        mark_rows = [{"qname": m.qualified_name} for m in taint_marks]
-        try:
-            session.run(_MARK_TAINT, {"marks": mark_rows, "graph_id": graph_id})
-        except Exception as exc:
-            logger.warning(f"Taint mark write failed (non-fatal): {exc}")
 
     return total_written
 
@@ -504,14 +535,23 @@ class DataFlowAnalyzer:
     # Analyse an entire file
     # ------------------------------------------------------------------
 
-    def analyze_file(self, file_path: str, graph_id: str) -> int:
+    def analyze_file(
+        self,
+        file_path: str,
+        graph_id: str,
+        module_qname: str | None = None,
+    ) -> int:
         """
         Parse a Python file, analyse every function definition, and write
         FLOWS_TO edges to Neo4j.
 
         Args:
-            file_path: Absolute (or relative) path to the Python file.
-            graph_id:  Multi-tenancy scope key.
+            file_path:    Absolute path used to read the file.
+            graph_id:     Multi-tenancy scope key.
+            module_qname: Override the dotted module name used for qualified-name
+                          computation.  When omitted, derived from *file_path*.
+                          Pass the repo-relative path (FileMetadata.path) so that
+                          qualified names match what code_parser_service writes.
 
         Returns:
             Total number of FLOWS_TO edges written.
@@ -528,7 +568,8 @@ class DataFlowAnalyzer:
             logger.warning(f"DataFlowAnalyzer: syntax error in {file_path}: {exc}")
             return 0
 
-        module_qname = _module_qname_from_path(file_path)
+        if module_qname is None:
+            module_qname = _module_qname_from_path(file_path)
         all_edges: list[_FlowEdge] = []
         all_taint: list[_TaintMark] = []
 
@@ -583,7 +624,11 @@ class DataFlowAnalyzer:
             if getattr(fm, "language", None) != "python":
                 continue
             try:
-                total += self.analyze_file(fm.abs_path, graph_id)
+                # Use the repo-relative path (fm.path) for module qualified-name
+                # computation so that names match code_parser_service output.
+                rel_path: str = getattr(fm, "path", None) or fm.abs_path
+                module_qname = _module_qname_from_path(rel_path)
+                total += self.analyze_file(fm.abs_path, graph_id, module_qname)
             except Exception as exc:
                 logger.warning(
                     f"DataFlowAnalyzer: error analysing {fm.abs_path}: {exc}"
