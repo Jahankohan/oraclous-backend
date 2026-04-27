@@ -272,12 +272,7 @@ async def test_candidate_threshold_filters_low_similarity():
 
     svc = FederationService(async_driver=driver)
 
-    entity = {
-        "name": "IBM",
-        "type": "Organization",
-        "entity_id": "id-a",
-        "embedding": [0.1] * 10,
-    }
+    embedding = [0.1] * 10
 
     # Patch _vector_search_candidates to return a below-threshold candidate
     with patch.object(
@@ -296,19 +291,16 @@ async def test_candidate_threshold_filters_low_similarity():
         svc,
         "_find_exact_match",
         new=AsyncMock(return_value=None),
+    ), patch.object(
+        svc,
+        "_validate_and_filter",
+        new=AsyncMock(return_value=None),
     ):
-        # The vector search is called with threshold=0.60; the mock returns one result.
-        # find_same_as_candidates wraps whatever _vector_search_candidates returns
-        # (the threshold is enforced inside _vector_search_candidates via the Cypher query).
-        # Here we verify that the threshold constant itself is 0.60.
-        candidates = await svc.find_same_as_candidates(entity, ["graph-b"])
+        candidates = await svc.find_same_as_candidates(
+            "id-a", "graph-a", ["graph-b"], embedding, user_id="user-1"
+        )
 
     # Threshold filtering is done at the Cypher level (inside _vector_search_candidates).
-    # The service passes threshold=0.60 to _vector_search_candidates, so even if the
-    # mock returns low-similarity rows, what matters is that:
-    #   1. _SAME_AS_CANDIDATE_THRESHOLD == 0.60 (asserted above)
-    #   2. that value is actually passed to _vector_search_candidates
-    # We validate the constant and the call.
     with patch.object(
         svc,
         "_vector_search_candidates",
@@ -317,10 +309,16 @@ async def test_candidate_threshold_filters_low_similarity():
         svc,
         "_find_exact_match",
         new=AsyncMock(return_value=None),
+    ), patch.object(
+        svc,
+        "_validate_and_filter",
+        new=AsyncMock(return_value=None),
     ):
-        await svc.find_same_as_candidates(entity, ["graph-b"])
+        await svc.find_same_as_candidates(
+            "id-a", "graph-a", ["graph-b"], embedding, user_id="user-1"
+        )
         mock_vec.assert_awaited_once_with(
-            entity["embedding"],
+            embedding,
             ["graph-b"],
             threshold=_SAME_AS_CANDIDATE_THRESHOLD,
         )
@@ -551,13 +549,12 @@ async def test_exact_match_fast_path_confidence():
 
     svc = FederationService(async_driver=driver)
 
-    entity = {
-        "name": "IBM",
-        "type": "Organization",
-        "entity_id": "id-a",
-    }
-
-    candidates = await svc.find_same_as_candidates(entity, ["graph-b"])
+    exact_result = {"entity_id": "id-b", "name": "IBM", "type": "Organization", "source_graph_id": "graph-b"}
+    with patch.object(svc, "_validate_and_filter", new=AsyncMock(return_value=None)), \
+         patch.object(svc, "_find_exact_match", new=AsyncMock(return_value=exact_result)):
+        candidates = await svc.find_same_as_candidates(
+            "id-a", "graph-a", ["graph-b"], [], user_id="user-1"
+        )
 
     assert len(candidates) == 1, "Expected one candidate from exact-match fast path"
     assert candidates[0]["method"] == "exact", (

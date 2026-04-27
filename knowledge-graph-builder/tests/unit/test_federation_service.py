@@ -381,7 +381,7 @@ async def test_store_same_as_links_is_awaited():
     driver.session.return_value = mock_session
 
     svc = FederationService(async_driver=driver)
-    await svc._store_same_as_links([("id_a", "id_b", 0.99)])
+    await svc._store_same_as_links([("id_a", "id_b", 0.99, "graph-a", "graph-b")])
 
     mock_session.execute_write.assert_awaited_once()
 
