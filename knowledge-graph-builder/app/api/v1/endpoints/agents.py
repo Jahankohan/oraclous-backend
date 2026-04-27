@@ -180,8 +180,8 @@ async def agent_chat(
         executor = await AgentExecutor.from_neo4j(
             neo4j_client.async_driver, graph_id, agent_id
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     except NotImplementedError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)

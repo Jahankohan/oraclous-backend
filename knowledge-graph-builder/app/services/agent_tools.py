@@ -167,6 +167,7 @@ class AgentToolkit:
                 (a {graph_id: $gid})-[*]-(b {graph_id: $gid})
             )
             WHERE a.qualified_name = $from AND b.qualified_name = $to
+              AND ALL(n IN nodes(p) WHERE n.graph_id = $gid)
             RETURN p, length(p) AS hop_count
             """,
             {"gid": graph_id, "from": from_qname, "to": to_qname},
