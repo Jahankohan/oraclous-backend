@@ -1699,6 +1699,7 @@ async def _sync_database_connector_async(
         make_connector,
         write_table_to_kg,
     )
+    from app.services.schema_mapper import SchemaMapper
 
     logger.info(
         f"Starting database connector sync: connector={connector_id} graph={graph_id}"
@@ -1833,35 +1834,106 @@ async def _sync_database_connector_async(
                             logger.warning(f"CDC soft-delete failed for {tname}: {e}")
 
             # ------------------------------------------------------------------
-            # Write each table to Neo4j
+            # SchemaMapper → GraphMappingRules
             # ------------------------------------------------------------------
-            for table in snapshot.tables:
-                sample_rows = []
-                if sync_mode != DbSyncMode.SCHEMA_ONLY:
+            mapper = SchemaMapper()
+            mapping_rules = mapper.map(
+                schema_snapshot=snapshot,
+                connector_id=connector_id,
+                graph_id=graph_id,
+            )
+
+            # Partition table mappings into entity tables and junction/self-ref tables
+            entity_mappings = [
+                tm for tm in mapping_rules.tables if tm.kind == "entity_table"
+            ]
+            junction_mappings = [
+                tm
+                for tm in mapping_rules.tables
+                if tm.kind in ("junction_table", "self_ref_table")
+            ]
+
+            # ------------------------------------------------------------------
+            # Write each table to Neo4j
+            # Full-snapshot path: use RowTransformer for batched UNWIND writes.
+            # Schema-only path: fall through to write_table_to_kg (placeholder nodes).
+            # ------------------------------------------------------------------
+            if sync_mode == DbSyncMode.SCHEMA_ONLY:
+                # Schema-only: create placeholder __Entity__ type nodes (no row data)
+                for table in snapshot.tables:
                     try:
-                        sample_rows = await connector.extract_sample_data(
-                            table.name, config["sample_row_limit"]
+                        count = await write_table_to_kg(
+                            graph_id=graph_id,
+                            connector_id=connector_id,
+                            table=table,
+                            sync_mode=sync_mode,
+                            sample_rows=[],
+                            driver=async_driver,
+                        )
+                        total_entities += count
+                    except Exception as e:
+                        logger.warning(f"Schema-only KG write failed for {table.name}: {e}")
+                        tables_failed.append(table.name)
+            else:
+                from app.services.row_transformer import RowTransformer
+
+                # Use the sync driver for RowTransformer (NullPool — Celery invariant)
+                row_xfm = RowTransformer(neo4j)
+
+                # Step 1: write entity tables first (FK targets must exist before junctions)
+                for tm in entity_mappings:
+                    try:
+                        rows = await connector.fetch_rows(
+                            table_name=tm.table_name,
+                            schema_snapshot=snapshot,
+                            limit=config.get("sample_row_limit", 1000),
+                            offset=0,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Row fetch failed for {tm.table_name}: {e}")
+                        tables_failed.append(tm.table_name)
+                        continue
+                    try:
+                        count = row_xfm.transform_table(
+                            table_mapping=tm,
+                            rows=rows,
+                            graph_id=graph_id,
+                            connector_id=connector_id,
+                        )
+                        total_entities += count
+                    except Exception as e:
+                        logger.warning(f"Entity write failed for {tm.table_name}: {e}")
+                        tables_failed.append(tm.table_name)
+
+                # Step 2: write junction/self-ref tables (entity nodes now exist)
+                rows_by_table: dict[str, list[dict]] = {}
+                for tm in junction_mappings:
+                    try:
+                        rows_by_table[tm.table_name] = await connector.fetch_rows(
+                            table_name=tm.table_name,
+                            schema_snapshot=snapshot,
+                            limit=config.get("sample_row_limit", 1000),
+                            offset=0,
                         )
                     except Exception as e:
                         logger.warning(
-                            f"Sample extraction failed for {table.name}: {e}"
+                            f"Row fetch failed for junction table {tm.table_name}: {e}"
                         )
-                        tables_failed.append(table.name)
-                        continue
+                        tables_failed.append(tm.table_name)
 
-                try:
-                    count = await write_table_to_kg(
-                        graph_id=graph_id,
-                        connector_id=connector_id,
-                        table=table,
-                        sync_mode=sync_mode,
-                        sample_rows=sample_rows,
-                        driver=async_driver,
-                    )
-                    total_entities += count
-                except Exception as e:
-                    logger.warning(f"KG write failed for {table.name}: {e}")
-                    tables_failed.append(table.name)
+                if junction_mappings:
+                    try:
+                        row_xfm.transform_junctions(
+                            junction_mappings=junction_mappings,
+                            rows_by_table=rows_by_table,
+                            graph_id=graph_id,
+                            connector_id=connector_id,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Junction write failed: {e}")
+                        for tm in junction_mappings:
+                            if tm.table_name not in tables_failed:
+                                tables_failed.append(tm.table_name)
 
             # Store snapshot for future CDC runs
             await async_driver.execute_query(
