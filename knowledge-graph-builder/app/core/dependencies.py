@@ -5,7 +5,11 @@ Simple, maintainable dependency injection following Neo4j GraphRAG patterns.
 Updated to use dual driver architecture without @lru_cache for stateful connections.
 """
 
-from fastapi import Depends, HTTPException, status
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Coroutine
+
+from fastapi import Depends, HTTPException, Request, status
 from neo4j import AsyncDriver, Driver
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
 from neo4j_graphrag.llm import OpenAILLM
@@ -13,6 +17,9 @@ from neo4j_graphrag.llm import OpenAILLM
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
+
+if TYPE_CHECKING:
+    from app.core.rate_limiter import TokenBucketRateLimiter
 
 logger = get_logger(__name__)
 
@@ -263,6 +270,84 @@ async def check_openai_health(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="OpenAI embeddings service is not available",
         )
+
+
+# ==================== PER-TENANT RATE LIMITING ====================
+
+
+async def get_tenant_rate_limiter(
+    request: "Request",
+    endpoint_type: str = "read",
+) -> "TokenBucketRateLimiter | None":
+    """
+    FastAPI dependency that returns a ``TokenBucketRateLimiter`` for the
+    authenticated tenant on the current request.
+
+    ``tenant_id`` is extracted from the JWT principal stored in the
+    ``_current_principal`` contextvar (set by ``get_current_user``).  When no
+    principal is present (unauthenticated path) the dependency returns ``None``
+    and callers should fall back to the flat slowapi limiter.
+
+    Usage::
+
+        @router.get("/graphs")
+        async def list_graphs(
+            limiter: TokenBucketRateLimiter | None = Depends(
+                lambda r: get_tenant_rate_limiter(r, "read")
+            ),
+        ):
+            if limiter is not None:
+                allowed, headers = await limiter.is_allowed()
+                if not allowed:
+                    raise HTTPException(status_code=429, headers=headers, detail="Rate limit exceeded")
+    """
+    # Inline import to avoid circular dependency at module load time.
+    from app.api.dependencies import _current_principal
+    from app.core.rate_limiter import TokenBucketRateLimiter
+
+    principal = _current_principal.get()
+    if not principal:
+        return None
+
+    tenant_id = principal.get("tenant_id") or principal.get("id") or ""
+    if not tenant_id:
+        return None
+
+    # Lazily import redis — only available at runtime.
+    try:
+        import redis.asyncio as aioredis
+
+        from app.core.config import settings
+
+        redis_client = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    except Exception as exc:
+        logger.warning("Cannot create Redis client for rate limiter: %s", exc)
+        return None
+
+    # Optionally pass the Neo4j async driver for per-tenant config lookups.
+    neo4j_driver = neo4j_client.async_driver if neo4j_client.async_driver else None
+
+    return TokenBucketRateLimiter(
+        redis_client=redis_client,
+        tenant_id=tenant_id,
+        endpoint_type=endpoint_type,
+        neo4j_driver=neo4j_driver,
+    )
+
+
+def get_read_rate_limiter(request: "Request") -> "Coroutine":
+    """Convenience wrapper: read-category per-tenant rate limiter."""
+    return get_tenant_rate_limiter(request, "read")
+
+
+def get_write_rate_limiter(request: "Request") -> "Coroutine":
+    """Convenience wrapper: write-category per-tenant rate limiter."""
+    return get_tenant_rate_limiter(request, "write")
+
+
+def get_admin_rate_limiter(request: "Request") -> "Coroutine":
+    """Convenience wrapper: admin-category per-tenant rate limiter."""
+    return get_tenant_rate_limiter(request, "admin")
 
 
 # ==================== BACKWARD COMPATIBILITY ====================
