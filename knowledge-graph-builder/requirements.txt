@@ -29,6 +29,7 @@ python-docx==1.2.0
 pymupdf>=1.24.0          # PDF parsing — text, image, table extraction
 pdfplumber>=0.11.0       # Table extraction (used alongside PyMuPDF)
 pillow>=10.0.0           # Image handling (dependency of PyMuPDF image export)
+pytesseract>=0.3.10      # OCR fallback for scanned PDFs (requires tesseract-ocr system pkg)
 python-magic>=0.4.27     # MIME type detection for uploaded files
 
 # LLM required configurations

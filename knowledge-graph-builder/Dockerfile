@@ -4,11 +4,13 @@ FROM python:3.12-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (libigraph-dev required by leidenalg)
+# Install system dependencies (libigraph-dev required by leidenalg;
+# tesseract-ocr required by pytesseract OCR fallback in pdf_extractor)
 RUN apt-get update && apt-get install -y \
     curl \
     gcc \
     libigraph-dev \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
