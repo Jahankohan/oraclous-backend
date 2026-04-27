@@ -35,3 +35,4 @@ class KGBError:
     # ── 4xxx — Client / authorization errors ─────────────────────────────────
     GRAPH_NOT_FOUND = ("KGB-4001", "Graph not found")
     PERMISSION_DENIED = ("KGB-4003", "Permission denied")
+    RATE_LIMIT_EXCEEDED = ("KGB-4029", "Rate limit exceeded")
