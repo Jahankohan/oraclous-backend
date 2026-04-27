@@ -1618,11 +1618,33 @@ def code_ingest_task(self, job_id: str, user_id: str) -> dict[str, Any]:
                 f"[{job_id}] Stage 5 done: {stats.symbols_added} symbols written"
             )
 
-            # ── Stage 6: Stale Cleanup ─────────────────────────────────────
+            # ── Stage 6: Data Flow Analysis (Python only) ─────────────────
+            # Runs after write_code_graph_sync so all Function/Variable/Class
+            # nodes are already in Neo4j and can be referenced by FLOWS_TO edges.
+            # Uses the same sync driver (WorkerNeo4jManager / NullPool).
+            try:
+                from app.services.data_flow_analyzer import DataFlowAnalyzer
+
+                python_files = [f for f in to_parse if f.language == "python"]
+                if python_files:
+                    dfa = DataFlowAnalyzer(sync_driver=driver)
+                    flows_written = dfa.analyze_files(python_files, graph_id)
+                    logger.info(
+                        f"[{job_id}] Stage 6: DataFlowAnalyzer wrote "
+                        f"{flows_written} FLOWS_TO edges for "
+                        f"{len(python_files)} Python file(s)"
+                    )
+            except Exception as dfa_exc:
+                # Non-fatal — data flow analysis failure must not abort ingestion
+                logger.warning(
+                    f"[{job_id}] DataFlowAnalyzer failed (non-fatal): {dfa_exc}"
+                )
+
+            # ── Stage 7: Stale Cleanup ─────────────────────────────────────
             if mode == "full":
                 with driver.session() as session:
                     deleted = cleanup_stale_code_nodes_sync(graph_id, session)
-                logger.info(f"[{job_id}] Stage 6: cleaned up {deleted} stale nodes")
+                logger.info(f"[{job_id}] Stage 7: cleaned up {deleted} stale nodes")
 
         _pg_update_job(job_id, "completed", 100, {"symbols_added": stats.symbols_added})
         logger.info(

@@ -302,6 +302,7 @@ async def code_query(
     | `inheritance_chain` | `class_name`               |
     | `file_deps`         | `file_path`                |
     | `semantic_search`   | `query_text`; optional `top_k` |
+    | `data_flow`         | `source_symbol`; optional `depth` (default 10), `direction` (`forward`\|`backward`\|`both`) |
     """
     await verify_graph_access(str(graph_id), "read", user_id)
 
@@ -490,5 +491,70 @@ async def _run_code_query(
             {"graph_id": graph_id, "top_k": top_k, "embedding": query_embedding},
         )
         return [dict(r) for r in result.records]
+
+    if query_type == "data_flow":
+        source_symbol = params.get("source_symbol")
+        if not source_symbol:
+            raise _QueryParamError(
+                "'source_symbol' is required for query_type=data_flow"
+            )
+        depth = int(params.get("depth", 10))
+        direction = params.get("direction", "forward")
+
+        if direction == "backward":
+            cypher = """
+            MATCH (start {graph_id: $graph_id})
+            WHERE start.qualified_name = $source_symbol OR start.id = $source_symbol
+            MATCH path = (source)-[:FLOWS_TO*1..$depth]->(start)
+            RETURN
+                [node IN nodes(path) | coalesce(node.qualified_name, node.name)] AS path_nodes,
+                [node IN nodes(path) | labels(node)[0]]                          AS path_labels,
+                length(path)                                                       AS depth
+            ORDER BY depth
+            LIMIT $limit
+            """
+        elif direction == "both":
+            cypher = """
+            MATCH (start {graph_id: $graph_id})
+            WHERE start.qualified_name = $source_symbol OR start.id = $source_symbol
+            MATCH path = (start)-[:FLOWS_TO*1..$depth]-(sink)
+            RETURN
+                [node IN nodes(path) | coalesce(node.qualified_name, node.name)] AS path_nodes,
+                [node IN nodes(path) | labels(node)[0]]                          AS path_labels,
+                length(path)                                                       AS depth
+            ORDER BY depth
+            LIMIT $limit
+            """
+        else:
+            # default: forward
+            cypher = """
+            MATCH (start {graph_id: $graph_id})
+            WHERE start.qualified_name = $source_symbol OR start.id = $source_symbol
+            MATCH path = (start)-[:FLOWS_TO*1..$depth]->(sink)
+            RETURN
+                [node IN nodes(path) | coalesce(node.qualified_name, node.name)] AS path_nodes,
+                [node IN nodes(path) | labels(node)[0]]                          AS path_labels,
+                length(path)                                                       AS depth
+            ORDER BY depth
+            LIMIT $limit
+            """
+
+        result = await driver.execute_query(
+            cypher,
+            {
+                "graph_id": graph_id,
+                "source_symbol": source_symbol,
+                "depth": depth,
+                "limit": limit,
+            },
+        )
+        return [
+            {
+                "path_nodes": r["path_nodes"],
+                "path_labels": r["path_labels"],
+                "depth": r["depth"],
+            }
+            for r in result.records
+        ]
 
     raise _QueryParamError(f"Unknown query_type: {query_type}")
