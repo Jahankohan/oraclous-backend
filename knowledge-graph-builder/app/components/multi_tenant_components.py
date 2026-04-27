@@ -253,23 +253,31 @@ class MultiTenantKGWriter:
     """
 
     def __init__(
-        self, base_writer: Neo4jWriter, graph_id: str, user_id: str | None = None
+        self,
+        base_writer: Neo4jWriter,
+        graph_id: str,
+        user_id: str | None = None,
+        ingestion_source: str | None = None,
     ):
         """
         Args:
             base_writer: Neo4j GraphRAG writer instance
             graph_id: Tenant identifier
             user_id: Optional user identifier for additional isolation
+            ingestion_source: Document filename, connector ID, or API name that
+                provided the data being written — stored as the bitemporal
+                ingestion_source property on every node and relationship.
         """
         self.base_writer = base_writer
         self.graph_id = graph_id
         self.user_id = user_id
+        self.ingestion_source = ingestion_source
 
     async def run(self, graph: Neo4jGraph) -> None:
         """Write graph with automatic tenant metadata injection"""
         now = datetime.now(UTC)
 
-        # Inject graph_id and transaction_time into all nodes
+        # Inject graph_id, transaction_time, and bitemporal provenance into all nodes
         for node in graph.nodes:
             if not node.properties:
                 node.properties = {}
@@ -278,14 +286,17 @@ class MultiTenantKGWriter:
                     "graph_id": self.graph_id,
                     "created_by": "multi_tenant_pipeline",
                     "transaction_time": now,
+                    "ingestion_time": now,
                 }
             )
+            if self.ingestion_source is not None:
+                node.properties.setdefault("ingestion_source", self.ingestion_source)
 
             # Add user_id if provided
             if self.user_id:
                 node.properties["user_id"] = self.user_id
 
-        # Inject graph_id and transaction_time into all relationships
+        # Inject graph_id, transaction_time, and bitemporal provenance into all relationships
         for rel in graph.relationships:
             if not rel.properties:
                 rel.properties = {}
@@ -294,8 +305,11 @@ class MultiTenantKGWriter:
                     "graph_id": self.graph_id,
                     "created_by": "multi_tenant_pipeline",
                     "transaction_time": now,
+                    "ingestion_time": now,
                 }
             )
+            if self.ingestion_source is not None:
+                rel.properties.setdefault("ingestion_source", self.ingestion_source)
 
             # Add user_id if provided
             if self.user_id:
