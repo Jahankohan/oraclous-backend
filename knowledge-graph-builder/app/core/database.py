@@ -8,6 +8,30 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Async Redis client — shared singleton for the FastAPI process.
+# Used by QueryCacheService and any other async callers.
+# Celery workers should instantiate their own synchronous Redis client
+# to avoid sharing an async connection across the fork boundary.
+# ---------------------------------------------------------------------------
+try:
+    import redis.asyncio as _aioredis
+
+    redis_client = _aioredis.from_url(
+        settings.REDIS_URL,
+        encoding="utf-8",
+        decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+    )
+    logger.info("Async Redis client initialised (url=%s)", settings.REDIS_URL)
+except Exception as _redis_init_err:  # pragma: no cover
+    logger.warning(
+        "Could not initialise async Redis client: %s — cache will be disabled",
+        _redis_init_err,
+    )
+    redis_client = None  # type: ignore[assignment]
+
 
 class Base(DeclarativeBase):
     """Base class for SQLAlchemy models"""
