@@ -1,9 +1,10 @@
 """Agent execution engine — four reasoning modes (TASK-034 / STORY-020).
 
 AgentExecutor is instantiated per chat request. It loads the agent definition
-from Neo4j, resolves the LLM client, and dispatches to the correct reasoning
-mode. Every execution produces a ProvenancePayload that the caller returns
-alongside the agent's response.
+from Neo4j, resolves the LLM client via the three-level LLMConfig chain
+(agent → project → org → env-var fallback), and dispatches to the correct
+reasoning mode. Every execution produces a ProvenancePayload that the caller
+returns alongside the agent's response.
 
 Reasoning modes
 ---------------
@@ -25,6 +26,9 @@ from app.core.logging import get_logger
 from app.schemas.agent_schemas import AgentChatResponse, NodeResult, PathResult
 from app.services.agent_service import AgentService
 from app.services.agent_tools import AgentToolkit, ToolNotPermittedError
+from app.services.credential_broker_client import CredentialBrokerClient, CredentialBrokerError
+from app.services.llm_client_factory import LLMClientFactory
+from app.services.llm_config_service import LLMConfigService
 from app.services.provenance import ProvenanceCollector
 
 logger = get_logger(__name__)
@@ -94,17 +98,33 @@ class AgentExecutor:
         if not agent_def:
             raise ValueError(f"Agent '{agent_id}' not found in graph '{graph_id}'")
 
-        if agent_def.get("llm_config_id"):
-            raise NotImplementedError(
-                "LLM config resolution not yet implemented; leave llm_config_id null"
-            )
+        # Resolve LLM config: agent → project → org → env-var fallback
+        org_id = agent_def.get("org_id") or ""
+        svc_config = LLMConfigService(driver)
+        resolved = await svc_config.resolve_for_agent(
+            graph_id=graph_id,
+            org_id=org_id,
+            agent_llm_config_id=agent_def.get("llm_config_id"),
+        )
 
-        api_key = settings.OPENAI_API_KEY
-        if not api_key:
-            raise RuntimeError("No LLM API key configured (set OPENAI_API_KEY)")
+        if resolved:
+            try:
+                broker = CredentialBrokerClient(settings.CREDENTIAL_BROKER_URL)
+                api_key = await broker.retrieve_api_key(resolved["api_key_ref"])
+            except CredentialBrokerError as exc:
+                raise RuntimeError(f"Could not retrieve LLM API key: {exc}") from exc
+            config_dict = {**resolved, "api_key": api_key}
+            llm = LLMClientFactory.build(config_dict)
+            model = resolved["model"]
+        else:
+            api_key = settings.LLM_API_KEY or settings.OPENAI_API_KEY
+            if not api_key:
+                raise RuntimeError(
+                    "LLM not configured. Set an LLM config at org or project level."
+                )
+            model = settings.LLM_MODEL
+            llm = AsyncOpenAI(api_key=api_key)
 
-        model = getattr(settings, "LLM_MODEL", "gpt-4o")
-        llm = AsyncOpenAI(api_key=api_key)
         toolkit = AgentToolkit(driver, agent_def["tools"])
         return cls(agent_def, toolkit, llm, model)
 
@@ -141,13 +161,29 @@ class AgentExecutor:
         self, messages: list[dict], system_prompt: str | None = None
     ) -> str:
         sp = system_prompt or self._agent.get("system_prompt", "You are a helpful assistant.")
-        all_msgs = [{"role": "system", "content": sp}] + messages
-        resp = await self._llm.chat.completions.create(
-            model=self._model,
-            messages=all_msgs,
-            temperature=0.7,
-        )
-        return resp.choices[0].message.content or ""
+
+        try:
+            from anthropic import AsyncAnthropic
+            _is_anthropic = isinstance(self._llm, AsyncAnthropic)
+        except ImportError:
+            _is_anthropic = False
+
+        if _is_anthropic:
+            resp = await self._llm.messages.create(
+                model=self._model,
+                max_tokens=4096,
+                system=sp,
+                messages=messages,
+            )
+            return resp.content[0].text or ""
+        else:
+            all_msgs = [{"role": "system", "content": sp}] + messages
+            resp = await self._llm.chat.completions.create(
+                model=self._model,
+                messages=all_msgs,
+                temperature=0.7,
+            )
+            return resp.choices[0].message.content or ""
 
     # ── Tool dispatch ─────────────────────────────────────────────────────────
 

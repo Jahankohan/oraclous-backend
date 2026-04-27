@@ -342,21 +342,36 @@ class TestFromNeo4jErrors:
             with pytest.raises(ValueError, match="not found"):
                 await AgentExecutor.from_neo4j(driver, "g", "missing-id")
 
-    async def test_llm_config_id_set_raises_not_implemented(self):
+    async def test_llm_config_id_resolved_via_chain(self):
         driver = MagicMock()
         agent = _make_agent(llm_config_id="some-config")
-        with patch("app.services.agent_executor.AgentService") as MockSvc:
+        resolved = {
+            "config_id": "some-config", "provider": "openrouter",
+            "model": "openai/gpt-4o", "base_url": "https://openrouter.ai/api/v1",
+            "api_version": None, "api_key_ref": "cred-123", "deactivated_at": None,
+        }
+        with patch("app.services.agent_executor.AgentService") as MockSvc, \
+             patch("app.services.agent_executor.LLMConfigService") as MockCfg, \
+             patch("app.services.agent_executor.CredentialBrokerClient") as MockBroker, \
+             patch("app.services.agent_executor.LLMClientFactory") as MockFactory:
             MockSvc.return_value.get_agent = AsyncMock(return_value=agent)
-            with pytest.raises(NotImplementedError):
-                await AgentExecutor.from_neo4j(driver, "g", "a")
+            MockCfg.return_value.resolve_for_agent = AsyncMock(return_value=resolved)
+            MockBroker.return_value.retrieve_api_key = AsyncMock(return_value="sk-or-test")
+            MockFactory.build = MagicMock(return_value=MagicMock())
+            executor = await AgentExecutor.from_neo4j(driver, "g", "a")
+        assert executor is not None
 
     async def test_no_api_key_raises_runtime_error(self):
         driver = MagicMock()
         agent = _make_agent()
-        with patch("app.services.agent_executor.AgentService") as MockSvc:
+        with patch("app.services.agent_executor.AgentService") as MockSvc, \
+             patch("app.services.agent_executor.LLMConfigService") as MockCfg:
             MockSvc.return_value.get_agent = AsyncMock(return_value=agent)
+            MockCfg.return_value.resolve_for_agent = AsyncMock(return_value=None)
             with patch("app.services.agent_executor.settings") as mock_settings:
+                mock_settings.LLM_API_KEY = None
                 mock_settings.OPENAI_API_KEY = None
                 mock_settings.LLM_MODEL = "gpt-4o"
-                with pytest.raises(RuntimeError, match="API key"):
+                mock_settings.CREDENTIAL_BROKER_URL = "http://broker:8000"
+                with pytest.raises(RuntimeError, match="LLM not configured"):
                     await AgentExecutor.from_neo4j(driver, "g", "a")
