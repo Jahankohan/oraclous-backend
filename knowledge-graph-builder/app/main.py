@@ -205,6 +205,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Include API router
 app.include_router(api_router, prefix="/api/v1")
 
+# Public integration endpoints (integration-key auth, no JWT middleware)
+from app.api.public.endpoints import public_agents as _public_agents
+app.include_router(_public_agents.router, prefix="/public", tags=["public"])
+
 
 # Root endpoint
 @app.get("/")

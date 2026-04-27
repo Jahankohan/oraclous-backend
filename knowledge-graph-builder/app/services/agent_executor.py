@@ -15,7 +15,7 @@ conversational  Full session history injected; warm tone system prompt suffix
 """
 
 import json
-from typing import Any
+from typing import Any, AsyncGenerator
 from uuid import uuid4
 
 from neo4j import AsyncDriver
@@ -184,6 +184,81 @@ class AgentExecutor:
                 temperature=0.7,
             )
             return resp.choices[0].message.content or ""
+
+    async def _call_llm_stream(
+        self, messages: list[dict], system_prompt: str | None = None
+    ) -> AsyncGenerator[str, None]:
+        """Yield LLM response tokens one at a time.
+
+        Phase 1: direct mode only. For Anthropic uses the streaming context manager;
+        for OpenAI-compatible uses stream=True. Non-direct modes use run() instead.
+        """
+        sp = system_prompt or self._agent.get("system_prompt", "You are a helpful assistant.")
+
+        try:
+            from anthropic import AsyncAnthropic
+            _is_anthropic = isinstance(self._llm, AsyncAnthropic)
+        except ImportError:
+            _is_anthropic = False
+
+        if _is_anthropic:
+            async with self._llm.messages.stream(
+                model=self._model,
+                max_tokens=4096,
+                system=sp,
+                messages=messages,
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+        else:
+            all_msgs = [{"role": "system", "content": sp}] + messages
+            async with await self._llm.chat.completions.create(
+                model=self._model,
+                messages=all_msgs,
+                temperature=0.7,
+                stream=True,
+            ) as stream:
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta.content if chunk.choices else None
+                    if delta:
+                        yield delta
+
+    async def run_stream(
+        self, message: str, session_id: str | None
+    ) -> AsyncGenerator[tuple[str | None, Any], None]:
+        """Streaming variant of run(). Yields (token, None) pairs, then (None, provenance).
+
+        Only direct mode streams token-by-token. Other modes yield the full response
+        as a single token then the provenance payload.
+        """
+        prov = ProvenanceCollector()
+        mode = self._agent.get("reasoning_mode", "direct")
+
+        if mode == "direct":
+            context = ""
+            if "graph_search" in self._agent.get("tools", []):
+                nodes = await self._dispatch("graph_search", {"query": message}, prov)
+                context = _format_nodes(nodes)
+
+            user_content = (
+                f"Context:\n{context}\n\nQuestion: {message}" if context else message
+            )
+            sp = self._agent.get("system_prompt", "You are a helpful assistant.")
+
+            full_response = ""
+            async for token in self._call_llm_stream(
+                [{"role": "user", "content": user_content}], system_prompt=sp
+            ):
+                full_response += token
+                yield token, None
+
+            prov.nodes_used_in_response = _extract_cited_nodes(full_response, prov._nodes)
+            yield None, prov.to_payload()
+        else:
+            # Non-direct modes: collect full response then yield once
+            chat_resp = await self.run(message, session_id)
+            yield chat_resp.response, None
+            yield None, chat_resp.provenance
 
     # ── Tool dispatch ─────────────────────────────────────────────────────────
 
