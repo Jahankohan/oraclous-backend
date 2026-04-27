@@ -565,15 +565,13 @@ class SchemaMapper:
             )
             rel_type = "ASSOCIATED_WITH"
 
-        to_pk = pk_lookup.get(to_table, "id")
-
         return [
             RelationshipMapping(
                 from_table=from_table,
                 to_table=to_table,
                 rel_type=rel_type,
                 from_fk_column=from_fk_col,
-                to_fk_column=to_pk,
+                to_fk_column=to_fk_col,
                 via_junction=junction_table,
             )
         ]
