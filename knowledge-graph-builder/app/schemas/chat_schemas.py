@@ -270,6 +270,12 @@ class ChatResponse(BaseModel):
         description="Confidence score [0–1] derived from retrieval relevance scores",
     )
 
+    # Cache metadata (TASK-028)
+    cache_hit: bool = Field(
+        default=False,
+        description="True when the response was served from the Redis query cache.",
+    )
+
     # Temporal mode confirmation — echoes back which temporal filter was applied.
     # Null when no temporal_mode was requested (backward-compatible default).
     temporal_mode_applied: Optional[str] = Field(
