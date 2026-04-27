@@ -182,6 +182,42 @@ class DatabaseConnector(ABC):
         """Release DB connection."""
         ...
 
+    async def fetch_rows(
+        self,
+        table_name: str,
+        schema_snapshot: "SchemaSnapshot",
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Return rows from *table_name* as plain dicts.
+
+        Security: table_name MUST be validated against schema_snapshot.tables
+        before use. This default implementation enforces that allowlist check
+        and delegates to _fetch_rows_impl() for the actual query.
+
+        Implementations that need pagination (limit/offset) should override
+        _fetch_rows_impl(); do NOT override this method.
+        """
+        allowed_table_names = {t.name for t in schema_snapshot.tables}
+        if table_name not in allowed_table_names:
+            raise ValueError(
+                f"fetch_rows: table {table_name!r} is not in the SchemaSnapshot allowlist. "
+                "Table names must come from schema introspection, never from user input."
+            )
+        return await self._fetch_rows_impl(table_name, limit, offset)
+
+    async def _fetch_rows_impl(
+        self, table_name: str, limit: int, offset: int
+    ) -> list[dict[str, Any]]:
+        """Internal row-fetch implementation.  Override in concrete connectors.
+
+        Default: raises NotImplementedError — connectors that support row fetching
+        must override this method.  MongoDBConnector is out of scope for TASK-020.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement fetch_rows."
+        )
+
 
 # ---------------------------------------------------------------------------
 # SSRF guard
@@ -356,6 +392,22 @@ class PostgreSQLConnector(DatabaseConnector):
         )
         return [SampleRow(table_name=table, row_data=dict(r)) for r in rows]
 
+    async def _fetch_rows_impl(
+        self, table_name: str, limit: int, offset: int
+    ) -> list[dict[str, Any]]:
+        if not self._conn:
+            raise RuntimeError("Not connected. Call connect() first.")
+        # table_name is already validated against the SchemaSnapshot allowlist by
+        # the base-class fetch_rows() method.  Standard SQL double-quoting prevents
+        # injection from names that contain special characters.  limit/offset are
+        # integers and passed as parameterized $N placeholders.
+        rows = await self._conn.fetch(
+            f'SELECT * FROM "{self._schema}"."{table_name}" LIMIT $1 OFFSET $2',
+            limit,
+            offset,
+        )
+        return [dict(r) for r in rows]
+
     async def detect_schema_changes(
         self, previous_snapshot: SchemaSnapshot
     ) -> dict[str, Any]:
@@ -468,6 +520,25 @@ class MySQLConnector(DatabaseConnector):
             )
             rows = await cur.fetchall()
         return [SampleRow(table_name=table, row_data=dict(r)) for r in rows]
+
+    async def _fetch_rows_impl(
+        self, table_name: str, limit: int, offset: int
+    ) -> list[dict[str, Any]]:
+        if not self._conn:
+            raise RuntimeError("Not connected.")
+        import aiomysql  # type: ignore
+
+        # table_name is already validated against the SchemaSnapshot allowlist by
+        # the base-class fetch_rows() method.  MySQL backtick-quoting prevents
+        # injection from names that contain special characters.  limit/offset are
+        # integers and passed as parameterized %s placeholders.
+        async with self._conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"SELECT * FROM `{self._database}`.`{table_name}` LIMIT %s OFFSET %s",
+                (limit, offset),
+            )
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
     async def detect_schema_changes(
         self, previous_snapshot: SchemaSnapshot
