@@ -37,11 +37,25 @@ from app.components.multi_tenant_components import (
     create_multi_tenant_kg_writer,
 )
 from app.core.config import settings
+from app.core.errors import KGBError
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.telemetry import get_tracer
 
 _pipeline_tracer = get_tracer("oraclous.pipeline")
+
+# LLM outage exceptions for graceful degradation in ingestion pipeline.
+try:
+    import openai as _openai
+
+    _PIPELINE_LLM_DOWN_EXCEPTIONS: tuple = (
+        _openai.APITimeoutError,
+        _openai.RateLimitError,
+        _openai.APIConnectionError,
+    )
+except ImportError:  # pragma: no cover
+    _PIPELINE_LLM_DOWN_EXCEPTIONS = (TimeoutError,)
+
 from app.schemas.graph_schemas import (
     BANNED_NODE_PROPERTIES,
     IngestionOverrides,
@@ -752,9 +766,35 @@ class MultiTenantGraphRAGPipeline:
                     on_error=OnError.IGNORE,
                     max_concurrency=self.config.max_concurrency,
                 )
-                graph = await extractor.run(
-                    chunks=embedded_chunks, document_info=document_info
-                )
+                try:
+                    graph = await extractor.run(
+                        chunks=embedded_chunks, document_info=document_info
+                    )
+                except _PIPELINE_LLM_DOWN_EXCEPTIONS as llm_exc:
+                    _code, _msg = KGBError.LLM_UNAVAILABLE
+                    logger.warning(
+                        f"LLM unavailable during entity extraction for graph "
+                        f"{self.graph_id} [{_code}]: {llm_exc}. "
+                        "Continuing pipeline without entity extraction (partial)."
+                    )
+                    extract_span.record_exception(llm_exc)
+                    # Return partial result — chunks were embedded and stored but
+                    # no entities were extracted.  The job will be marked 'partial'
+                    # by the caller (background_jobs.py) when it inspects the result.
+                    return {
+                        "entities_created": 0,
+                        "relationships_created": 0,
+                        "chunks_created": len(
+                            getattr(embedded_chunks, "chunks", [])
+                        ),
+                        "property_violations_detected": 0,
+                        "property_violations_migrated": 0,
+                        "ontology_violations": 0,
+                        "ontology_coercions": 0,
+                        "temporal_contradictions": 0,
+                        "ingest_status": "partial",
+                        "llm_unavailable": True,
+                    }
                 extract_span.set_attribute("graph.nodes_raw", len(graph.nodes))
                 extract_span.set_attribute(
                     "graph.relationships_raw", len(graph.relationships)
