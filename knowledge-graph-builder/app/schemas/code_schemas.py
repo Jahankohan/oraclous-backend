@@ -54,6 +54,7 @@ class CodeQueryType(StrEnum):
     inheritance_chain = "inheritance_chain"
     file_deps = "file_deps"
     semantic_search = "semantic_search"
+    data_flow = "data_flow"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
