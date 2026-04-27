@@ -92,3 +92,18 @@ class AgentCreateResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+
+
+# ── Agent tool result types ───────────────────────────────────────────────────
+
+
+class NodeResult(BaseModel):
+    id: str
+    qualified_name: str | None = None
+    label: str
+    properties: dict = {}
+
+
+class PathResult(BaseModel):
+    nodes: list[NodeResult]
+    hop_count: int
