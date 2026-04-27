@@ -120,7 +120,7 @@ async def code_ingest(
     await db.commit()
     await db.refresh(job)
 
-    job_result = background_job_service.start_code_ingest_job(str(job.id), user_id)
+    job_result = await background_job_service.start_code_ingest_job(str(job.id), user_id)
     if job_result["status"] == "failed":
         logger.error(f"Failed to start code ingest job: {job_result['message']}")
         raise HTTPException(
@@ -498,14 +498,16 @@ async def _run_code_query(
             raise _QueryParamError(
                 "'source_symbol' is required for query_type=data_flow"
             )
-        depth = int(params.get("depth", 10))
+        # Clamp depth to safe integer range; embed as literal — Neo4j disallows
+        # runtime parameters inside variable-length path range syntax (*1..$n).
+        depth = max(1, min(int(params.get("depth", 10)), 50))
         direction = params.get("direction", "forward")
 
         if direction == "backward":
-            cypher = """
-            MATCH (start {graph_id: $graph_id})
+            cypher = f"""
+            MATCH (start {{graph_id: $graph_id}})
             WHERE start.qualified_name = $source_symbol OR start.id = $source_symbol
-            MATCH path = (source)-[:FLOWS_TO*1..$depth]->(start)
+            MATCH path = (source)-[:FLOWS_TO*1..{depth}]->(start)
             RETURN
                 [node IN nodes(path) | coalesce(node.qualified_name, node.name)] AS path_nodes,
                 [node IN nodes(path) | labels(node)[0]]                          AS path_labels,
@@ -514,10 +516,10 @@ async def _run_code_query(
             LIMIT $limit
             """
         elif direction == "both":
-            cypher = """
-            MATCH (start {graph_id: $graph_id})
+            cypher = f"""
+            MATCH (start {{graph_id: $graph_id}})
             WHERE start.qualified_name = $source_symbol OR start.id = $source_symbol
-            MATCH path = (start)-[:FLOWS_TO*1..$depth]-(sink)
+            MATCH path = (start)-[:FLOWS_TO*1..{depth}]-(sink)
             RETURN
                 [node IN nodes(path) | coalesce(node.qualified_name, node.name)] AS path_nodes,
                 [node IN nodes(path) | labels(node)[0]]                          AS path_labels,
@@ -527,10 +529,10 @@ async def _run_code_query(
             """
         else:
             # default: forward
-            cypher = """
-            MATCH (start {graph_id: $graph_id})
+            cypher = f"""
+            MATCH (start {{graph_id: $graph_id}})
             WHERE start.qualified_name = $source_symbol OR start.id = $source_symbol
-            MATCH path = (start)-[:FLOWS_TO*1..$depth]->(sink)
+            MATCH path = (start)-[:FLOWS_TO*1..{depth}]->(sink)
             RETURN
                 [node IN nodes(path) | coalesce(node.qualified_name, node.name)] AS path_nodes,
                 [node IN nodes(path) | labels(node)[0]]                          AS path_labels,
@@ -544,7 +546,6 @@ async def _run_code_query(
             {
                 "graph_id": graph_id,
                 "source_symbol": source_symbol,
-                "depth": depth,
                 "limit": limit,
             },
         )
