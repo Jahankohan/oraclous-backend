@@ -182,3 +182,31 @@ class WebhookEvent(Base):
     __table_args__ = (
         UniqueConstraint("connector_id", "payload_hash", name="uq_webhook_dedup"),
     )
+
+
+class FallbackJobQueue(Base):
+    """
+    PostgreSQL fallback queue for Celery tasks when the broker (Redis) is unavailable.
+
+    When a .delay() call raises a broker connection error, the task metadata is
+    written here with status='pending'.  A recovery process (manual or automated)
+    can scan this table and re-dispatch the tasks once the broker is healthy again.
+    """
+
+    __tablename__ = "job_queue"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # The Celery task name (e.g. "app.services.background_jobs.process_ingestion_job")
+    task_name = Column(String(255), nullable=False, index=True)
+    # JSON-serialised positional args for the task
+    args = Column(JSON, nullable=False, server_default="[]")
+    # JSON-serialised keyword args for the task
+    kwargs = Column(JSON, nullable=False, server_default="{}")
+    # Lifecycle status: pending → dispatched / failed
+    status = Column(String(50), nullable=False, default="pending", index=True)
+    # Human-readable error from the broker that caused the fallback
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
