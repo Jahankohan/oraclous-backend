@@ -1,7 +1,7 @@
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -10,6 +10,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import create_tables
+from app.core.errors import KGBError
 from app.core.logging import get_logger, setup_logging
 from app.core.neo4j_client import neo4j_client
 from app.core.rate_limiter import limiter
@@ -107,6 +108,62 @@ instrument_fastapi(app)
 # Rate limiting
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# ---------------------------------------------------------------------------
+# Structured KGB-XXXX exception handlers
+# ---------------------------------------------------------------------------
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """
+    Map standard HTTP status codes to structured KGB-XXXX error codes where a
+    canonical mapping exists.  All other status codes fall through to a plain
+    ``{"detail": ...}`` response so that existing callers are not broken.
+    """
+    if exc.status_code == 404:
+        code, msg = KGBError.GRAPH_NOT_FOUND
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error_code": code,
+                "message": msg,
+                "detail": str(exc.detail),
+                "docs_url": "/docs",
+            },
+        )
+    if exc.status_code == 403:
+        code, msg = KGBError.PERMISSION_DENIED
+        return JSONResponse(
+            status_code=403,
+            content={"error_code": code, "message": msg},
+        )
+    if exc.status_code == 429:
+        code, msg = KGBError.RATE_LIMIT_EXCEEDED
+        headers = getattr(exc, "headers", None) or {}
+        retry_after = headers.get("Retry-After", "0")
+        return JSONResponse(
+            status_code=429,
+            headers=headers,
+            content={
+                "error_code": code,
+                "message": msg,
+                "retry_after": int(retry_after) if retry_after.isdigit() else 0,
+            },
+        )
+    if exc.status_code == 503:
+        code, msg = KGBError.NEO4J_UNAVAILABLE
+        return JSONResponse(
+            status_code=503,
+            content={"error_code": code, "message": msg, "detail": str(exc.detail)},
+        )
+    # All other status codes — return plain detail without a KGB code.
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
 
 # Add CORS middleware
 app.add_middleware(
