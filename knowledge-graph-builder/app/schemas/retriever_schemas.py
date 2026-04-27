@@ -20,6 +20,7 @@ class RetrieverType(StrEnum):
     HYBRID_CYPHER = "hybrid_cypher"
     TEXT2CYPHER = "text2cypher"
     MEMORY = "memory"
+    COMMUNITY_SUMMARY = "community_summary"
 
 
 class HybridSearchRanker(StrEnum):

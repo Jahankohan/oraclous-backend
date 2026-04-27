@@ -447,6 +447,84 @@ class MemoryRetriever:
         return asyncio.run(self.search(query_text))
 
 
+# ==================== COMMUNITY SUMMARY RETRIEVER ====================
+
+_COMMUNITY_SUMMARY_CYPHER = """\
+MATCH (c:__Community__ {graph_id: $graph_id, level: $level})
+WHERE c.summary IS NOT NULL
+RETURN c.id AS community_id, c.summary AS summary, c.entity_count AS entity_count
+ORDER BY c.entity_count DESC
+LIMIT $limit
+"""
+
+
+class CommunitySummaryRetriever:
+    """
+    Retriever that fetches ranked Leiden community summaries from the graph.
+
+    Returns the top-K ``__Community__`` nodes at a given hierarchy level,
+    ordered by entity_count (broadest communities first).  The summaries are
+    used as retrieval context for global / thematic queries.
+
+    Security:
+    - All Cypher parameters are bound ($graph_id, $level, $limit) — no
+      user-supplied strings are ever interpolated into the query text.
+    - Summary text is passed to the LLM as context only; it is never used
+      in subsequent Cypher queries.
+    """
+
+    def __init__(
+        self,
+        graph_id: str,
+        level: int = 2,
+        limit: int = 5,
+    ) -> None:
+        self.graph_id = graph_id
+        self.level = level
+        self.limit = limit
+
+    async def search(self, query: str) -> list[dict]:
+        """Fetch top-K community summaries ordered by entity_count descending."""
+        driver = neo4j_client.async_driver
+        if driver is None:
+            logger.warning(
+                "Async driver unavailable — CommunitySummaryRetriever returning empty"
+            )
+            return []
+
+        try:
+            result = await driver.execute_query(
+                _COMMUNITY_SUMMARY_CYPHER,
+                {
+                    "graph_id": self.graph_id,
+                    "level": self.level,
+                    "limit": self.limit,
+                },
+            )
+            records = result.records if hasattr(result, "records") else result[0]
+            return [
+                {
+                    "community_id": rec["community_id"],
+                    "summary": rec["summary"],
+                    "entity_count": rec["entity_count"],
+                }
+                for rec in records
+            ]
+        except Exception as exc:
+            logger.error(
+                "CommunitySummaryRetriever query failed for graph %s: %s",
+                self.graph_id,
+                exc,
+            )
+            return []
+
+    # Sync shim for callers using the sync Retriever protocol
+    def get_search_results(self, query_text: str, **kwargs) -> list:  # type: ignore[override]
+        import asyncio
+
+        return asyncio.run(self.search(query_text))
+
+
 # ==================== GLOBAL FACTORY INSTANCE ====================
 
 # Global factory instance for dependency injection
@@ -479,4 +557,5 @@ def get_supported_retriever_types() -> dict[str, str]:
         RetrieverType.HYBRID_CYPHER: "Hybrid search with graph traversal",
         RetrieverType.TEXT2CYPHER: "Natural language to Cypher query generation",
         RetrieverType.MEMORY: "Agent memory recall (episodic, semantic, procedural)",
+        RetrieverType.COMMUNITY_SUMMARY: "Leiden community summaries for global/thematic queries",
     }
