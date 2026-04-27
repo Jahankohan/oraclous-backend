@@ -753,3 +753,68 @@ def _update_communities_status_pg(
             conn.commit()
     except Exception as exc:
         logger.warning(f"Failed to update communities_status in Postgres: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# LLM summary task — chained after detect_communities_task
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(bind=True, name="generate_community_summaries")
+def generate_community_summaries_task(
+    self,
+    _detect_result: dict | None = None,
+    graph_id: str | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """
+    Celery task: generate per-level LLM summaries for all __Community__ nodes.
+
+    Designed to run as a Celery chain link after detect_communities_task.
+    When called via `.apply_async(link=generate_community_summaries_task.s(graph_id=...))`,
+    Celery passes the upstream result as the first positional argument.
+
+    Args:
+        _detect_result: Result dict forwarded by Celery chain (ignored; graph_id is used).
+        graph_id: UUID string of the target graph.
+
+    Returns:
+        Dict with summarisation statistics.
+    """
+    from app.services.task_executor import AsyncTaskExecutor
+
+    return AsyncTaskExecutor.run_async_task(
+        _generate_summaries_async,
+        self,
+        graph_id,
+    )
+
+
+async def _generate_summaries_async(
+    task,
+    graph_id: str | None,
+) -> dict[str, Any]:
+    """Async implementation: delegates to analytics_service._generate_level_summaries."""
+    if not graph_id:
+        logger.warning("generate_community_summaries_task called without graph_id — skipping")
+        return {"status": "skipped", "reason": "no graph_id provided"}
+
+    logger.info(f"Starting per-level LLM summary generation for graph {graph_id}")
+
+    from app.core.neo4j_client import neo4j_client as _neo4j_client
+    from app.services.analytics_service import analytics_service
+
+    # Ensure async Neo4j driver is available (Celery worker context)
+    if not _neo4j_client.async_driver:
+        await _neo4j_client.connect_async()
+
+    try:
+        result = await analytics_service._generate_level_summaries(graph_id)
+        logger.info(
+            f"Summary generation complete for graph {graph_id}: "
+            f"{result.get('total_summarised', 0)} communities summarised"
+        )
+        return result
+    except Exception as exc:
+        logger.exception(f"Summary generation failed for graph {graph_id}: {exc}")
+        raise
