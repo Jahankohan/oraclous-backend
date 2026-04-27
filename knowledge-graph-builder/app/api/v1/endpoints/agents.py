@@ -11,12 +11,16 @@ from app.api.dependencies import get_current_user_id, verify_graph_access
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.schemas.agent_schemas import (
+    AgentChatResponse,
     AgentCreate,
     AgentCreateResponse,
     AgentResponse,
     AgentUpdate,
+    ChatRequest,
 )
+from app.services.agent_executor import AgentExecutor
 from app.services.agent_service import AgentService
+from app.services.agent_tools import ToolNotPermittedError
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -142,3 +146,55 @@ async def delete_agent(
     deleted = await svc.deactivate_agent(graph_id, agent_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+
+# ── Chat ──────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/graphs/{graph_id}/agents/{agent_id}/chat",
+    response_model=AgentChatResponse,
+    summary="Run a chat turn against a graph-native agent",
+    responses={
+        400: {"description": "Tool not permitted for this agent"},
+        403: {"description": "Access denied"},
+        404: {"description": "Agent not found or deactivated"},
+        503: {"description": "Neo4j or LLM unavailable"},
+    },
+)
+async def agent_chat(
+    graph_id: str,
+    agent_id: str,
+    body: ChatRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    await verify_graph_access(graph_id, "read", user_id)
+
+    if not neo4j_client.async_driver:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j connection not available",
+        )
+
+    try:
+        executor = await AgentExecutor.from_neo4j(
+            neo4j_client.async_driver, graph_id, agent_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        )
+
+    try:
+        return await executor.run(body.message, body.session_id)
+    except ToolNotPermittedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
