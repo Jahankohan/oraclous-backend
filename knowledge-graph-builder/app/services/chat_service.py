@@ -18,6 +18,7 @@ from neo4j_graphrag.llm import OpenAILLM
 from opentelemetry import trace as otel_trace
 
 from app.core.config import settings
+from app.core.errors import KGBError
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.telemetry import get_tracer
@@ -41,6 +42,21 @@ from app.services.retriever_factory import (
 
 logger = get_logger(__name__)
 _chat_tracer = get_tracer("oraclous.chat")
+
+# ---------------------------------------------------------------------------
+# LLM outage exceptions — used for graceful degradation.
+# Import openai lazily to avoid hard dependency at module load time.
+# ---------------------------------------------------------------------------
+try:
+    import openai as _openai
+
+    _LLM_DOWN_EXCEPTIONS: tuple = (
+        _openai.APITimeoutError,
+        _openai.RateLimitError,
+        _openai.APIConnectionError,
+    )
+except ImportError:
+    _LLM_DOWN_EXCEPTIONS = (TimeoutError,)
 
 # ---------------------------------------------------------------------------
 # Prompt template that strictly grounds responses to retrieved graph context.
@@ -618,6 +634,23 @@ class ChatService:
                 ),
             )
 
+        except _LLM_DOWN_EXCEPTIONS as e:
+            # LLM timeout or rate-limit — return available graph context without an answer.
+            _llm_err_code, _llm_err_msg = KGBError.LLM_UNAVAILABLE
+            logger.warning(
+                f"LLM unavailable for graph {self.graph_id} "
+                f"[{_llm_err_code}]: {e}"
+            )
+            span.record_exception(e)
+            span.set_status(otel_trace.StatusCode.ERROR, str(e))
+            return GroundedSearchResult(
+                answer=None,  # type: ignore[arg-type]
+                sources=[],
+                confidence=0.0,
+                is_grounded=False,
+                retriever_used=self.retriever_type.value,
+                retriever_result=None,
+            )
         except Exception as e:
             logger.error(f"GraphRAG search failed for graph {self.graph_id}: {e}")
             span.record_exception(e)
@@ -680,8 +713,37 @@ class ChatService:
         prompt = STRICT_GROUNDING_PROMPT.format(
             context=context, query_text=query_text
         )
-        llm_response = await self.llm.ainvoke(prompt)
-        answer = llm_response.content
+        try:
+            llm_response = await self.llm.ainvoke(prompt)
+            answer = llm_response.content
+        except _LLM_DOWN_EXCEPTIONS as e:
+            _llm_err_code, _llm_err_msg = KGBError.LLM_UNAVAILABLE
+            logger.warning(
+                f"LLM unavailable during community summary search for graph "
+                f"{self.graph_id} [{_llm_err_code}]: {e}"
+            )
+            # Return context nodes without an LLM-synthesised answer.
+            sources = [
+                {
+                    "node_id": doc["community_id"],
+                    "node_labels": ["__Community__"],
+                    "content": doc["summary"][:500],
+                    "relevance_score": None,
+                    "properties": {"entity_count": doc["entity_count"]},
+                }
+                for doc in community_docs
+            ]
+            span.set_attribute("chat.is_grounded", False)
+            span.set_attribute("chat.confidence", 0.0)
+            span.set_attribute("chat.sources_count", len(sources))
+            span.set_attribute("chat.hallucination_flag", True)
+            return GroundedSearchResult(
+                answer=None,  # type: ignore[arg-type]
+                sources=sources,
+                confidence=0.0,
+                is_grounded=False,
+                retriever_used=RetrieverType.COMMUNITY_SUMMARY.value,
+            )
 
         is_grounded = not answer.strip().startswith(_INSUFFICIENT_PREFIX)
         if not is_grounded:
