@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     federation,
     graphs,
     health,
+    integration,
     llm_configs,
     memories,
     multimodal,
@@ -26,6 +27,7 @@ api_router.include_router(health.router, tags=["health"])
 api_router.include_router(graphs.router, tags=["graphs"])
 api_router.include_router(agents.router, prefix="/api/v1", tags=["agents"])
 api_router.include_router(llm_configs.router, prefix="/api/v1", tags=["llm-configs"])
+api_router.include_router(integration.router, prefix="/api/v1", tags=["integration"])
 api_router.include_router(multimodal.router, tags=["multimodal"])
 api_router.include_router(code_graphs.router, tags=["code-knowledge-graph"])
 api_router.include_router(chat.router, prefix="/api/v1", tags=["chat"])

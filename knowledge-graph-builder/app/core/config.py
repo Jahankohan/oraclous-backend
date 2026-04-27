@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     INTERNAL_SERVICE_KEY: str = "your-internal-service-key"
     JWT_SECRET_KEY: str = "your-jwt-secret"
 
+    # Integration layer
+    PUBLIC_BASE_URL: str = "http://localhost:8003"   # used to build endpoint_url in PublishAgentResponse
+
     # LLM Configuration
     OPENAI_API_KEY: str | None = None
     LLM_API_KEY: str | None = None  # generic env-var fallback (aliases OPENAI_API_KEY when set)
