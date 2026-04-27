@@ -7,12 +7,31 @@ all Neo4j GraphRAG retriever types with proper validation and examples.
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.graph_schemas import TemporalFilter
 from app.services.retriever_factory import RetrieverType
+
+
+class TemporalMode(StrEnum):
+    """Temporal query mode — scopes retrieval to a point or range in time.
+
+    POINT_IN_TIME: returns relationships where event_time <= temporal_at
+                   AND (event_time_end IS NULL OR event_time_end >= temporal_at).
+                   Answers "what was true in the world at this instant?"
+
+    KNOWLEDGE_AS_OF: returns relationships where ingestion_time <= temporal_at.
+                     Answers "what did the system know before this date?"
+
+    CHANGES_SINCE: returns relationships where ingestion_time > temporal_since.
+                   Answers "what facts were added to the graph after this date?"
+    """
+
+    POINT_IN_TIME = "point_in_time"
+    KNOWLEDGE_AS_OF = "knowledge_as_of"
+    CHANGES_SINCE = "changes_since"
 
 
 class ChatMode(StrEnum):
@@ -116,6 +135,29 @@ class ChatRequest(BaseModel):
         default=None,
         description="When set, scopes retrieval to facts valid at the specified time. "
         "Clients without this field get current-only results by default.",
+    )
+
+    # Bitemporal query modes (TASK-007) — three explicit temporal lenses.
+    # These complement temporal_filter and apply as a Cypher WHERE clause on
+    # relationship properties (event_time / ingestion_time).
+    # Omitting temporal_mode produces identical behavior to today (no change).
+    temporal_mode: Optional[TemporalMode] = Field(
+        default=None,
+        description=(
+            "Temporal query mode. "
+            "'point_in_time': facts true in the world at temporal_at. "
+            "'knowledge_as_of': facts the system knew before temporal_at. "
+            "'changes_since': facts ingested after temporal_since. "
+            "Omit for current-state behavior."
+        ),
+    )
+    temporal_at: Optional[datetime] = Field(
+        default=None,
+        description="Reference timestamp for point_in_time and knowledge_as_of modes.",
+    )
+    temporal_since: Optional[datetime] = Field(
+        default=None,
+        description="Reference timestamp for changes_since mode.",
     )
 
     # Chat context
@@ -226,6 +268,13 @@ class ChatResponse(BaseModel):
         ge=0.0,
         le=1.0,
         description="Confidence score [0–1] derived from retrieval relevance scores",
+    )
+
+    # Temporal mode confirmation — echoes back which temporal filter was applied.
+    # Null when no temporal_mode was requested (backward-compatible default).
+    temporal_mode_applied: Optional[str] = Field(
+        default=None,
+        description="Temporal query mode that was applied to this response, or null if none.",
     )
 
     # Optional detailed information
