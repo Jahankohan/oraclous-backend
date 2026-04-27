@@ -1,20 +1,22 @@
+from datetime import timedelta
+
 from pydantic_settings import BaseSettings
-from typing import Optional
+
 
 class Settings(BaseSettings):
     # Service Configuration
     SERVICE_NAME: str = "knowledge-graph-builder"
     SERVICE_VERSION: str = "1.0.0"
     SERVICE_URL: str = "http://localhost:8003"
-    
+
     # Database Configuration
     NEO4J_URI: str = "bolt://neo4j:7687"
     NEO4J_USERNAME: str = "neo4j"
     NEO4J_PASSWORD: str = "password"
     NEO4J_DATABASE: str = "neo4j"
-    
+
     POSTGRES_URL: str = "postgresql+asyncpg://postgres:password@postgres:5432/kgbuilder"
-    
+
     # External Services
     AUTH_SERVICE_URL: str = "http://auth-service:8000"
     CREDENTIAL_BROKER_URL: str = "http://credential-broker:8000"
@@ -26,13 +28,46 @@ class Settings(BaseSettings):
     # Security
     INTERNAL_SERVICE_KEY: str = "your-internal-service-key"
     JWT_SECRET_KEY: str = "your-jwt-secret"
-    
-    # LLM Configuration
-    OPENAI_API_KEY: Optional[str] = None
-    ANTHROPIC_API_KEY: Optional[str] = None
-    DIFFBOT_API_KEY: Optional[str] = None
 
-    # Add config flags to control these features
+    # LLM Configuration
+    OPENAI_API_KEY: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
+    DIFFBOT_API_KEY: str | None = None
+    EMBEDDING_MODEL: str | None = "text-embedding-3-large"
+
+    # Modern Knowledge Graph Configuration
+    USE_ENTITY_BASE_TYPE: bool = True  # Use __Entity__ instead of Entity
+    ENTITY_BASE_LABEL: str = "__Entity__"  # Base label for all entities
+    ENABLE_DOCUMENT_HIERARCHY: bool = True  # Document → Chunk → Entity structure
+
+    # Embedding Configuration
+    EMBED_ALL_NODE_TYPES: bool = True  # Embed Documents, Chunks, and Entities
+    ENABLE_DOCUMENT_EMBEDDINGS: bool = True
+    ENABLE_CHUNK_EMBEDDINGS: bool = True
+    ENABLE_ENTITY_EMBEDDINGS: bool = True
+
+    # Vector Index Configuration
+    ENABLE_UNIFIED_ENTITY_INDEXES: bool = True  # Single __Entity__ index
+    VECTOR_INDEX_DIMENSIONS: int = 512
+    VECTOR_SIMILARITY_FUNCTION: str = "cosine"
+
+    # Document Processing
+    PRESERVE_CHUNK_ORDER: bool = True  # Maintain chunk sequence
+    CHUNK_SIZE: int = 2000
+    CHUNK_OVERLAP: int = 400
+    MAX_CHUNKS_PER_DOCUMENT: int = 1000
+
+    # Entity Extraction
+    CONNECT_ENTITIES_TO_CHUNKS: bool = True  # Entities → Chunks (not Documents)
+    MAX_ENTITY_TYPES_PER_GRAPH: int = 20
+    ENABLE_SCHEMA_EVOLUTION: bool = True
+
+    # Community Detection Settings
+    COMMUNITY_DETECTION_MIN_ENTITIES: int = 50
+    COMMUNITY_DETECTION_CONCURRENCY: int = 3
+    LLM_SUMMARY_CONCURRENCY: int = 5
+
+    # Legacy flags (disabled for modern approach)
     ENABLE_SIMILARITY_PROCESSING: bool = True
     ENABLE_COMMUNITY_DETECTION: bool = True
 
@@ -40,12 +75,40 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_EXTRACTIONS: int = 5
     BATCH_SIZE: int = 100
     CACHE_TTL: int = 300
-    
+
+    # Optimization Settings
+    OPTIMIZATION_INTERVAL: timedelta = timedelta(
+        hours=2
+    )  # Run optimization every 2 hours
+
+    # Code Knowledge Graph Settings
+    CODE_LARGE_REPO_DEPTH_THRESHOLD: int = (
+        5000  # Auto-switch to depth:file above this file count
+    )
+    CODE_EMBEDDING_BATCH_SIZE: int = 50  # Symbols per embedding batch
+
+    # Embedding Processing
+    DOCUMENT_EMBEDDING_BATCH_SIZE: int = 10
+    CHUNK_EMBEDDING_BATCH_SIZE: int = 5
+    ENTITY_EMBEDDING_BATCH_SIZE: int = 10
+
     # Monitoring
     ENABLE_METRICS: bool = True
     LOG_LEVEL: str = "INFO"
-    
+
+    # OpenTelemetry
+    OTEL_ENABLED: bool = False
+    OTEL_SERVICE_NAME: str = "knowledge-graph-builder"
+    OTEL_SERVICE_VERSION: str = "1.0.0"
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://jaeger:4317"
+    OTEL_EXPORTER_OTLP_PROTOCOL: str = "grpc"  # "grpc" or "http/protobuf"
+    LOG_FORMAT: str = (
+        "text"  # "json" for structured JSON logs, "text" for human-readable
+    )
+
     class Config:
         env_file = ".env"
+        extra = "ignore"
+
 
 settings = Settings()

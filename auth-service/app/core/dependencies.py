@@ -22,6 +22,13 @@ async def get_user_repository(request: Request) -> UserRepository:
     except AttributeError:
         raise ValueError("UserRepository not initialized in app.state")
 
+async def get_service_account_repository(request: Request):
+    try:
+        return request.app.state.sa_repository
+    except AttributeError:
+        raise ValueError("ServiceAccountRepository not initialized in app.state")
+
+
 async def verify_internal_service(x_internal_key: str = Header(...)):
     """Verify that the request comes from an internal service."""
     expected_key = settings.INTERNAL_SERVICE_KEY

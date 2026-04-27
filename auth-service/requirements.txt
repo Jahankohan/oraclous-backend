@@ -1,8 +1,8 @@
 pydantic[email]
 pydantic-settings
 requests
-passlib
-bcrypt
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
 python-jose[cryptography]
 python-json-logger
 fastapi
@@ -12,3 +12,5 @@ aiofiles
 pydantic
 asyncpg==0.29.0
 sqlalchemy==1.4.27
+slowapi==0.1.9
+redis[hiredis]>=5.0.0

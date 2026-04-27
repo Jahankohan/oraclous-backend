@@ -1,2193 +1,1167 @@
-from typing import Dict, Any, List, Optional, Tuple
-from uuid import UUID
-import json
-import asyncio
-from dataclasses import dataclass
-from enum import Enum
-from datetime import datetime
+"""
+Chat Service using Neo4j GraphRAG
+Enhanced implementation supporting all retriever types with factory pattern,
+strict graph-grounded responses, hallucination prevention, entity anchor
+detection, multi-hop reasoning, and auto retriever selection.
+"""
 
-from app.core.neo4j_client import neo4j_client
-from app.services.llm_service import llm_service
-from app.services.search_service import search_service
-from app.services.embedding_service import embedding_service
-from app.services.schema_service import schema_service
-from app.services.graphrag_service import graphrag_service
+import re
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, cast
+
+from neo4j_graphrag.embeddings import OpenAIEmbeddings
+from neo4j_graphrag.generation import GraphRAG
+from neo4j_graphrag.generation.types import RagResultModel
+from neo4j_graphrag.llm import OpenAILLM
+from opentelemetry import trace as otel_trace
+
+from app.core.config import settings
+from app.core.errors import KGBError
 from app.core.logging import get_logger
+from app.core.neo4j_client import neo4j_client
+from app.core.telemetry import get_tracer
+from app.schemas.chat_schemas import TemporalMode
+from app.schemas.graph_schemas import TemporalFilter
+from app.schemas.retriever_schemas import (
+    HybridCypherRetrieverConfig,
+    HybridRetrieverConfig,
+    RetrieverConfig,
+    Text2CypherRetrieverConfig,
+    VectorCypherRetrieverConfig,
+    VectorRetrieverConfig,
+    get_default_retriever_config,
+)
+from app.services.fulltext_index_service import fulltext_index_manager
+from app.services.query_cache_service import QueryCacheService
+from app.services.retriever_factory import (
+    CommunitySummaryRetriever,
+    RetrieverType,
+    retriever_factory,
+)
 
 logger = get_logger(__name__)
+_chat_tracer = get_tracer("oraclous.chat")
 
-# ==================== DATA STRUCTURES ====================
+# ---------------------------------------------------------------------------
+# LLM outage exceptions — used for graceful degradation.
+# Import openai lazily to avoid hard dependency at module load time.
+# ---------------------------------------------------------------------------
+try:
+    import openai as _openai
 
-class ReasoningMode(Enum):
-    """Advanced reasoning modes for graph analysis"""
-    COMPREHENSIVE = "comprehensive"
-    FOCUSED = "focused"
-    EXPLORATORY = "exploratory"
+    _LLM_DOWN_EXCEPTIONS: tuple = (
+        _openai.APITimeoutError,
+        _openai.RateLimitError,
+        _openai.APIConnectionError,
+    )
+except ImportError:
+    _LLM_DOWN_EXCEPTIONS = (TimeoutError,)
 
-class ChatMode(Enum):
-    """Chat retrieval modes from original implementation"""
-    VECTOR = "vector"
-    GRAPH = "graph"
-    GRAPH_VECTOR = "graph_vector"
-    GRAPHRAG = "graphrag"
-    COMPREHENSIVE = "comprehensive"  # New advanced mode
+# ---------------------------------------------------------------------------
+# Prompt template that strictly grounds responses to retrieved graph context.
+# Uses {context} and {query_text} placeholders consumed by neo4j-graphrag.
+# ---------------------------------------------------------------------------
+STRICT_GROUNDING_PROMPT = """\
+You are a knowledge graph assistant. Your ONLY job is to answer questions \
+using information explicitly present in the Context section below.
+
+RULES (non-negotiable):
+1. Answer SOLELY from the Context. Do NOT use external knowledge or training data.
+2. For every factual claim, reference the specific graph node or relationship \
+that supports it (e.g. "[Entity: TechNova Corp]").
+3. If the Context does not contain enough information to answer the question, \
+respond EXACTLY with the following prefix and nothing else:
+   INSUFFICIENT_DATA: <brief reason why context is inadequate>
+4. Never guess, speculate, or extrapolate beyond what is in the Context.
+
+Context:
+{context}
+
+Question: {query_text}
+
+Answer (cite graph nodes/relationships for each fact):"""
+
+# Prefix used to detect insufficient-context responses from the LLM.
+_INSUFFICIENT_PREFIX = "INSUFFICIENT_DATA:"
+
+# Minimum number of retriever items required to attempt an answer.
+_MIN_CONTEXT_ITEMS = 1
+
+# --------------------------------------------------------------------------
+# Query heuristics for auto retriever selection
+# --------------------------------------------------------------------------
+_ANALYTIC_PATTERNS = re.compile(
+    r"\b(list all|find all|show all|count|how many|enumerate|which .* are)\b",
+    re.IGNORECASE,
+)
+_RELATIONSHIP_PATTERNS = re.compile(
+    r"\b(relationship|connected|related|partner|between|link|associat|collaborat)\b",
+    re.IGNORECASE,
+)
+_CYPHER_PATTERNS = re.compile(
+    r"\b(query|cypher|match|return|where clause|subgraph|path between)\b",
+    re.IGNORECASE,
+)
+
+# Multi-hop 2-hop expansion query — always filters by graph_id (multi-tenancy).
+_MULTIHOP_CYPHER = """\
+MATCH (anchor:__Entity__ {graph_id: $graph_id})
+WHERE toLower(anchor.name) CONTAINS toLower($entity_name)
+MATCH (anchor)-[r1]->(hop1:__Entity__ {graph_id: $graph_id})
+OPTIONAL MATCH (hop1)-[r2]->(hop2:__Entity__ {graph_id: $graph_id})
+RETURN
+    anchor.name        AS anchor_name,
+    anchor.description AS anchor_desc,
+    type(r1)           AS rel1,
+    hop1.name          AS hop1_name,
+    hop1.description   AS hop1_desc,
+    type(r2)           AS rel2,
+    hop2.name          AS hop2_name,
+    hop2.description   AS hop2_desc
+LIMIT 20
+"""
+
+# Words that must not be treated as entity candidates.
+_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "may",
+        "might",
+        "must",
+        "can",
+        "could",
+        "about",
+        "what",
+        "who",
+        "which",
+        "when",
+        "where",
+        "why",
+        "how",
+        "tell",
+        "me",
+        "give",
+        "show",
+        "find",
+        "list",
+        "explain",
+        "describe",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "and",
+        "or",
+        "but",
+        "not",
+        "with",
+        "from",
+        "by",
+        "its",
+        "their",
+        "this",
+        "that",
+        "these",
+        "those",
+        "any",
+        "all",
+        "some",
+    }
+)
+
+# ---------------------------------------------------------------------------
+# Global query detection — routes broad/thematic questions to community
+# summaries instead of vector/fulltext retrieval.
+# ---------------------------------------------------------------------------
+_GLOBAL_KEYWORDS = frozenset(
+    {
+        "overview",
+        "themes",
+        "theme",
+        "main topics",
+        "across all",
+        "summarize",
+        "summarise",
+        "what are the",
+        "broad",
+        "general",
+        "landscape",
+        "areas",
+        "categories",
+        "domains",
+    }
+)
+
+
+def _is_global_query(query: str) -> bool:
+    """Return True when the query is broad/thematic and benefits from community summaries."""
+    q_lower = query.lower()
+    return any(kw in q_lower for kw in _GLOBAL_KEYWORDS)
+
 
 @dataclass
-class GraphContext:
-    """Rich context extracted from graph structure"""
-    primary_entities: List[Dict[str, Any]]
-    relationships: List[Dict[str, Any]]
-    neighborhoods: List[Dict[str, Any]]
-    pathways: List[Dict[str, Any]]
-    communities: List[Dict[str, Any]]
-    influential_nodes: List[Dict[str, Any]]
-    temporal_context: List[Dict[str, Any]]
-    confidence_scores: Dict[str, float]
-    reasoning_chain: List[str]
+class GroundedSearchResult:
+    """Structured result from a grounded GraphRAG search."""
 
-# ==================== COMPREHENSIVE CHAT SERVICE ====================
+    answer: str
+    sources: list[dict[str, Any]]
+    confidence: float
+    is_grounded: bool
+    retriever_used: str
+    retriever_result: Any | None = None
+
 
 class ChatService:
     """
-    Comprehensive chat service combining ALL original functionality with enhancements:
-    
-    ORIGINAL FEATURES RESTORED:
-    - Multiple retrieval modes (vector, graph, graph_vector, graphrag)
-    - Natural language to Cypher conversion
-    - Full service integration (embedding, search, schema)
-    - Proper graph_id filtering throughout
-    
-    ENHANCED FEATURES ADDED:
-    - Advanced graph reasoning with Neo4j GDS
-    - Community detection and centrality analysis
-    - Response grounding and hallucination control
-    - Conversational intelligence and insights
+    Chat service using Neo4j GraphRAG with hallucination prevention.
+
+    Features:
+    - Support for all 5 Neo4j GraphRAG retriever types
+    - Strict graph-grounded prompt — LLM only uses retrieved context
+    - Structured source citation extracted from retriever results
+    - Insufficient-context detection with no-data response
+    - Confidence scoring based on retrieval relevance scores
+    - Multi-tenant isolation with graph_id
+    - Automatic full-text index management
     """
-    
-    def __init__(self):
-        # Original attributes
-        self.cypher_chain = None
-        self.current_graph_id = None
-        self.current_user_id = None
-        self.conversation_history = []
-        self.graph_schema = None
 
-        # Enhanced attributes
-        self.reasoning_modes = [mode.value for mode in ReasoningMode]
-        self.centrality_cache = {}
-        self.community_cache = {}
-        self.graph_statistics = {}
-        self.reasoning_history = []
-    
-    # ==================== INITIALIZATION (ORIGINAL + ENHANCED) ====================
-    
-    async def initialize_chat(
-        self, 
-        graph_id: UUID, 
-        user_id: str,
-        provider: str = "openai",
-        model: str = "gpt-4o-mini"
-    ) -> bool:
-        """Initialize chat service for a specific graph (ORIGINAL METHOD)"""
-
-        try:
-            # Initialize LLM with TEMPERATURE CONTROL for hallucination prevention
-            if not llm_service.is_initialized():
-                success = await llm_service.initialize_llm(
-                    user_id=user_id,
-                    provider=provider,
-                    model=model,
-                    temperature=0.2  # LOW TEMPERATURE for factual responses
-                )
-                if not success:
-                    return False
-            
-            # Initialize embeddings for vector search (RESTORED)
-            if not embedding_service.is_initialized():
-                await embedding_service.initialize_embeddings(
-                    provider="openai",
-                    user_id=user_id
-                )
-            
-            # Get graph schema using schema_service (RESTORED)
-            schema = await schema_service.get_graph_schema(graph_id)
-            
-            # Create Cypher QA chain (RESTORED)
-            self.cypher_chain = await self._create_cypher_chain(schema)
-            self.current_user_id = user_id
-            self.current_graph_id = graph_id
-            self.graph_schema = schema
-            
-            # ENHANCED: Pre-compute graph statistics
-            await self._precompute_graph_statistics()
-            
-            logger.info(f"Chat initialized for graph {graph_id} with all services")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize chat: {e}")
-            return False
-    
-    # ==================== MAIN CHAT INTERFACE (ALL MODES RESTORED) ====================
-    
-    async def chat_with_graph(
+    def __init__(
         self,
-        query: str,
-        mode: str = "graph_vector",  # RESTORED: Default to hybrid mode
-        graph_id: Optional[UUID] = None,
-        conversation_id: Optional[str] = None,
-        include_history: bool = True,
-        max_context_tokens: int = 4000,
-        include_reasoning_chain: bool = True
-    ) -> Dict[str, Any]:
-        """
-        Main chat interface with ALL retrieval modes restored
-        
-        Modes:
-        - vector: Pure vector search on entities/chunks
-        - graph: Cypher query generation  
-        - graph_vector: Hybrid approach (RECOMMENDED)
-        - graphrag: Advanced neighborhood analysis
-        - comprehensive: New advanced graph reasoning
-        """
-        
-        # Validate graph_id
-        if graph_id and graph_id != self.current_graph_id:
-            logger.warning(f"Graph ID mismatch: expected {self.current_graph_id}, got {graph_id}")
-            return {
-                "answer": "Error: Chat not initialized for this graph",
-                "mode": mode,
-                "success": False
-            }
-        
-        if not self.current_graph_id:
-            return {
-                "answer": "Error: Chat not initialized for any graph",
-                "success": False,
-                "mode": mode
-            }
-        
-        try:
-            # Add to conversation history
-            if include_history:
-                self.conversation_history.append({
-                    "type": "user",
-                    "content": query,
-                    "timestamp": datetime.now()
-                })
-            
-            # Route to appropriate retrieval method (ALL RESTORED)
-            if mode == ChatMode.VECTOR.value:
-                result = await self._vector_search_chat(query)
-            elif mode == ChatMode.GRAPH.value:
-                result = await self._graph_cypher_chat(query)
-            elif mode == ChatMode.GRAPH_VECTOR.value:
-                result = await self._hybrid_graph_vector_chat(query)
-            elif mode == ChatMode.GRAPHRAG.value:
-                result = await self._graphrag_chat(query)
-            elif mode == ChatMode.COMPREHENSIVE.value:
-                result = await self._comprehensive_reasoning_chat(
-                    query, max_context_tokens, include_reasoning_chain
-                )
-            else:
-                raise ValueError(f"Unsupported chat mode: {mode}")
-            
-            # ENHANCED: Add response enhancements
-            enhanced_result = await self._enhance_response_with_insights(
-                query, result, mode
-            )
-            
-            # Add response to history
-            if include_history:
-                self.conversation_history.append({
-                    "type": "assistant", 
-                    "content": enhanced_result["answer"],
-                    "timestamp": datetime.now(),
-                    "metadata": enhanced_result.get("metadata", {})
-                })
-            
-            enhanced_result["mode"] = mode
-            enhanced_result["conversation_id"] = conversation_id
-            return enhanced_result
-            
-        except Exception as e:
-            logger.error(f"Chat failed: {e}")
-            return {
-                "answer": f"Sorry, I encountered an error: {str(e)}",
-                "mode": mode,
-                "success": False,
-                "error": str(e)
-            }
-    
-    # ==================== VECTOR SEARCH MODE (RESTORED) ====================
-    
-    async def _vector_search_chat(self, query: str) -> Dict[str, Any]:
-        """Chat using vector search on entities and chunks (RESTORED)"""
-        
-        try:
-            # Search entities with PROPER graph_id filtering
-            entity_results = await search_service.similarity_search_entities(
-                query=query,
-                graph_id=self.current_graph_id,
-                k=5,
-                threshold=0.7
-            )
-            
-            # Search text chunks if available
-            chunk_results = []
-            try:
-                chunk_results = await search_service.similarity_search_chunks(
-                    query=query,
-                    graph_id=self.current_graph_id,
-                    k=3,
-                    threshold=0.6
-                )
-            except Exception:
-                pass  # Chunks might not exist
-            
-            # Build context from results
-            context = self._build_vector_context(entity_results, chunk_results)
-            
-            # Generate answer using LLM with TEMPERATURE CONTROL
-            answer_prompt = f"""
-            Based on the following information from knowledge graph {self.current_graph_id}, answer the question.
-            
-            Question: {query}
-            
-            Relevant Entities:
-            {context['entities']}
-            
-            Relevant Text:
-            {context['chunks']}
-            
-            IMPORTANT: Use ONLY the information provided above. If insufficient, say so clearly.
-            """
-            
-            response = await llm_service.llm.ainvoke(
-                answer_prompt,
-                temperature=0.1  # VERY LOW temperature for factual accuracy
-            )
-            
-            # ENHANCED: Validate response grounding
-            is_grounded = await self._validate_response_grounding(response.content, context)
-            
-            return {
-                "answer": response.content,
-                "sources": {
-                    "entities": entity_results[:3],
-                    "chunks": chunk_results[:2]
-                },
-                "method": "vector_search",
-                "grounded": is_grounded,
-                "success": True
-            }
-            
-        except Exception as e:
-            logger.error(f"Vector search chat failed: {e}")
-            return {
-                "answer": "I couldn't find relevant information using vector search.",
-                "success": False,
-                "error": str(e)
-            }
-    
-    # ==================== GRAPH CYPHER MODE (RESTORED) ====================
-    
-    async def _graph_cypher_chat(self, query: str) -> Dict[str, Any]:
-        """Chat using Cypher query generation (RESTORED)"""
-        
-        try:
-            # Get graph schema using schema_service
-            schema = await schema_service.get_graph_schema(self.current_graph_id)
-            
-            # Generate Cypher query (RESTORED)
-            cypher_result = await self._natural_language_to_cypher(query, schema)
-            
-            if not cypher_result["success"]:
-                return {
-                    "answer": "I couldn't generate a valid query for your question.",
-                    "success": False,
-                    "cypher": cypher_result.get("cypher"),
-                    "error": cypher_result.get("error")
-                }
-            
-            # Execute Cypher query
-            results = cypher_result["result"]
-            
-            # Generate natural language answer from results
-            answer = await self._generate_answer_from_cypher_results(query, results)
-            
-            return {
-                "answer": answer,
-                "cypher": cypher_result["cypher"],
-                "raw_results": results[:5],
-                "method": "cypher_generation",
-                "success": True
-            }
-            
-        except Exception as e:
-            logger.error(f"Cypher chat failed: {e}")
-            return {
-                "answer": "I couldn't process your question using graph queries.",
-                "success": False,
-                "error": str(e)
-            }
-    
-    # ==================== HYBRID MODE (RESTORED) ====================
-    
-    async def _hybrid_graph_vector_chat(self, query: str) -> Dict[str, Any]:
-        """Hybrid approach combining graph queries and vector search (RESTORED)"""
-        
-        try:
-            # Try both approaches concurrently
-            vector_task = asyncio.create_task(self._vector_search_chat(query))
-            cypher_task = asyncio.create_task(self._graph_cypher_chat(query))
-            
-            vector_result, cypher_result = await asyncio.gather(
-                vector_task, cypher_task, return_exceptions=True
-            )
-            
-            # Handle exceptions
-            if isinstance(vector_result, Exception):
-                vector_result = {"success": False, "answer": "Vector search failed"}
-            if isinstance(cypher_result, Exception):
-                cypher_result = {"success": False, "answer": "Cypher search failed"}
-            
-            # Combine results intelligently
-            if vector_result["success"] and cypher_result["success"]:
-                combined_answer = await self._combine_answers(
-                    query, vector_result, cypher_result
-                )
-                return {
-                    "answer": combined_answer,
-                    "vector_result": vector_result,
-                    "cypher_result": cypher_result,
-                    "method": "hybrid_graph_vector",
-                    "success": True
-                }
-            
-            elif vector_result["success"]:
-                vector_result["method"] = "hybrid_fallback_vector"
-                return vector_result
-            
-            elif cypher_result["success"]:
-                cypher_result["method"] = "hybrid_fallback_cypher"
-                return cypher_result
-            
-            else:
-                return {
-                    "answer": "I couldn't find relevant information using either search method.",
-                    "success": False,
-                    "vector_error": vector_result.get("error"),
-                    "cypher_error": cypher_result.get("error")
-                }
-                
-        except Exception as e:
-            logger.error(f"Hybrid chat failed: {e}")
-            return {
-                "answer": "I encountered an error while searching for information.",
-                "success": False,
-                "error": str(e)
-            }
-    
-    # ==================== GRAPHRAG MODE (RESTORED) ====================
-    
-    async def _graphrag_chat(self, query: str) -> Dict[str, Any]:
-        """Advanced GraphRAG implementation (RESTORED)"""
-        
-        try:
-            graphrag_result = await graphrag_service.graph_augmented_retrieval(
-                query=query,
-                graph_id=self.current_graph_id,
-                user_id=self.current_user_id,
-                retrieval_config={
-                    "max_entities": 8,
-                    "max_chunks": 5,
-                    "max_depth": 2
-                }
-            )
-            
-            # Generate answer using the rich context
-            if "context" in graphrag_result and "metadata" in graphrag_result:
-                answer = await graphrag_service.generate_graphrag_answer(
-                    query=query,
-                    context=graphrag_result["context"],
-                    metadata=graphrag_result["metadata"]
-                )
-                
-                return {
-                    "answer": answer,
-                    "context": {
-                        "query_entities": graphrag_result.get("query_entities", []),
-                        "similar_entities": graphrag_result.get("similar_entities", [])[:3],
-                        "neighborhoods": graphrag_result["metadata"].get("neighborhoods_expanded", 0),
-                        "text_chunks": graphrag_result["metadata"].get("chunks_found", 0),
-                        "paths": graphrag_result["metadata"].get("paths_discovered", 0)
-                    },
-                    "method": "graphrag_advanced",
-                    "success": True,
-                    "grounded": True,  # GraphRAG is always grounded
-                    "metadata": graphrag_result["metadata"]
-                }
-            else:
-                return await self._graphrag_chat_fallback(query)
-                
-        except Exception as e:
-            logger.error(f"GraphRAG chat failed: {e}")
-            return await self._graphrag_chat_fallback(query)
-    
-    async def _graphrag_chat_fallback(self, query: str) -> Dict[str, Any]:
-        """
-        Fallback GraphRAG implementation when advanced service fails
-        Uses basic entity extraction and vector search
-        """
-        
-        try:
-            logger.info("Using GraphRAG fallback implementation")
-            
-            # Basic entity extraction from query
-            query_entities = []
-            try:
-                query_entities = await self._extract_entities_from_query(query)
-            except Exception as e:
-                logger.warning(f"Entity extraction failed in fallback: {e}")
-            
-            # Simple vector search for entities
-            similar_entities = []
-            try:
-                similar_entities = await search_service.similarity_search_entities(
-                    query=query,
-                    graph_id=self.current_graph_id,
-                    k=5,
-                    threshold=0.6
-                )
-            except Exception as e:
-                logger.warning(f"Entity search failed in fallback: {e}")
-            
-            # Basic neighborhood gathering
-            neighborhoods = []
-            try:
-                for entity in similar_entities[:3]:
-                    neighborhood = await self._get_entity_neighborhood(
-                        entity["id"], max_depth=1
-                    )
-                    neighborhoods.append(neighborhood)
-            except Exception as e:
-                logger.warning(f"Neighborhood gathering failed in fallback: {e}")
-            
-            # Simple context building
-            context = self._build_graphrag_context(
-                query_entities, similar_entities, neighborhoods, []
-            )
-            
-            # Generate basic answer
-            answer = await self._generate_graphrag_answer(query, context)
-            
-            return {
-                "answer": answer,
-                "context": {
-                    "query_entities": query_entities,
-                    "similar_entities": similar_entities[:3],
-                    "neighborhoods": len(neighborhoods),
-                    "text_chunks": 0
-                },
-                "method": "graphrag_fallback",
-                "success": True,
-                "grounded": True,
-                "metadata": {
-                    "fallback_used": True,
-                    "entities_found": len(similar_entities),
-                    "neighborhoods_expanded": len(neighborhoods)
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"GraphRAG fallback also failed: {e}")
-            return {
-                "answer": "I'm sorry, I encountered an error while processing your question using GraphRAG. Please try again or use a different chat mode.",
-                "success": False,
-                "error": str(e),
-                "method": "graphrag_fallback_failed"
-            }
-    
-    # ==================== COMPREHENSIVE REASONING MODE (ENHANCED) ====================
-    
-    async def _comprehensive_reasoning_chat(
-        self, 
-        query: str, 
-        max_context_tokens: int,
-        include_reasoning_chain: bool
-    ) -> Dict[str, Any]:
-        """New comprehensive reasoning mode with advanced graph algorithms"""
-        
-        try:
-            start_time = datetime.now()
-            
-            # Generate rich context using advanced algorithms
-            graph_context = await self._generate_graph_context_with_graph_id(
-                query=query,
-                graph_id=self.current_graph_id,  # FIXED: Pass graph_id
-                reasoning_mode=ReasoningMode.COMPREHENSIVE,
-                max_context_size=max_context_tokens
-            )
-            
-            context_time = (datetime.now() - start_time).total_seconds()
-            
-            # Generate grounded response
-            response_start = datetime.now()
-            response_data = await self._generate_grounded_response(query, graph_context)
-            response_time = (datetime.now() - response_start).total_seconds()
-            
-            # Enhanced analysis
-            conversation_insight = await self._analyze_conversation_pattern(query, response_data)
-            followup_suggestions = await self._generate_followup_suggestions(query, graph_context)
-            
-            # Check entity continuity
-            entity_continuity = await self._check_entity_continuity(query, graph_context)
-            
-            response = {
-                "answer": response_data["answer"],
-                "success": response_data["success"],
-                "grounded": response_data.get("grounded", False),
-                "method": "comprehensive_reasoning",
-                "context_summary": {
-                    "entities_analyzed": len(graph_context.primary_entities),
-                    "relationships_found": len(graph_context.relationships),
-                    "pathways_discovered": len(graph_context.pathways),
-                    "communities_identified": len(graph_context.communities)
-                },
-                "performance": {
-                    "context_generation_time": context_time,
-                    "response_generation_time": response_time,
-                    "total_time": context_time + response_time
-                },
-                "confidence_scores": graph_context.confidence_scores,
-                "conversation_insight": conversation_insight,
-                "suggested_followup": followup_suggestions,
-                "entity_continuity": entity_continuity
-            }
-            
-            if include_reasoning_chain:
-                response["reasoning_chain"] = graph_context.reasoning_chain
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Comprehensive reasoning failed: {e}")
-            return {
-                "answer": "I encountered an error during comprehensive analysis.",
-                "success": False,
-                "error": str(e)
-            }
-    
-    # ==================== NATURAL LANGUAGE TO CYPHER (RESTORED) ====================
-    
-    async def _natural_language_to_cypher(
-        self, 
-        question: str, 
-        schema: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Convert natural language to Cypher query (RESTORED)"""
-        
-        try:
-            # Create Cypher generation prompt with PROPER graph_id filtering
-            cypher_prompt = f"""
-            Given this Neo4j graph schema:
-            
-            Node Types: {schema.get('entities', [])}
-            Relationship Types: {schema.get('relationships', [])}
-            
-            Sample node structure:
-            - All nodes have: id, graph_id, name
-            - Nodes may have: description, type, properties
-            - CRITICAL: All data must be filtered by graph_id = "{self.current_graph_id}"
-            
-            Convert this natural language question to a Cypher query:
-            "{question}"
-            
-            Rules:
-            1. ALWAYS include "WHERE n.graph_id = '{self.current_graph_id}'" for ALL nodes
-            2. Use LIMIT to avoid large result sets (max 20 results)
-            3. Return meaningful property names
-            4. Handle case-insensitive matching with toLower()
-            5. If multiple nodes, ensure ALL have graph_id filter
-            
-            Return only the Cypher query, no explanation:
-            """
-            
-            response = await llm_service.llm.ainvoke(
-                cypher_prompt,
-                temperature=0.1  # Low temperature for accurate query generation
-            )
-            cypher_query = response.content.strip()
-            
-            # Clean up the query
-            cypher_query = cypher_query.replace("```cypher", "").replace("```", "").strip()
-            
-            # VALIDATE: Ensure graph_id filtering is present
-            if f"graph_id = '{self.current_graph_id}'" not in cypher_query:
-                logger.warning("Generated Cypher missing graph_id filter, adding it")
-                # Try to add graph_id filter automatically
-                if "WHERE" in cypher_query.upper():
-                    cypher_query = cypher_query.replace(
-                        "WHERE", 
-                        f"WHERE n.graph_id = '{self.current_graph_id}' AND", 
-                        1
-                    )
-                else:
-                    # Add WHERE clause
-                    match_pos = cypher_query.upper().find("MATCH")
-                    if match_pos >= 0:
-                        # Find the end of MATCH clause
-                        return_pos = cypher_query.upper().find("RETURN")
-                        if return_pos >= 0:
-                            cypher_query = (
-                                cypher_query[:return_pos] + 
-                                f"WHERE n.graph_id = '{self.current_graph_id}' " +
-                                cypher_query[return_pos:]
-                            )
-            
-            # Execute the query
-            result = await neo4j_client.execute_query(cypher_query)
-            
-            return {
-                "cypher": cypher_query,
-                "result": result,
-                "success": True
-            }
-            
-        except Exception as e:
-            logger.error(f"Cypher generation failed: {e}")
-            return {
-                "cypher": cypher_query if 'cypher_query' in locals() else "Failed to generate",
-                "success": False,
-                "error": str(e)
-            }
-    
-    # ==================== CONTEXT GENERATION (FIXED GRAPH_ID ISSUES) ====================
-    
-    async def _generate_graph_context_with_graph_id(
-        self,
-        query: str,
-        graph_id: UUID,  # FIXED: Accept graph_id parameter
-        reasoning_mode: ReasoningMode,
-        max_context_size: int = 4000
-    ) -> GraphContext:
-        """Generate rich context using graph algorithms with PROPER graph_id filtering"""
-        
-        logger.info(f"Generating context for graph {graph_id} in {reasoning_mode.value} mode")
-        
-        # Entity recognition & disambiguation with graph_id
-        primary_entities = await self._extract_and_disambiguate_entities_with_graph_id(query, graph_id)
-        
-        # Context expansion with proper graph_id filtering
-        if reasoning_mode == ReasoningMode.COMPREHENSIVE:
-            context_strategies = await asyncio.gather(
-                self._get_direct_context_with_graph_id(primary_entities, graph_id),
-                self._get_neighborhood_context_with_graph_id(primary_entities, graph_id),
-                self._get_pathway_context_with_graph_id(primary_entities, graph_id, 3),
-                self._get_community_context_with_graph_id(primary_entities, graph_id),
-                self._get_influential_context_with_graph_id(query, graph_id),
-                self._get_temporal_context_with_graph_id(primary_entities, graph_id)
-            )
-        elif reasoning_mode == ReasoningMode.FOCUSED:
-            context_strategies = await asyncio.gather(
-                self._get_direct_context_with_graph_id(primary_entities, graph_id),
-                self._get_neighborhood_context_with_graph_id(primary_entities, graph_id),
-                self._get_influential_context_with_graph_id(query, graph_id)
-            )
-            context_strategies.extend([{}, {}, {}])
-        elif reasoning_mode == ReasoningMode.EXPLORATORY:
-            context_strategies = await asyncio.gather(
-                self._get_direct_context_with_graph_id(primary_entities, graph_id),
-                self._get_pathway_context_with_graph_id(primary_entities, graph_id, 4),
-                self._get_community_context_with_graph_id(primary_entities, graph_id),
-                self._get_temporal_context_with_graph_id(primary_entities, graph_id)
-            )
-            context_strategies.extend([{}, {}])
-        
-        direct_ctx, neighborhood_ctx, pathway_ctx, community_ctx, influence_ctx, temporal_ctx = context_strategies
-        
-        # Context ranking with RELEVANCE CALCULATION (RESTORED)
-        ranked_context = await self._rank_and_filter_context_with_relevance(
-            query, direct_ctx, neighborhood_ctx, pathway_ctx, 
-            community_ctx, influence_ctx, temporal_ctx, max_context_size
-        )
-        
-        # Generate reasoning chain with QUERY consideration (FIXED)
-        reasoning_chain = await self._generate_reasoning_chain_with_query(query, ranked_context)
-        
-        return GraphContext(
-            primary_entities=primary_entities,
-            relationships=ranked_context.get("relationships", []),
-            neighborhoods=ranked_context.get("neighborhoods", []),
-            pathways=ranked_context.get("pathways", []),
-            communities=ranked_context.get("communities", []),
-            influential_nodes=ranked_context.get("influential", []),
-            temporal_context=ranked_context.get("temporal", []),
-            confidence_scores=ranked_context.get("confidence", {}),
-            reasoning_chain=reasoning_chain
-        )
-    
-    # ==================== CONTEXT METHODS WITH GRAPH_ID (ALL FIXED) ====================
-    
-    async def _extract_and_disambiguate_entities_with_graph_id(
-        self, 
-        query: str, 
-        graph_id: UUID
-    ) -> List[Dict[str, Any]]:
-        """Entity recognition with graph_id filtering (FIXED)"""
-        
-        entity_extraction_query = f"""
-        Extract entities (people, organizations, locations, concepts) from: "{query}"
-        Return JSON array: ["entity1", "entity2", ...]
-        """
-        
-        try:
-            response = await llm_service.llm.ainvoke([
-                {"role": "system", "content": "Extract entities. Return only JSON array."},
-                {"role": "user", "content": entity_extraction_query}
-            ], temperature=0.1)
-            
-            entities = json.loads(response.content.strip())
-            if not isinstance(entities, list):
-                entities = []
-        except:
-            entities = []
-        
-        # Disambiguate against graph entities with PROPER graph_id filtering
-        disambiguated = []
-        for entity_text in entities:
-            matches = await self._find_entity_matches_with_graph_id(entity_text, graph_id)
-            if matches:
-                disambiguated.extend(matches[:2])
-        
-        return disambiguated
-    
-    async def _find_entity_matches_with_graph_id(
-        self, 
-        entity_text: str, 
-        graph_id: UUID
-    ) -> List[Dict[str, Any]]:
-        """Find matching entities with PROPER graph_id filtering (FIXED)"""
-        
-        query = """
-        MATCH (n)
-        WHERE n.graph_id = $graph_id 
-        AND (toLower(n.name) CONTAINS toLower($entity_text) 
-             OR toLower($entity_text) CONTAINS toLower(n.name))
-        
-        WITH n, 
-             CASE 
-                WHEN toLower(n.name) = toLower($entity_text) THEN 1.0
-                WHEN toLower(n.name) CONTAINS toLower($entity_text) THEN 0.8
-                ELSE 0.6
-             END as relevance_score
-        
-        OPTIONAL MATCH (n)-[r]-()
-        WHERE r.graph_id = $graph_id
-        
-        RETURN n.id as id, n.name as name, labels(n) as labels, 
-               n{.*} as properties, count(r) as relationship_count,
-               relevance_score
-        ORDER BY relevance_score DESC, relationship_count DESC
-        LIMIT 5
-        """
-        
-        results = await neo4j_client.execute_query(query, {
-            "entity_text": entity_text,
-            "graph_id": str(graph_id)
-        })
-        
-        return [dict(result) for result in results]
-    
-    async def _get_direct_context_with_graph_id(
-        self, 
-        entities: List[Dict[str, Any]], 
-        graph_id: UUID
-    ) -> Dict[str, Any]:
-        """Get direct context with PROPER graph_id filtering (FIXED)"""
-        
-        if not entities:
-            return {"relationships": []}
-        
-        entity_ids = [e["id"] for e in entities]
-        
-        query = """
-        MATCH (start)-[r]-(connected)
-        WHERE start.id IN $entity_ids 
-        AND start.graph_id = $graph_id 
-        AND r.graph_id = $graph_id
-        AND connected.graph_id = $graph_id
-        
-        RETURN start.id as source_id, start.name as source_name,
-               type(r) as relationship_type,
-               connected.id as target_id, connected.name as target_name,
-               r{.*} as relationship_properties
-        LIMIT 50
-        """
-        
-        results = await neo4j_client.execute_query(query, {
-            "entity_ids": entity_ids,
-            "graph_id": str(graph_id)
-        })
-        
-        relationships = []
-        for result in results:
-            relationships.append({
-                "source": result["source_name"],
-                "source_id": result["source_id"],
-                "target": result["target_name"],
-                "target_id": result["target_id"],
-                "type": result["relationship_type"],
-                "properties": result["relationship_properties"]
-            })
-        
-        return {"relationships": relationships}
-    
-    # ==================== PATHWAY METHODS (RESTORED + FIXED) ====================
-    
-    async def _get_pathway_context_with_graph_id(
-        self, 
-        entities: List[Dict[str, Any]], 
-        graph_id: UUID,
-        max_depth: int = 3
-    ) -> Dict[str, Any]:
-        """Get pathways with PROPER graph_id filtering (FIXED)"""
-        
-        if len(entities) < 2:
-            return {"pathways": []}
-        
-        pathways = []
-        
-        # Get pathways between all pairs
-        for i, start_entity in enumerate(entities):
-            for j, end_entity in enumerate(entities[i+1:], i+1):
-                try:
-                    # Use both advanced and simple pathfinding
-                    advanced_paths = await self._find_paths_between_entities_with_graph_id(
-                        start_entity["id"], end_entity["id"], graph_id, max_depth
-                    )
-                    pathways.extend(advanced_paths)
-                except Exception as e:
-                    logger.warning(f"Advanced pathfinding failed: {e}")
-                
-                try:
-                    # Fallback to shortest paths (RESTORED)
-                    simple_paths = await self._find_shortest_paths_with_graph_id(
-                        start_entity["id"], end_entity["id"], graph_id
-                    )
-                    pathways.extend(simple_paths)
-                except Exception as e:
-                    logger.warning(f"Simple pathfinding failed: {e}")
-        
-        # Remove duplicates and sort
-        unique_pathways = []
-        seen_paths = set()
-        
-        for pathway in pathways:
-            path_signature = tuple(pathway.get("nodes", []))
-            if path_signature not in seen_paths:
-                seen_paths.add(path_signature)
-                unique_pathways.append(pathway)
-        
-        unique_pathways.sort(key=lambda x: x.get("length", 999))
-        
-        return {"pathways": unique_pathways[:10]}
-    
-    async def _find_shortest_paths_with_graph_id(
-        self, 
-        start_id: str, 
-        end_id: str, 
-        graph_id: UUID
-    ) -> List[Dict[str, Any]]:
-        """Find shortest paths between entities (RESTORED)"""
-        
-        query = """
-        MATCH (start {id: $start_id, graph_id: $graph_id})
-        MATCH (end {id: $end_id, graph_id: $graph_id})
-        
-        MATCH path = shortestPath((start)-[*1..3]-(end))
-        WHERE ALL(r IN relationships(path) WHERE r.graph_id = $graph_id)
-        AND ALL(n IN nodes(path) WHERE n.graph_id = $graph_id)
-        
-        RETURN [n.name FOR n IN nodes(path)] as node_names,
-               [type(r) FOR r IN relationships(path)] as relationship_types,
-               length(path) as path_length
-        ORDER BY path_length
-        LIMIT 3
-        """
-        
-        results = await neo4j_client.execute_query(query, {
-            "start_id": start_id,
-            "end_id": end_id,
-            "graph_id": str(graph_id)
-        })
-        
-        return [
-            {
-                "start": start_id,
-                "end": end_id,
-                "nodes": result["node_names"],
-                "relationships": result["relationship_types"],
-                "length": result["path_length"],
-                "type": "shortest_path"
-            }
-            for result in results
-        ]
-    
-    async def _find_paths_between_entities_with_graph_id(
-        self, 
-        start_id: str, 
-        end_id: str, 
-        graph_id: UUID,
-        max_depth: int
-    ) -> List[Dict[str, Any]]:
-        """Advanced pathfinding with PROPER graph_id filtering (FIXED)"""
-        
-        query = """
-        MATCH (start {id: $start_id, graph_id: $graph_id})
-        MATCH (end {id: $end_id, graph_id: $graph_id})
-        
-        CALL apoc.path.allSimplePaths(start, end, '', $max_depth) YIELD path
-        WHERE ALL(n IN nodes(path) WHERE n.graph_id = $graph_id)
-        AND ALL(r IN relationships(path) WHERE r.graph_id = $graph_id)
-        
-        WITH path, length(path) as path_length
-        ORDER BY path_length
-        LIMIT 5
-        
-        RETURN [n.name FOR n IN nodes(path)] as path_nodes,
-               [{type: type(r), properties: properties(r)} FOR r IN relationships(path)] as path_relationships,
-               path_length
-        """
-        
-        results = await neo4j_client.execute_query(query, {
-            "start_id": start_id,
-            "end_id": end_id,
-            "graph_id": str(graph_id),
-            "max_depth": max_depth
-        })
-        
-        return [
-            {
-                "start": start_id,
-                "end": end_id,
-                "nodes": result["path_nodes"],
-                "relationships": result["path_relationships"],
-                "length": result["path_length"],
-                "type": "advanced_path"
-            }
-            for result in results
-        ]
-    
-    # ==================== ENHANCEMENT METHODS (RESTORED) ====================
-    
-    async def _enhance_response_with_insights(
-        self, 
-        query: str, 
-        response: Dict[str, Any], 
-        mode: str
-    ) -> Dict[str, Any]:
-        """Add insights and related information to response (RESTORED)"""
-        
-        try:
-            # Get related entities using embedding similarity
-            related_entities = await self._get_related_entities(query, limit=5)
-            
-            # Get community insights
-            community_insights = await self._get_community_insights_for_query(query)
-            
-            # Get graph statistics
-            graph_stats = await self._get_relevant_graph_statistics()
-            
-            response.update({
-                "related_entities": related_entities,
-                "graph_insights": {
-                    "community_insights": community_insights,
-                    "graph_statistics": graph_stats,
-                    "retrieval_mode": mode
-                },
-                "enhanced": True
-            })
-            
-            return response
-            
-        except Exception as e:
-            logger.warning(f"Failed to enhance response: {e}")
-            return response
-    
-    async def _check_entity_continuity(
-        self, 
-        query: str, 
-        context: GraphContext
-    ) -> Dict[str, Any]:
-        """Check entity relationship continuity (RESTORED)"""
-        
-        try:
-            # Check if entities in current query relate to previous conversation
-            previous_entities = []
-            for entry in self.conversation_history[-3:]:  # Last 3 exchanges
-                if "entities_discussed" in entry:
-                    previous_entities.extend(entry["entities_discussed"])
-            
-            current_entities = [e["name"] for e in context.primary_entities]
-            
-            # Find overlapping entities
-            overlapping = set(previous_entities) & set(current_entities)
-            
-            continuity_score = len(overlapping) / max(len(current_entities), 1)
-            
-            return {
-                "continuity_score": continuity_score,
-                "overlapping_entities": list(overlapping),
-                "conversation_coherent": continuity_score > 0.3,
-                "recommendation": "High continuity" if continuity_score > 0.5 else "New topic detected"
-            }
-            
-        except Exception as e:
-            logger.warning(f"Entity continuity check failed: {e}")
-            return {"continuity_score": 0, "error": str(e)}
-    
-    async def _analyze_conversation_pattern(
-        self, 
-        query: str, 
-        response: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Analyze conversation patterns for better context (RESTORED)"""
-        
-        try:
-            conversation_length = len(self.conversation_history)
-            
-            if conversation_length < 2:
-                return {"pattern": "new_conversation", "depth": "initial"}
-            
-            # Analyze query complexity and conversation depth
-            recent_queries = [
-                entry["content"] for entry in self.conversation_history[-5:] 
-                if entry["type"] == "user"
-            ]
-            
-            avg_query_length = sum(len(q.split()) for q in recent_queries) / len(recent_queries)
-            
-            if avg_query_length > 15:
-                pattern = "detailed_exploration"
-            elif conversation_length > 10:
-                pattern = "extended_dialogue"
-            else:
-                pattern = "focused_inquiry"
-            
-            return {
-                "pattern": pattern,
-                "conversation_length": conversation_length,
-                "avg_query_complexity": avg_query_length,
-                "engagement_level": "high" if conversation_length > 5 else "medium"
-            }
-            
-        except Exception as e:
-            logger.warning(f"Conversation analysis failed: {e}")
-            return {"pattern": "unknown", "error": str(e)}
-    
-    # ==================== RELEVANCE CALCULATION (RESTORED) ====================
-    
-    async def _rank_and_filter_context_with_relevance(
-        self, 
-        query: str, 
-        direct_ctx: Dict, 
-        neighborhood_ctx: Dict, 
-        pathway_ctx: Dict,
-        community_ctx: Dict, 
-        influence_ctx: Dict, 
-        temporal_ctx: Dict, 
-        max_tokens: int
-    ) -> Dict[str, Any]:
-        """Rank and filter context with RELEVANCE CALCULATION (RESTORED)"""
-        
-        try:
-            # Calculate relevance scores using embeddings
-            query_embedding = await embedding_service.embed_text(query)
-            
-            # Score relationships by relevance
-            scored_relationships = []
-            for rel in direct_ctx.get("relationships", []):
-                rel_text = f"{rel['source']} {rel['type']} {rel['target']}"
-                rel_embedding = await embedding_service.embed_text(rel_text)
-                relevance = await self._calculate_embedding_similarity(query_embedding, rel_embedding)
-                
-                rel["relevance_score"] = relevance
-                scored_relationships.append(rel)
-            
-            # Sort by relevance
-            scored_relationships.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
-            
-            # Filter by token limit (approximate)
-            filtered_context = {
-                "relationships": scored_relationships[:15],  # Top 15 most relevant
-                "neighborhoods": neighborhood_ctx.get("neighborhoods", [])[:5],
-                "pathways": pathway_ctx.get("pathways", [])[:5],
-                "communities": community_ctx.get("communities", [])[:3],
-                "influential": influence_ctx.get("influential", [])[:5],
-                "temporal": temporal_ctx.get("temporal", [])[:5],
-                "confidence": {
-                    "entity_matching": 0.8,
-                    "relationship_relevance": sum(r.get("relevance_score", 0) for r in scored_relationships[:10]) / 10,
-                    "pathway_analysis": 0.6,
-                    "community_relevance": 0.5
-                }
-            }
-            
-            return filtered_context
-            
-        except Exception as e:
-            logger.warning(f"Relevance calculation failed: {e}")
-            # Fallback to simple filtering
-            return {
-                "relationships": direct_ctx.get("relationships", [])[:10],
-                "neighborhoods": neighborhood_ctx.get("neighborhoods", [])[:5],
-                "pathways": pathway_ctx.get("pathways", [])[:5],
-                "communities": community_ctx.get("communities", [])[:3],
-                "influential": influence_ctx.get("influential", [])[:5],
-                "temporal": temporal_ctx.get("temporal", [])[:5],
-                "confidence": {"entity_matching": 0.6, "relationship_relevance": 0.5}
-            }
-    
-    async def _calculate_embedding_similarity(
-        self, 
-        embedding1: List[float], 
-        embedding2: List[float]
-    ) -> float:
-        """Calculate cosine similarity between embeddings"""
-        
-        try:
-            import numpy as np
-            
-            # Convert to numpy arrays
-            vec1 = np.array(embedding1)
-            vec2 = np.array(embedding2)
-            
-            # Calculate cosine similarity
-            dot_product = np.dot(vec1, vec2)
-            norm1 = np.linalg.norm(vec1)
-            norm2 = np.linalg.norm(vec2)
-            
-            similarity = dot_product / (norm1 * norm2)
-            return float(similarity)
-            
-        except Exception:
-            return 0.5  # Default similarity
-    
-    async def _generate_reasoning_chain_with_query(
-        self, 
-        query: str, 
-        context: Dict[str, Any]
-    ) -> List[str]:
-        """Generate reasoning chain considering the QUERY (FIXED)"""
-        
-        reasoning_steps = [f"Processing query: '{query[:50]}{'...' if len(query) > 50 else ''}'"]
-        
-        # Query analysis
-        query_type = await self._classify_query_type(query)
-        reasoning_steps.append(f"Query classified as: {query_type}")
-        
-        # Entity analysis
-        if context.get("relationships"):
-            reasoning_steps.append(f"Found {len(context['relationships'])} relevant relationships")
-        
-        # Relationship analysis  
-        if context.get("neighborhoods"):
-            reasoning_steps.append(f"Analyzed {len(context['neighborhoods'])} entity neighborhoods")
-        
-        # Path analysis
-        if context.get("pathways"):
-            reasoning_steps.append(f"Discovered {len(context['pathways'])} connection pathways")
-        
-        # Community analysis
-        if context.get("communities"):
-            reasoning_steps.append(f"Identified {len(context['communities'])} community clusters")
-        
-        # Influence analysis
-        if context.get("influential"):
-            reasoning_steps.append(f"Considered {len(context['influential'])} influential entities")
-        
-        reasoning_steps.append("Synthesizing graph information to provide accurate, grounded response")
-        
-        return reasoning_steps
-    
-    # ==================== UTILITY METHODS (ENHANCED) ====================
-    
-    async def _validate_response_grounding(
-        self, 
-        response: str, 
-        context: Dict[str, Any]
-    ) -> bool:
-        """Enhanced response grounding validation"""
-        
-        try:
-            # Convert context to text
-            if isinstance(context, dict):
-                context_text = ""
-                for key, value in context.items():
-                    if isinstance(value, str):
-                        context_text += f"{key}: {value}\n"
-                    elif isinstance(value, list):
-                        context_text += f"{key}: {', '.join(str(v) for v in value[:5])}\n"
-            else:
-                context_text = str(context)
-            
-            validation_prompt = f"""
-            Check if this RESPONSE uses only information from the CONTEXT.
-            
-            CONTEXT: {context_text[:1000]}
-            RESPONSE: {response}
-            
-            Return "GROUNDED" if response uses only context information.
-            Return "NOT_GROUNDED" if response adds external information.
-            """
-            
-            validation = await llm_service.llm.ainvoke([
-                {"role": "system", "content": "Strict fact-checker for grounding."},
-                {"role": "user", "content": validation_prompt}
-            ], temperature=0.0)  # Zero temperature for validation
-            
-            return "GROUNDED" in validation.content.upper()
-            
-        except Exception as e:
-            logger.warning(f"Response validation failed: {e}")
-            return False
-    
-    # ==================== ADDITIONAL RESTORED methods from original ====================
-    
-    async def _get_entity_neighborhood(
-        self, 
-        entity_id: str, 
-        max_depth: int = 2
-    ) -> Dict[str, Any]:
-        """Get entity neighborhood with PROPER graph_id filtering (RESTORED + FIXED)"""
-        
-        try:
-            query = f"""
-            MATCH (center {{id: $entity_id, graph_id: $graph_id}})
-            CALL {{
-                WITH center
-                MATCH path = (center)-[*1..{max_depth}]-(neighbor)
-                WHERE neighbor.graph_id = $graph_id
-                AND ALL(r IN relationships(path) WHERE r.graph_id = $graph_id)
-                RETURN neighbor, relationships(path) as rels
-                LIMIT 10
-            }}
-            RETURN center, collect({{neighbor: neighbor, relationships: rels}}) as neighborhood
-            """
-            
-            result = await neo4j_client.execute_query(query, {
-                "entity_id": entity_id,
-                "graph_id": str(self.current_graph_id)  # FIXED: Use current_graph_id
-            })
-            
-            return result[0] if result else {}
-            
-        except Exception as e:
-            logger.warning(f"Neighborhood extraction failed: {e}")
-            return {}
-    
-    async def _extract_entities_from_query(self, query: str) -> List[str]:
-        """Extract entities from query (RESTORED)"""
-        
-        try:
-            entity_prompt = f"""
-            Extract the main entities (people, organizations, concepts, etc.) from this question:
-            "{query}"
-            
-            Return only a JSON list of entity names, like: ["Entity1", "Entity2"]
-            If no clear entities, return: []
-            """
-            
-            response = await llm_service.llm.ainvoke(
-                entity_prompt,
-                temperature=0.1  # Low temperature for consistent extraction
-            )
-            entities = json.loads(response.content.strip())
-            return entities if isinstance(entities, list) else []
-            
-        except Exception as e:
-            logger.warning(f"Entity extraction failed: {e}")
-            return []
-    
-    async def _generate_answer_from_cypher_results(
-        self, 
-        query: str, 
-        results: List[Dict]
-    ) -> str:
-        """Generate natural language answer from Cypher results (RESTORED)"""
-        
-        if not results:
-            return "I couldn't find any relevant information in the graph."
-        
-        # Format results for LLM
-        formatted_results = json.dumps(results[:10], indent=2, default=str)
-        
-        answer_prompt = f"""
-        Based on these query results from knowledge graph {self.current_graph_id}, provide a natural language answer.
-        
-        Question: {query}
-        
-        Query Results:
-        {formatted_results}
-        
-        IMPORTANT: Use only the provided results. If results don't fully answer the question, mention what information IS available.
-        """
-        
-        response = await llm_service.llm.ainvoke(
-            answer_prompt,
-            temperature=0.2  # Low temperature for factual accuracy
-        )
-        return response.content
-    
-    # ==================== MISSING IMPLEMENTATION PLACEHOLDERS ====================
-    
-    async def _get_neighborhood_context_with_graph_id(
-        self, 
-        entities: List[Dict[str, Any]], 
-        graph_id: UUID
-    ) -> Dict[str, Any]:
-        """Get 1-2 hop neighbor context with PROPER graph_id filtering"""
-        
-        if not entities:
-            return {"neighborhoods": [], "relationships": []}
-        
-        entity_ids = [e["id"] for e in entities]
-        
-        query = """
-        MATCH (start)
-        WHERE start.id IN $entity_ids AND start.graph_id = $graph_id
-        
-        MATCH (start)-[r1]-(neighbor1)
-        WHERE r1.graph_id = $graph_id AND neighbor1.graph_id = $graph_id
-        
-        OPTIONAL MATCH (neighbor1)-[r2]-(neighbor2)
-        WHERE r2.graph_id = $graph_id AND neighbor2.graph_id = $graph_id
-        AND neighbor2.id <> start.id
-        
-        WITH start, r1, neighbor1, 
-            collect(DISTINCT {
-                node: neighbor2{.id, .name, labels: labels(neighbor2)},
-                relationship: type(r2)
-            })[..3] as second_hop
-        
-        RETURN start.id as center_id,
-            start.name as center_name,
-            {
-                relationship: type(r1),
-                neighbor: neighbor1{.id, .name, labels: labels(neighbor1)},
-                second_hop: second_hop
-            } as neighborhood_info
-        LIMIT 30
-        """
-        
-        results = await neo4j_client.execute_query(query, {
-            "entity_ids": entity_ids,
-            "graph_id": str(graph_id)
-        })
-        
-        neighborhoods = {}
-        relationships = []
-        
-        for result in results:
-            center_id = result["center_id"]
-            if center_id not in neighborhoods:
-                neighborhoods[center_id] = {
-                    "center": {"id": center_id, "name": result["center_name"]}, 
-                    "neighbors": []
-                }
-            
-            neighborhoods[center_id]["neighbors"].append(result["neighborhood_info"])
-            relationships.append({
-                "source": center_id,
-                "target": result["neighborhood_info"]["neighbor"]["id"],
-                "type": result["neighborhood_info"]["relationship"]
-            })
-        
-        return {
-            "neighborhoods": list(neighborhoods.values()),
-            "relationships": relationships
-        }
+        graph_id: str,
+        retriever_type: RetrieverType = RetrieverType.VECTOR_CYPHER,
+        retriever_config: dict[str, Any] | None = None,
+        cache: QueryCacheService | None = None,
+    ):
+        self.graph_id = graph_id
+        self.retriever_type = retriever_type
+        self.retriever_config_dict = retriever_config or {}
 
-    async def _get_community_context_with_graph_id(
-        self, 
-        entities: List[Dict[str, Any]], 
-        graph_id: UUID
-    ) -> Dict[str, Any]:
-        """Find entities in same communities using Neo4j GDS Louvain algorithm with graph_id filtering"""
-        
-        if not entities:
-            return {"communities": []}
-        
-        try:
-            # Try advanced community detection with Neo4j GDS
-            community_query = """
-            CALL {
-                // Create temporary graph projection for this specific graph_id
-                CALL gds.graph.project(
-                    'temp-community-' + $graph_id,
-                    {
-                        Entity: {
-                            label: '*',
-                            properties: ['name'],
-                            nodeFilter: 'n.graph_id = "' + $graph_id + '"'
-                        }
-                    },
-                    {
-                        RELATIONSHIP: {
-                            type: '*',
-                            orientation: 'UNDIRECTED',
-                            relationshipFilter: 'r.graph_id = "' + $graph_id + '"'
-                        }
-                    }
-                )
-                YIELD graphName
-                
-                // Run Louvain community detection
-                CALL gds.louvain.stream('temp-community-' + $graph_id)
-                YIELD nodeId, communityId
-                
-                // Get original nodes
-                MATCH (node)
-                WHERE id(node) = nodeId AND node.graph_id = $graph_id
-                
-                WITH node, communityId
-                ORDER BY communityId, node.name
-                
-                // Group by community
-                WITH communityId, collect(node) as community_members
-                WHERE size(community_members) > 1  // Only communities with multiple members
-                
-                RETURN communityId,
-                    [member IN community_members | {
-                        id: member.id,
-                        name: member.name,
-                        labels: labels(member)
-                    }] as members,
-                    size(community_members) as size
-                LIMIT 10
-            }
-            
-            // Clean up the temporary graph
-            CALL gds.graph.drop('temp-community-' + $graph_id, false)
-            YIELD graphName as droppedGraph
-            
-            RETURN communityId, members, size
-            """
-            
-            results = await neo4j_client.execute_query(community_query, {
-                "graph_id": str(graph_id)
-            })
-            
-            communities = []
-            for result in results:
-                communities.append({
-                    "community_id": result["communityId"],
-                    "members": result["members"],
-                    "size": result["size"],
-                    "type": "louvain_community"
-                })
-            
-            return {"communities": communities}
-            
-        except Exception as e:
-            logger.warning(f"Advanced community detection failed: {e}")
-            # Fallback to simple shared neighbor detection
-            return await self._get_simple_community_context_with_graph_id(entities, graph_id)
-
-    async def _get_simple_community_context_with_graph_id(
-        self, 
-        entities: List[Dict[str, Any]], 
-        graph_id: UUID
-    ) -> Dict[str, Any]:
-        """Fallback community detection based on shared neighbors with graph_id filtering"""
-        
-        if not entities:
-            return {"communities": []}
-        
-        entity_ids = [e["id"] for e in entities]
-        
-        query = """
-        MATCH (entity)
-        WHERE entity.id IN $entity_ids AND entity.graph_id = $graph_id
-        
-        MATCH (entity)-[r1]-(neighbor)-[r2]-(community_member)
-        WHERE r1.graph_id = $graph_id AND r2.graph_id = $graph_id
-        AND neighbor.graph_id = $graph_id AND community_member.graph_id = $graph_id
-        AND community_member.id <> entity.id
-        
-        WITH entity, neighbor, collect(DISTINCT community_member) as members
-        WHERE size(members) >= 2
-        
-        RETURN entity.id as entity_id,
-            entity.name as entity_name,
-            neighbor.name as hub_name,
-            [m IN members | {id: m.id, name: m.name}][..5] as community_members
-        LIMIT 10
-        """
-        
-        results = await neo4j_client.execute_query(query, {
-            "entity_ids": entity_ids,
-            "graph_id": str(graph_id)
-        })
-        
-        communities = []
-        for result in results:
-            communities.append({
-                "entity": result["entity_name"],
-                "hub": result["hub_name"],
-                "members": result["community_members"],
-                "type": "shared_neighbor_community"
-            })
-        
-        return {"communities": communities}
-
-    async def _get_influential_context_with_graph_id(
-        self, 
-        query: str, 
-        graph_id: UUID
-    ) -> Dict[str, Any]:
-        """Get highly connected nodes using Neo4j GDS PageRank with graph_id filtering"""
-        
-        try:
-            # Try advanced PageRank centrality with Neo4j GDS
-            pagerank_query = """
-            CALL {
-                // Create temporary graph projection
-                CALL gds.graph.project(
-                    'temp-pagerank-' + $graph_id,
-                    {
-                        Entity: {
-                            label: '*',
-                            properties: ['name'],
-                            nodeFilter: 'n.graph_id = "' + $graph_id + '"'
-                        }
-                    },
-                    {
-                        RELATIONSHIP: {
-                            type: '*',
-                            orientation: 'UNDIRECTED',
-                            relationshipFilter: 'r.graph_id = "' + $graph_id + '"'
-                        }
-                    }
-                )
-                YIELD graphName
-                
-                // Run PageRank algorithm
-                CALL gds.pageRank.stream('temp-pagerank-' + $graph_id)
-                YIELD nodeId, score
-                
-                // Get original nodes with scores
-                MATCH (node)
-                WHERE id(node) = nodeId AND node.graph_id = $graph_id
-                
-                WITH node, score
-                ORDER BY score DESC
-                LIMIT 10
-                
-                RETURN node.id as entity_id,
-                    node.name as entity_name,
-                    score as pagerank_score,
-                    labels(node) as labels
-            }
-            
-            // Clean up temporary graph
-            CALL gds.graph.drop('temp-pagerank-' + $graph_id, false)
-            YIELD graphName as droppedGraph
-            
-            RETURN entity_id, entity_name, pagerank_score, labels
-            """
-            
-            results = await neo4j_client.execute_query(pagerank_query, {
-                "graph_id": str(graph_id)
-            })
-            
-            influential = []
-            for result in results:
-                influential.append({
-                    "id": result["entity_id"],
-                    "name": result["entity_name"],
-                    "pagerank_score": result["pagerank_score"],
-                    "labels": result["labels"],
-                    "influence_type": "pagerank_centrality"
-                })
-            
-            return {"influential": influential}
-            
-        except Exception as e:
-            logger.warning(f"Advanced PageRank failed: {e}")
-            # Fallback to simple degree centrality
-            return await self._get_simple_influential_context_with_graph_id(query, graph_id)
-
-    async def _get_simple_influential_context_with_graph_id(
-        self, 
-        query: str, 
-        graph_id: UUID
-    ) -> Dict[str, Any]:
-        """Fallback influential nodes based on degree centrality with graph_id filtering"""
-        
-        # Find high-degree nodes in this specific graph
-        cypher_query = """
-        MATCH (n)
-        WHERE n.graph_id = $graph_id
-        
-        OPTIONAL MATCH (n)-[r]-()
-        WHERE r.graph_id = $graph_id
-        
-        WITH n, count(r) as degree
-        WHERE degree > 3  // Nodes with more than 3 connections
-        ORDER BY degree DESC
-        LIMIT 10
-        
-        RETURN n.name as name, 
-            n.id as id, 
-            degree,
-            labels(n) as labels,
-            n{.*} as properties
-        """
-        
-        results = await neo4j_client.execute_query(cypher_query, {
-            "graph_id": str(graph_id)
-        })
-        
-        influential = []
-        for result in results:
-            influential.append({
-                "name": result["name"],
-                "id": result["id"],
-                "degree": result["degree"],
-                "labels": result["labels"],
-                "properties": result["properties"],
-                "influence_type": "degree_centrality"
-            })
-        
-        return {"influential": influential}
-
-    async def _get_temporal_context_with_graph_id(
-        self, 
-        entities: List[Dict[str, Any]], 
-        graph_id: UUID
-    ) -> Dict[str, Any]:
-        """Get temporal/time-based context with graph_id filtering"""
-        
-        if not entities:
-            return {"temporal": []}
-        
-        entity_ids = [e["id"] for e in entities]
-        
-        # Look for date-related properties in relationships and nodes
-        query = """
-        MATCH (n)-[r]-(m)
-        WHERE n.id IN $entity_ids 
-        AND n.graph_id = $graph_id 
-        AND r.graph_id = $graph_id 
-        AND m.graph_id = $graph_id
-        AND (
-            r.start_date IS NOT NULL OR 
-            r.end_date IS NOT NULL OR 
-            r.date IS NOT NULL OR 
-            r.year IS NOT NULL OR
-            r.created_at IS NOT NULL OR
-            r.timestamp IS NOT NULL OR
-            n.birth_date IS NOT NULL OR
-            n.founded IS NOT NULL OR
-            m.birth_date IS NOT NULL OR
-            m.founded IS NOT NULL
-        )
-        
-        WITH n, r, m,
-            coalesce(
-                r.start_date, 
-                r.end_date, 
-                r.date, 
-                r.year, 
-                r.created_at,
-                r.timestamp,
-                n.birth_date, 
-                n.founded,
-                m.birth_date,
-                m.founded
-            ) as date_info
-        
-        WHERE date_info IS NOT NULL
-        
-        RETURN n.name as entity_name,
-            type(r) as relationship_type,
-            m.name as connected_entity,
-            date_info,
-            r{.*} as relationship_properties
-        ORDER BY date_info DESC
-        LIMIT 20
-        """
-        
-        results = await neo4j_client.execute_query(query, {
-            "entity_ids": entity_ids,
-            "graph_id": str(graph_id)
-        })
-        
-        temporal = []
-        for result in results:
-            temporal.append({
-                "entity": result["entity_name"],
-                "relationship": result["relationship_type"],
-                "connected_to": result["connected_entity"],
-                "date": str(result["date_info"]),  # Convert to string for JSON serialization
-                "relationship_properties": result["relationship_properties"],
-                "context_type": "temporal"
-            })
-        
-        return {"temporal": temporal}
-
-    async def _get_related_entities(
-        self, 
-        query: str, 
-        limit: int = 5
-    ) -> List[Dict[str, Any]]:
-        """Get related entities using search_service with current graph filtering"""
-        
-        try:
-            if not self.current_graph_id:
-                return []
-            
-            # Use search_service to find semantically similar entities
-            similar_entities = await search_service.similarity_search_entities(
-                query=query,
-                graph_id=self.current_graph_id,
-                k=limit,
-                threshold=0.5  # Lower threshold for more results
-            )
-            
-            return similar_entities
-            
-        except Exception as e:
-            logger.warning(f"Failed to get related entities: {e}")
-            return []
-
-    async def _get_community_insights_for_query(self, query: str) -> Dict[str, Any]:
-        """Get community-based insights for the current query"""
-        
-        try:
-            if not self.current_graph_id:
-                return {}
-            
-            # Extract entities from query
-            query_entities = await self._extract_entities_from_query(query)
-            
-            if not query_entities:
-                return {"insight": "No specific entities detected in query"}
-            
-            # Get communities for these entities
-            entity_matches = []
-            for entity_name in query_entities[:3]:  # Limit to top 3 entities
-                matches = await self._find_entity_matches_with_graph_id(entity_name, self.current_graph_id)
-                entity_matches.extend(matches[:2])  # Top 2 matches per entity
-            
-            if not entity_matches:
-                return {"insight": "No matching entities found in graph"}
-            
-            # Get community context for matched entities
-            community_context = await self._get_community_context_with_graph_id(
-                entity_matches, self.current_graph_id
-            )
-            
-            communities = community_context.get("communities", [])
-            
-            if not communities:
-                return {"insight": "Entities appear to be isolated (no strong communities detected)"}
-            
-            # Generate insights
-            total_communities = len(communities)
-            largest_community_size = max((c.get("size", 0) for c in communities), default=0)
-            
-            insights = {
-                "total_communities": total_communities,
-                "largest_community_size": largest_community_size,
-                "community_types": list(set(c.get("type", "unknown") for c in communities)),
-                "insight": f"Found {total_communities} communities. Largest has {largest_community_size} members.",
-                "communities_summary": [
-                    {
-                        "type": c.get("type", "unknown"),
-                        "size": c.get("size", len(c.get("members", []))),
-                        "sample_members": [m.get("name") for m in c.get("members", [])][:3]
-                    }
-                    for c in communities[:3]  # Top 3 communities
-                ]
-            }
-            
-            return insights
-            
-        except Exception as e:
-            logger.warning(f"Failed to get community insights: {e}")
-            return {"error": str(e)}
-
-    async def _get_relevant_graph_statistics(self) -> Dict[str, Any]:
-        """Get relevant graph statistics for current graph"""
-        
-        try:
-            if not self.current_graph_id:
-                return {}
-            
-            # Basic graph statistics
-            stats_query = """
-            MATCH (n)
-            WHERE n.graph_id = $graph_id
-            WITH count(n) as node_count
-            
-            MATCH ()-[r]-()
-            WHERE r.graph_id = $graph_id
-            WITH node_count, count(r) as rel_count
-            
-            MATCH (n)
-            WHERE n.graph_id = $graph_id
-            WITH node_count, rel_count, labels(n) as node_labels
-            UNWIND node_labels as label
-            WITH node_count, rel_count, label
-            WHERE label <> 'Entity'  // Skip generic labels
-            
-            WITH node_count, rel_count, collect(DISTINCT label) as entity_types
-            
-            MATCH ()-[r]-()
-            WHERE r.graph_id = $graph_id
-            WITH node_count, rel_count, entity_types, type(r) as rel_type
-            
-            RETURN node_count,
-                rel_count,
-                entity_types,
-                collect(DISTINCT rel_type) as relationship_types
-            """
-            
-            result = await neo4j_client.execute_query(stats_query, {
-                "graph_id": str(self.current_graph_id)
-            })
-            
-            if result:
-                stats = result[0]
-                node_count = stats["node_count"]
-                rel_count = stats["rel_count"]
-                
-                return {
-                    "node_count": node_count,
-                    "relationship_count": rel_count,
-                    "density": rel_count / (node_count * (node_count - 1)) if node_count > 1 else 0,
-                    "entity_types": stats["entity_types"][:10],  # Top 10 types
-                    "relationship_types": stats["relationship_types"][:10],  # Top 10 types
-                    "avg_degree": (2 * rel_count / node_count) if node_count > 0 else 0
-                }
-            else:
-                return {"node_count": 0, "relationship_count": 0}
-                
-        except Exception as e:
-            logger.warning(f"Failed to get graph statistics: {e}")
-            return {"error": str(e)}
-
-    async def _precompute_graph_statistics(self) -> None:
-        """Precompute and cache graph statistics for better performance"""
-        
-        try:
-            if not self.current_graph_id:
-                return
-            
-            # Get comprehensive statistics
-            self.graph_statistics = await self._get_relevant_graph_statistics()
-            
-            # Cache timestamp
-            self.graph_statistics["computed_at"] = datetime.now()
-            
-            logger.info(f"Precomputed statistics for graph {self.current_graph_id}: "
-                    f"{self.graph_statistics.get('node_count', 0)} nodes, "
-                    f"{self.graph_statistics.get('relationship_count', 0)} relationships")
-            
-        except Exception as e:
-            logger.warning(f"Failed to precompute graph statistics: {e}")
-            self.graph_statistics = {
-                "error": str(e),
-                "node_count": 0,
-                "relationship_count": 0
-            }
-    
-    # ==================== OTHER METHODS (preserved from original) ====================
-    
-    def _build_vector_context(self, entity_results: List[Dict], chunk_results: List[Dict]) -> Dict[str, str]:
-        """Build context from vector search results (RESTORED)"""
-        
-        entities_text = "\n".join([
-            f"- {entity['name']}: {entity.get('description', 'No description')}"
-            for entity in entity_results[:5]
-        ])
-        
-        chunks_text = "\n".join([
-            f"- {chunk['text'][:200]}..."
-            for chunk in chunk_results[:3]
-        ])
-        
-        return {
-            "entities": entities_text or "No relevant entities found",
-            "chunks": chunks_text or "No relevant text found"
-        }
-    
-    def _build_graphrag_context(
-        self,
-        query_entities: List[str],
-        similar_entities: List[Dict],
-        neighborhoods: List[Dict],
-        text_chunks: List[Dict]
-    ) -> str:
-        """Build comprehensive GraphRAG context (RESTORED)"""
-        
-        context_parts = []
-        
-        if query_entities:
-            context_parts.append(f"Query mentions: {', '.join(query_entities)}")
-        
-        if similar_entities:
-            entities_info = "\n".join([
-                f"- {e['name']} (similarity: {e.get('score', 0):.2f})"
-                for e in similar_entities[:5]
-            ])
-            context_parts.append(f"Relevant entities:\n{entities_info}")
-        
-        if text_chunks:
-            chunks_info = "\n".join([
-                f"- {chunk['text'][:150]}..."
-                for chunk in text_chunks[:3]
-            ])
-            context_parts.append(f"Relevant text:\n{chunks_info}")
-        
-        return "\n\n".join(context_parts)
-    
-    async def _generate_graphrag_answer(self, query: str, context: str) -> str:
-        """Generate GraphRAG answer (RESTORED)"""
-        
-        rag_prompt = f"""
-        You are an AI assistant with access to knowledge graph {self.current_graph_id}. 
-        Answer the user's question using the provided context.
-        
-        Question: {query}
-        
-        Context from Knowledge Graph:
-        {context}
-        
-        Instructions:
-        1. Use ONLY the provided context
-        2. Mention specific entities and relationships when relevant
-        3. If information is incomplete, acknowledge this
-        4. Be conversational but accurate
-        
-        Answer:
-        """
-        
-        response = await llm_service.llm.ainvoke(
-            rag_prompt,
-            temperature=0.2  # Low temperature for accuracy
-        )
-        return response.content
-    
-    async def _combine_answers(
-        self, 
-        query: str, 
-        vector_result: Dict, 
-        cypher_result: Dict
-    ) -> str:
-        """Combine answers from different methods (RESTORED)"""
-        
-        combine_prompt = f"""
-        I have two answers to the question "{query}" from different methods. Combine them into one comprehensive answer.
-        
-        Vector Search Answer: {vector_result['answer']}
-        
-        Graph Query Answer: {cypher_result['answer']}
-        
-        Provide a single, well-structured answer that incorporates the best insights from both. Remove redundancy and ensure coherence.
-        """
-        
-        response = await llm_service.llm.ainvoke(
-            combine_prompt,
-            temperature=0.2  # Low temperature for consistent combining
-        )
-        return response.content
-    
-    async def _create_cypher_chain(self, schema: Dict[str, Any]):
-        """Create Cypher QA chain (RESTORED)"""
-        # Placeholder for future langchain integration
-        return None
-    
-    async def _classify_query_type(self, query: str) -> str:
-        """Classify query type (RESTORED)"""
-        
-        query_lower = query.lower()
-        
-        if any(word in query_lower for word in ["who is", "who are", "tell me about"]):
-            return "entity_information"
-        elif any(word in query_lower for word in ["how are", "connected", "relationship"]):
-            return "relationship_query" 
-        elif any(word in query_lower for word in ["find", "search", "show me"]):
-            return "discovery_query"
-        elif any(word in query_lower for word in ["why", "explain", "reason"]):
-            return "explanation_query"
+        # COMMUNITY_SUMMARY bypasses the GraphRAG retriever pipeline — skip
+        # RetrieverConfig construction (CommunitySummaryRetriever is instantiated
+        # directly in _setup_retriever).
+        if retriever_type == RetrieverType.COMMUNITY_SUMMARY:
+            self.retriever_config = None  # type: ignore[assignment]
         else:
-            return "general_query"
-    
-    # ==================== BACKWARD COMPATIBILITY METHODS ====================
-    
-    async def _generate_graph_context(
-        self,
-        query: str,
-        reasoning_mode: ReasoningMode,
-        max_context_size: int = 4000
-    ) -> GraphContext:
-        """Backward compatibility wrapper"""
-        return await self._generate_graph_context_with_graph_id(
-            query, self.current_graph_id, reasoning_mode, max_context_size
+            default_config = get_default_retriever_config(retriever_type, graph_id)
+
+            if retriever_type == RetrieverType.VECTOR:
+                typed_config = cast(VectorRetrieverConfig, default_config)
+            elif retriever_type == RetrieverType.VECTOR_CYPHER:
+                typed_config = cast(VectorCypherRetrieverConfig, default_config)
+            elif retriever_type == RetrieverType.HYBRID:
+                typed_config = cast(HybridRetrieverConfig, default_config)
+            elif retriever_type == RetrieverType.HYBRID_CYPHER:
+                typed_config = cast(HybridCypherRetrieverConfig, default_config)
+            elif retriever_type == RetrieverType.TEXT2CYPHER:
+                typed_config = cast(Text2CypherRetrieverConfig, default_config)
+            else:
+                raise ValueError(f"Unsupported retriever type: {retriever_type}")
+
+            self.retriever_config = RetrieverConfig(
+                type=retriever_type, config=typed_config
+            )
+
+        self.embedder = OpenAIEmbeddings(
+            api_key=settings.OPENAI_API_KEY, model="text-embedding-3-large"
         )
-    
-    async def _generate_grounded_response(
-        self,
-        query: str,
-        context: GraphContext
-    ) -> Dict[str, Any]:
-        """Generate grounded response (enhanced)"""
-        
-        context_text = self._format_context_for_llm(context)
-        
-        system_prompt = f"""
-        You are a knowledge graph assistant for graph {self.current_graph_id}. 
-        Answer using ONLY the provided graph context.
-        
-        RULES:
-        1. Use ONLY information from the graph context below
-        2. If the answer isn't in the context, say "I don't have that information in the knowledge graph"
-        3. Cite specific entities and relationships when possible
-        4. Be precise and factual
-        
-        GRAPH CONTEXT:
-        {context_text}
-        
-        REASONING CHAIN:
-        {' → '.join(context.reasoning_chain)}
+
+        self.llm = OpenAILLM(
+            model_name="gpt-4o",
+            api_key=settings.OPENAI_API_KEY,
+            model_params={"temperature": 0.1},
+        )
+
+        self.retriever = None
+        self.rag = None
+        self._cache: QueryCacheService | None = cache
+
+        logger.info(
+            f"ChatService initialized for graph {graph_id} "
+            f"with {retriever_type.value} retriever"
+        )
+
+    async def initialize(self):
+        """Async initialization of retriever and GraphRAG components."""
+        await self._setup_retriever()
+
+        if self.retriever_type == RetrieverType.COMMUNITY_SUMMARY:
+            # CommunitySummaryRetriever does not use GraphRAG — skip rag setup.
+            logger.info(
+                f"CommunitySummaryRetriever initialized for graph {self.graph_id}"
+            )
+            return
+
+        if self.retriever:
+            self.rag = GraphRAG(retriever=self.retriever, llm=self.llm)
+            logger.info(f"GraphRAG initialized successfully for graph {self.graph_id}")
+        else:
+            raise RuntimeError("Failed to initialize retriever and GraphRAG")
+
+    async def _setup_retriever(self):
+        """Set up retriever using factory pattern with full-text index management."""
+        try:
+            # CommunitySummaryRetriever is instantiated directly — it does not go
+            # through the RetrieverFactory / GraphRAG pipeline.
+            if self.retriever_type == RetrieverType.COMMUNITY_SUMMARY:
+                self.retriever = CommunitySummaryRetriever(graph_id=self.graph_id)
+                logger.info(
+                    f"Created CommunitySummaryRetriever for graph {self.graph_id}"
+                )
+                return
+
+            if self.retriever_type in [
+                RetrieverType.HYBRID,
+                RetrieverType.HYBRID_CYPHER,
+            ]:
+                await fulltext_index_manager.setup_default_indexes(self.graph_id)
+
+            self.retriever = await retriever_factory.create_retriever(
+                retriever_config=self.retriever_config, graph_id=self.graph_id
+            )
+
+            if not self.retriever:
+                raise RuntimeError(
+                    f"Factory failed to create {self.retriever_type.value} retriever"
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to setup retriever: {e}")
+            try:
+                fallback_config = get_default_retriever_config(
+                    RetrieverType.VECTOR, self.graph_id
+                )
+                typed_fallback = cast(VectorRetrieverConfig, fallback_config)
+                fallback_retriever_config = RetrieverConfig(
+                    type=RetrieverType.VECTOR, config=typed_fallback
+                )
+                self.retriever = await retriever_factory.create_retriever(
+                    retriever_config=fallback_retriever_config, graph_id=self.graph_id
+                )
+                self.retriever_config = fallback_retriever_config
+                self.retriever_type = RetrieverType.VECTOR
+                logger.warning(
+                    f"Using fallback vector retriever for graph {self.graph_id}"
+                )
+            except Exception as fallback_error:
+                logger.error(f"Fallback retriever creation failed: {fallback_error}")
+                raise RuntimeError("Failed to create any retriever") from fallback_error
+
+    # ------------------------------------------------------------------
+    # Temporal WHERE clause builder (TASK-007)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_temporal_filter(
+        temporal_mode: TemporalMode | None,
+        temporal_at: datetime | None,
+        temporal_since: datetime | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build a trusted Cypher WHERE clause fragment and parameter dict.
+
+        The clause text is constructed from internal constants only — it never
+        contains user-supplied strings.  All datetime values are bound as Cypher
+        parameters ($temporal_at / $temporal_since) and must be forwarded via
+        query_params; they are never interpolated into the query string.
+
+        Modes:
+            POINT_IN_TIME:   relationships where event_time <= $temporal_at
+                             AND (event_time_end IS NULL OR event_time_end >= $temporal_at)
+            KNOWLEDGE_AS_OF: relationships where ingestion_time <= $temporal_at
+            CHANGES_SINCE:   relationships where ingestion_time > $temporal_since
+
+        Returns:
+            (clause, params) — both empty when temporal_mode is None, preserving
+            identical behavior to pre-TASK-007 callers (backward compatible).
         """
-        
-        try:
-            response = await llm_service.llm.ainvoke([
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Question: {query}"}
-            ], temperature=0.1)  # Very low temperature
-            
-            is_grounded = await self._validate_response_grounding(
-                response.content, context_text
+        if temporal_mode == TemporalMode.POINT_IN_TIME:
+            clause = (
+                "(r.event_time IS NULL OR r.event_time <= $temporal_at)"
+                " AND (r.event_time_end IS NULL OR r.event_time_end >= $temporal_at)"
             )
-            
-            return {
-                "answer": response.content,
-                "grounded": is_grounded,
-                "success": True
+            params: dict[str, Any] = {
+                "temporal_at": temporal_at.isoformat() if temporal_at else None
             }
-            
-        except Exception as e:
-            logger.error(f"Response generation failed: {e}")
-            return {
-                "answer": "I encountered an error while processing your question.",
-                "grounded": False,
-                "error": str(e),
-                "success": False
+        elif temporal_mode == TemporalMode.KNOWLEDGE_AS_OF:
+            clause = "r.ingestion_time <= $temporal_at"
+            params = {
+                "temporal_at": temporal_at.isoformat() if temporal_at else None
             }
-    
-    def _format_context_for_llm(self, context: GraphContext) -> str:
-        """Format graph context for LLM"""
-        
-        formatted_parts = []
-        
-        if context.primary_entities:
-            entities_text = ", ".join([
-                f"{e['name']} ({', '.join(e.get('labels', []))})" 
-                for e in context.primary_entities
-            ])
-            formatted_parts.append(f"PRIMARY ENTITIES: {entities_text}")
-        
-        if context.relationships:
-            rels_text = "\n".join([
-                f"- {r.get('source', 'Unknown')} {r.get('type', 'RELATED_TO')} {r.get('target', 'Unknown')}"
-                for r in context.relationships[:10]
-            ])
-            formatted_parts.append(f"RELATIONSHIPS:\n{rels_text}")
-        
-        if context.pathways:
-            pathways_text = "\n".join([
-                f"- Path: {' → '.join(p['nodes'])} (via: {', '.join(p['relationships'])})"
-                for p in context.pathways[:5]
-            ])
-            formatted_parts.append(f"CONNECTION PATHWAYS:\n{pathways_text}")
-        
-        return "\n\n".join(formatted_parts)
-    
-    async def _generate_followup_suggestions(self, query: str, context: GraphContext) -> List[str]:
-        """Generate follow-up suggestions"""
-        
-        suggestions = []
-        
-        if context.primary_entities:
-            entity_names = [e["name"] for e in context.primary_entities[:2]]
-            suggestions.append(f"Tell me more about the relationships between {' and '.join(entity_names)}")
-        
-        if context.communities:
-            suggestions.append("What other entities are in this community?")
-        
-        if context.pathways:
-            suggestions.append("Are there any other connection paths I should know about?")
-        
-        return suggestions[:3]
-    
-    # ==================== MAIN INTERFACE METHODS ====================
-    
-    async def explain_reasoning(self, query: str) -> Dict[str, Any]:
-        """Explain reasoning process"""
-        
-        if not self.current_graph_id:
-            return {"error": "No graph initialized"}
-        
-        try:
-            graph_context = await self._generate_graph_context_with_graph_id(
-                query=query,
-                graph_id=self.current_graph_id,
-                reasoning_mode=ReasoningMode.FOCUSED,
-                max_context_size=2000
+        elif temporal_mode == TemporalMode.CHANGES_SINCE:
+            clause = "r.ingestion_time > $temporal_since"
+            params = {
+                "temporal_since": (
+                    temporal_since.isoformat() if temporal_since else None
+                )
+            }
+        else:
+            return "", {}
+
+        return clause, params
+
+    async def search_cached(
+        self,
+        query_text: str,
+        retriever_config: dict[str, Any] | None = None,
+        return_context: bool = False,
+        examples: str = "",
+        temporal_filter: TemporalFilter | None = None,
+        temporal_mode: TemporalMode | None = None,
+        temporal_at: datetime | None = None,
+        temporal_since: datetime | None = None,
+    ) -> "tuple[GroundedSearchResult, bool]":
+        """Cache-aware wrapper around search().
+
+        Checks the Redis query cache before invoking the full RAG pipeline.
+        Cache key includes graph_id and retriever_type — guarantees cross-tenant
+        isolation (Architecture Rule: graph_id on every key).
+
+        Temporal queries are NOT cached: a temporal filter changes the result set
+        and would require a different key per timestamp, making invalidation
+        impractical. Only stateless (non-temporal) queries are cached.
+
+        Returns:
+            (result, cache_hit) — cache_hit is True when the result came from Redis.
+        """
+        # Skip cache entirely when temporal filtering is active:
+        # results are time-scoped and may change without a new ingest event.
+        is_temporal = bool(temporal_mode or temporal_filter)
+
+        if self._cache and not is_temporal:
+            cached_dict = await self._cache.get(
+                self.graph_id, query_text, self.retriever_type.value
             )
-            
-            return {
-                "query_analysis": {
-                    "query_type": await self._classify_query_type(query),
-                    "entities_recognized": len(graph_context.primary_entities)
+            if cached_dict is not None:
+                logger.info(
+                    "Cache HIT for graph %s retriever %s",
+                    self.graph_id,
+                    self.retriever_type.value,
+                )
+                result = GroundedSearchResult(
+                    answer=cached_dict.get("answer", ""),
+                    sources=cached_dict.get("sources", []),
+                    confidence=cached_dict.get("confidence", 0.0),
+                    is_grounded=cached_dict.get("is_grounded", True),
+                    retriever_used=cached_dict.get(
+                        "retriever_used", self.retriever_type.value
+                    ),
+                )
+                return result, True
+
+        # Cache miss (or cache disabled / temporal query) — run full pipeline.
+        result = await self.search(
+            query_text=query_text,
+            retriever_config=retriever_config,
+            return_context=return_context,
+            examples=examples,
+            temporal_filter=temporal_filter,
+            temporal_mode=temporal_mode,
+            temporal_at=temporal_at,
+            temporal_since=temporal_since,
+        )
+
+        if self._cache and not is_temporal:
+            await self._cache.set(
+                self.graph_id,
+                query_text,
+                self.retriever_type.value,
+                {
+                    "answer": result.answer,
+                    "sources": result.sources,
+                    "confidence": result.confidence,
+                    "is_grounded": result.is_grounded,
+                    "retriever_used": result.retriever_used,
                 },
-                "graph_analysis_steps": graph_context.reasoning_chain,
-                "context_sources": {
-                    "direct_matches": len(graph_context.primary_entities),
-                    "neighborhood_expansion": len(graph_context.neighborhoods),
-                    "pathway_analysis": len(graph_context.pathways),
-                    "community_context": len(graph_context.communities)
-                },
-                "confidence_assessment": graph_context.confidence_scores,
-                "reasoning_strategy": "Graph algorithms find relevant entities, analyze relationships, discover patterns, provide grounded response."
-            }
-            
+            )
+
+        return result, False
+
+    async def search(
+        self,
+        query_text: str,
+        retriever_config: dict[str, Any] | None = None,
+        return_context: bool = False,
+        examples: str = "",
+        temporal_filter: TemporalFilter | None = None,
+        temporal_mode: TemporalMode | None = None,
+        temporal_at: datetime | None = None,
+        temporal_since: datetime | None = None,
+    ) -> GroundedSearchResult:
+        """
+        Perform a graph-grounded GraphRAG search with hallucination prevention.
+
+        Always retrieves context internally to:
+        - Detect insufficient data before passing to the LLM
+        - Extract source citations from retrieved graph nodes
+        - Calculate confidence from retrieval scores
+        - Use the strict grounding prompt to prevent external knowledge leakage
+
+        Args:
+            query_text: User's question
+            retriever_config: Configuration for retriever (e.g., top_k)
+            return_context: Whether to include retriever_result in the returned object
+            examples: Examples for few-shot learning
+            temporal_filter: Legacy TemporalFilter for multi-hop enrichment scoping
+            temporal_mode: Bitemporal query mode (point_in_time / knowledge_as_of /
+                changes_since).  When set, injects a Cypher WHERE clause on
+                relationship temporal properties via query_params.  Omitting this
+                produces identical behavior to the pre-TASK-007 baseline.
+            temporal_at: Reference timestamp for point_in_time and knowledge_as_of.
+            temporal_since: Reference timestamp for changes_since.
+
+        Returns:
+            GroundedSearchResult with answer, sources, confidence, and grounding flag
+        """
+        # Build temporal WHERE clause + params (TASK-007).
+        # An empty clause means no temporal filtering — backward compatible.
+        temporal_clause, temporal_params = self._build_temporal_filter(
+            temporal_mode, temporal_at, temporal_since
+        )
+
+        with _chat_tracer.start_as_current_span(
+            "chat.query",
+            kind=otel_trace.SpanKind.INTERNAL,
+        ) as span:
+            span.set_attribute("graph_id", self.graph_id)
+            span.set_attribute("chat.retriever_type", self.retriever_type.value)
+            span.set_attribute("chat.query.length", len(query_text))
+            if temporal_mode:
+                span.set_attribute("chat.temporal_mode", temporal_mode.value)
+            return await self._search_inner(
+                span,
+                query_text,
+                retriever_config,
+                return_context,
+                examples,
+                temporal_filter,
+                temporal_clause,
+                temporal_params,
+            )
+
+    async def _search_inner(
+        self,
+        span,
+        query_text: str,
+        retriever_config: dict[str, Any] | None,
+        return_context: bool,
+        examples: str,
+        temporal_filter: TemporalFilter | None,
+        temporal_clause: str = "",
+        temporal_params: dict[str, Any] | None = None,
+    ) -> "GroundedSearchResult":
+        try:
+            # ------------------------------------------------------------------
+            # Community summary fast path — bypasses GraphRAG vector pipeline.
+            # ------------------------------------------------------------------
+            if self.retriever_type == RetrieverType.COMMUNITY_SUMMARY:
+                return await self._community_summary_search(span, query_text)
+
+            if not self.rag:
+                await self.initialize()
+
+            if not self.rag:
+                raise RuntimeError("GraphRAG not properly initialized")
+
+            logger.info(f"Processing grounded search for graph {self.graph_id}")
+
+            # Merge temporal query parameters into the retriever_config so that
+            # Cypher-capable retrievers (VECTOR_CYPHER, HYBRID_CYPHER) can bind
+            # the $temporal_at / $temporal_since placeholders in their queries.
+            # Values are always passed as parameters — never interpolated into query text.
+            effective_retriever_config = dict(retriever_config or {"top_k": 5})
+            if temporal_clause and temporal_params:
+                existing_params = effective_retriever_config.get("query_params") or {}
+                effective_retriever_config["query_params"] = {
+                    **existing_params,
+                    **temporal_params,
+                }
+
+            # Always request context so we can inspect retrieved items.
+            raw_result: RagResultModel = self.rag.search(
+                query_text=query_text,
+                retriever_config=effective_retriever_config,
+                return_context=True,
+                examples=examples,
+                prompt_template=STRICT_GROUNDING_PROMPT,
+            )
+
+            # Collect and sort retriever items by relevance score (desc).
+            retriever_items = []
+            if raw_result.retriever_result:
+                retriever_items = list(
+                    getattr(raw_result.retriever_result, "items", []) or []
+                )
+            retriever_items.sort(
+                key=lambda item: getattr(item, "score", None) or 0.0, reverse=True
+            )
+
+            # If retrieval is sparse, attempt 2-hop entity-anchor enrichment.
+            if len(retriever_items) < 3:
+                entity_candidates = self.detect_entity_candidates(query_text)
+                if entity_candidates:
+                    multihop_rows = await self._multihop_enrich(
+                        entity_candidates, temporal_filter=temporal_filter
+                    )
+                    if multihop_rows:
+                        logger.info(
+                            f"Multi-hop enrichment added {len(multihop_rows)} rows "
+                            f"for graph {self.graph_id}"
+                        )
+                        # Re-run GraphRAG with enriched context hint in retriever_config.
+                        # We append the hop data as additional context in a second pass
+                        # only when the original retrieval returned nothing useful.
+                        if len(retriever_items) < _MIN_CONTEXT_ITEMS:
+                            hop_context = "; ".join(
+                                f"{r['anchor']} -[{r['rel1']}]-> {r['hop1_name']}"
+                                for r in multihop_rows
+                                if r.get("anchor") and r.get("hop1_name")
+                            )
+                            augmented_query = (
+                                f"{query_text}\n\n" f"[Graph context: {hop_context}]"
+                            )
+                            raw_result = self.rag.search(
+                                query_text=augmented_query,
+                                retriever_config=effective_retriever_config,
+                                return_context=True,
+                                examples=examples,
+                                prompt_template=STRICT_GROUNDING_PROMPT,
+                            )
+                            if raw_result.retriever_result:
+                                retriever_items = list(
+                                    getattr(raw_result.retriever_result, "items", [])
+                                    or []
+                                )
+                                retriever_items.sort(
+                                    key=lambda item: getattr(item, "score", None)
+                                    or 0.0,
+                                    reverse=True,
+                                )
+
+            # No context retrieved — return structured no-data response.
+            if len(retriever_items) < _MIN_CONTEXT_ITEMS:
+                logger.warning(
+                    f"No graph context retrieved for graph {self.graph_id}. "
+                    "Returning insufficient-data response."
+                )
+                return GroundedSearchResult(
+                    answer=(
+                        "The knowledge graph does not contain sufficient data "
+                        "to answer this question."
+                    ),
+                    sources=[],
+                    confidence=0.0,
+                    is_grounded=False,
+                    retriever_used=self.retriever_type.value,
+                    retriever_result=(
+                        raw_result.retriever_result if return_context else None
+                    ),
+                )
+
+            sources = self._extract_sources(retriever_items)
+            confidence = self._calculate_confidence(retriever_items)
+
+            # Detect if the LLM itself signalled insufficient data.
+            answer = raw_result.answer or ""
+            is_grounded = not answer.strip().startswith(_INSUFFICIENT_PREFIX)
+
+            if not is_grounded:
+                answer = (
+                    "The knowledge graph does not contain sufficient data "
+                    "to answer this question."
+                )
+                confidence = max(confidence * 0.3, 0.0)
+
+            logger.info(
+                f"Grounded search complete — grounded={is_grounded}, "
+                f"confidence={confidence:.2f}, sources={len(sources)}"
+            )
+
+            span.set_attribute("chat.is_grounded", is_grounded)
+            span.set_attribute("chat.confidence", round(confidence, 4))
+            span.set_attribute("chat.sources_count", len(sources))
+            span.set_attribute("chat.hallucination_flag", not is_grounded)
+
+            return GroundedSearchResult(
+                answer=answer,
+                sources=sources,
+                confidence=confidence,
+                is_grounded=is_grounded,
+                retriever_used=self.retriever_type.value,
+                retriever_result=(
+                    raw_result.retriever_result if return_context else None
+                ),
+            )
+
+        except _LLM_DOWN_EXCEPTIONS as e:
+            # LLM timeout or rate-limit — return available graph context without an answer.
+            _llm_err_code, _llm_err_msg = KGBError.LLM_UNAVAILABLE
+            logger.warning(
+                f"LLM unavailable for graph {self.graph_id} "
+                f"[{_llm_err_code}]: {e}"
+            )
+            span.record_exception(e)
+            span.set_status(otel_trace.StatusCode.ERROR, str(e))
+            return GroundedSearchResult(
+                answer=None,  # type: ignore[arg-type]
+                sources=[],
+                confidence=0.0,
+                is_grounded=False,
+                retriever_used=self.retriever_type.value,
+                retriever_result=None,
+            )
         except Exception as e:
-            logger.error(f"Reasoning explanation failed: {e}")
-            return {"error": str(e)}
-    
-    def get_conversation_summary(self) -> Dict[str, Any]:
-        """Get conversation summary"""
-        
-        return {
-            "graph_id": str(self.current_graph_id) if self.current_graph_id else None,
-            "conversation_length": len(self.conversation_history),
-            "reasoning_history_length": len(self.reasoning_history),
-            "recent_entities_discussed": [
-                entity for context in self.conversation_history[-3:]
-                for entity in context.get("entities_discussed", [])
-            ],
-            "available_modes": [mode.value for mode in ChatMode],
-            "graph_statistics": self.graph_statistics
-        }
+            logger.error(f"GraphRAG search failed for graph {self.graph_id}: {e}")
+            span.record_exception(e)
+            span.set_status(otel_trace.StatusCode.ERROR, str(e))
+            return GroundedSearchResult(
+                answer=f"An error occurred while searching the knowledge graph: {str(e)}",
+                sources=[],
+                confidence=0.0,
+                is_grounded=False,
+                retriever_used=self.retriever_type.value,
+            )
 
-# ==================== SINGLETON INSTANCE ====================
+    # ------------------------------------------------------------------
+    # Community summary retrieval
+    # ------------------------------------------------------------------
 
-chat_service = ChatService()
+    async def _community_summary_search(
+        self, span, query_text: str
+    ) -> GroundedSearchResult:
+        """
+        Retrieve Leiden community summaries and synthesise an answer via the LLM.
+
+        Bypasses the GraphRAG vector pipeline.  Summaries from Neo4j are passed
+        as plain text context; they are never interpolated into Cypher queries.
+        """
+        if not self.retriever:
+            await self.initialize()
+
+        assert isinstance(self.retriever, CommunitySummaryRetriever)
+
+        community_docs = await self.retriever.search(query_text)
+
+        if not community_docs:
+            logger.warning(
+                "No community summaries found for graph %s", self.graph_id
+            )
+            span.set_attribute("chat.is_grounded", False)
+            span.set_attribute("chat.confidence", 0.0)
+            span.set_attribute("chat.sources_count", 0)
+            span.set_attribute("chat.hallucination_flag", True)
+            return GroundedSearchResult(
+                answer=(
+                    "The knowledge graph does not contain sufficient data "
+                    "to answer this question."
+                ),
+                sources=[],
+                confidence=0.0,
+                is_grounded=False,
+                retriever_used=RetrieverType.COMMUNITY_SUMMARY.value,
+            )
+
+        # Build plain-text context from community summaries.
+        context_parts = [
+            f"[Community {doc['community_id']} — {doc['entity_count']} entities]\n"
+            f"{doc['summary']}"
+            for doc in community_docs
+        ]
+        context = "\n\n".join(context_parts)
+
+        prompt = STRICT_GROUNDING_PROMPT.format(
+            context=context, query_text=query_text
+        )
+        try:
+            llm_response = await self.llm.ainvoke(prompt)
+            answer = llm_response.content
+        except _LLM_DOWN_EXCEPTIONS as e:
+            _llm_err_code, _llm_err_msg = KGBError.LLM_UNAVAILABLE
+            logger.warning(
+                f"LLM unavailable during community summary search for graph "
+                f"{self.graph_id} [{_llm_err_code}]: {e}"
+            )
+            # Return context nodes without an LLM-synthesised answer.
+            sources = [
+                {
+                    "node_id": doc["community_id"],
+                    "node_labels": ["__Community__"],
+                    "content": doc["summary"][:500],
+                    "relevance_score": None,
+                    "properties": {"entity_count": doc["entity_count"]},
+                }
+                for doc in community_docs
+            ]
+            span.set_attribute("chat.is_grounded", False)
+            span.set_attribute("chat.confidence", 0.0)
+            span.set_attribute("chat.sources_count", len(sources))
+            span.set_attribute("chat.hallucination_flag", True)
+            return GroundedSearchResult(
+                answer=None,  # type: ignore[arg-type]
+                sources=sources,
+                confidence=0.0,
+                is_grounded=False,
+                retriever_used=RetrieverType.COMMUNITY_SUMMARY.value,
+            )
+
+        is_grounded = not answer.strip().startswith(_INSUFFICIENT_PREFIX)
+        if not is_grounded:
+            answer = (
+                "The knowledge graph does not contain sufficient data "
+                "to answer this question."
+            )
+
+        sources = [
+            {
+                "node_id": doc["community_id"],
+                "node_labels": ["__Community__"],
+                "content": doc["summary"][:500],
+                "relevance_score": None,
+                "properties": {"entity_count": doc["entity_count"]},
+            }
+            for doc in community_docs
+        ]
+        confidence = 0.7 if is_grounded else 0.0
+
+        logger.info(
+            "Community summary search complete — grounded=%s, sources=%d",
+            is_grounded,
+            len(sources),
+        )
+        span.set_attribute("chat.is_grounded", is_grounded)
+        span.set_attribute("chat.confidence", confidence)
+        span.set_attribute("chat.sources_count", len(sources))
+        span.set_attribute("chat.hallucination_flag", not is_grounded)
+
+        return GroundedSearchResult(
+            answer=answer,
+            sources=sources,
+            confidence=confidence,
+            is_grounded=is_grounded,
+            retriever_used=RetrieverType.COMMUNITY_SUMMARY.value,
+        )
+
+    # ------------------------------------------------------------------
+    # Auto retriever selection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def auto_select_retriever_type(query: str) -> RetrieverType:
+        """
+        Choose the most appropriate retriever type based on query characteristics.
+
+        Rules (evaluated in priority order):
+        1. Global/thematic keywords → COMMUNITY_SUMMARY for broad overview queries
+        2. Cypher/graph-query keywords → TEXT2CYPHER for precise traversal
+        3. Analytic / enumeration keywords → HYBRID for broader coverage
+        4. Relationship / connectivity keywords → VECTOR_CYPHER for graph traversal
+        5. Default → VECTOR_CYPHER (balanced precision + context)
+        """
+        if _is_global_query(query):
+            return RetrieverType.COMMUNITY_SUMMARY
+        if _CYPHER_PATTERNS.search(query):
+            return RetrieverType.TEXT2CYPHER
+        if _ANALYTIC_PATTERNS.search(query):
+            return RetrieverType.HYBRID
+        if _RELATIONSHIP_PATTERNS.search(query):
+            return RetrieverType.VECTOR_CYPHER
+        return RetrieverType.VECTOR_CYPHER
+
+    # ------------------------------------------------------------------
+    # Entity anchor detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def detect_entity_candidates(query: str) -> list[str]:
+        """
+        Extract likely named-entity tokens from a query string.
+
+        Heuristic: consecutive capitalised words (e.g. "TechNova Corp")
+        that do not appear in the stopword list and have length > 2.
+        Returns de-duplicated candidates preserving order.
+        """
+        # Split on whitespace/punctuation but keep original case.
+        tokens = re.split(r"[\s,;:!?.()\[\]\"']+", query)
+        candidates: list[str] = []
+        seen: set = set()
+
+        # Merge consecutive capital-starting tokens into multi-word names.
+        buffer: list[str] = []
+        for tok in tokens:
+            if len(tok) > 2 and tok[0].isupper() and tok.lower() not in _STOPWORDS:
+                buffer.append(tok)
+            else:
+                if buffer:
+                    phrase = " ".join(buffer)
+                    if phrase not in seen:
+                        candidates.append(phrase)
+                        seen.add(phrase)
+                    buffer = []
+        if buffer:
+            phrase = " ".join(buffer)
+            if phrase not in seen:
+                candidates.append(phrase)
+
+        return candidates
+
+    # ------------------------------------------------------------------
+    # Multi-hop enrichment
+    # ------------------------------------------------------------------
+
+    async def _multihop_enrich(
+        self,
+        entity_candidates: list[str],
+        top_k: int = 3,
+        temporal_filter: TemporalFilter | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Run 2-hop Cypher traversal anchored on detected entity candidates.
+
+        Uses the AsyncDriver (FastAPI-safe). Returns a list of context dicts
+        that can be injected alongside retriever results.
+        Always filters by self.graph_id — multi-tenancy enforced.
+        When temporal_filter is set, restricts r1 to facts valid at the given time.
+        """
+        enriched: list[dict[str, Any]] = []
+        driver = neo4j_client.async_driver
+        if driver is None:
+            logger.warning("Async driver unavailable — skipping multi-hop enrichment")
+            return enriched
+
+        # Build optional temporal WHERE clause for the first-hop relationship.
+        # ORA-138: Use Cypher parameters ($tf_pit) instead of f-string datetime
+        # interpolation to avoid injection and enable rel_valid_from/to indexes.
+        temporal_clause = ""
+        temporal_params: dict[str, Any] = {}
+        if temporal_filter:
+            if temporal_filter.current_only:
+                temporal_clause = "AND r1.valid_to IS NULL"
+            elif temporal_filter.point_in_time:
+                temporal_params["tf_pit"] = temporal_filter.point_in_time.isoformat()
+                temporal_clause = (
+                    "AND (r1.valid_from IS NULL OR r1.valid_from <= datetime($tf_pit))"
+                    " AND (r1.valid_to IS NULL OR r1.valid_to > datetime($tf_pit))"
+                )
+
+        cypher = (
+            f"""
+MATCH (anchor:__Entity__ {{graph_id: $graph_id}})
+WHERE toLower(anchor.name) CONTAINS toLower($entity_name)
+MATCH (anchor)-[r1]->(hop1:__Entity__ {{graph_id: $graph_id}})
+WHERE true {temporal_clause}
+OPTIONAL MATCH (hop1)-[r2]->(hop2:__Entity__ {{graph_id: $graph_id}})
+RETURN
+    anchor.name        AS anchor_name,
+    anchor.description AS anchor_desc,
+    type(r1)           AS rel1,
+    hop1.name          AS hop1_name,
+    hop1.description   AS hop1_desc,
+    type(r2)           AS rel2,
+    hop2.name          AS hop2_name,
+    hop2.description   AS hop2_desc
+LIMIT 20
+"""
+            if temporal_clause
+            else _MULTIHOP_CYPHER
+        )
+
+        for entity_name in entity_candidates[:top_k]:
+            try:
+                result = await driver.execute_query(
+                    cypher,
+                    {
+                        "graph_id": self.graph_id,
+                        "entity_name": entity_name,
+                        **temporal_params,
+                    },
+                )
+                records = result.records if hasattr(result, "records") else result[0]
+                for rec in records:
+                    entry: dict[str, Any] = {
+                        "anchor": rec.get("anchor_name"),
+                        "anchor_desc": rec.get("anchor_desc"),
+                        "hop1_name": rec.get("hop1_name"),
+                        "hop1_desc": rec.get("hop1_desc"),
+                        "rel1": rec.get("rel1"),
+                        "hop2_name": rec.get("hop2_name"),
+                        "hop2_desc": rec.get("hop2_desc"),
+                        "rel2": rec.get("rel2"),
+                        "graph_id": self.graph_id,
+                        "_source": "multihop",
+                    }
+                    enriched.append(entry)
+            except Exception as exc:
+                logger.warning(
+                    f"Multi-hop traversal failed for entity '{entity_name}' "
+                    f"in graph {self.graph_id}: {exc}"
+                )
+
+        return enriched
+
+    # ------------------------------------------------------------------
+    # Streaming search
+    # ------------------------------------------------------------------
+
+    async def stream_search(
+        self,
+        query_text: str,
+        retriever_config: dict[str, Any] | None = None,
+    ) -> AsyncIterator[str]:
+        """
+        Streaming variant of search().
+
+        Yields Server-Sent Events (SSE) formatted strings:
+          - data: {"type": "source", ...}  — one per retrieved source
+          - data: {"type": "answer_chunk", "text": "..."}  — answer text chunks
+          - data: {"type": "done", "confidence": 0.9, "is_grounded": true}
+
+        Falls back to a single chunk if the underlying GraphRAG doesn't
+        support token-level streaming.
+        """
+        try:
+            if not self.rag:
+                await self.initialize()
+
+            if not self.rag:
+                raise RuntimeError("GraphRAG not properly initialized")
+
+            raw_result: RagResultModel = self.rag.search(
+                query_text=query_text,
+                retriever_config=retriever_config or {"top_k": 5},
+                return_context=True,
+                prompt_template=STRICT_GROUNDING_PROMPT,
+            )
+
+            retriever_items = []
+            if raw_result.retriever_result:
+                retriever_items = list(
+                    getattr(raw_result.retriever_result, "items", []) or []
+                )
+            retriever_items.sort(
+                key=lambda item: getattr(item, "score", None) or 0.0,
+                reverse=True,
+            )
+
+            import json
+
+            # Emit each source first.
+            sources = self._extract_sources(retriever_items)
+            for src in sources:
+                yield f"data: {json.dumps({'type': 'source', **src})}\n\n"
+
+            if len(retriever_items) < _MIN_CONTEXT_ITEMS:
+                answer = (
+                    "The knowledge graph does not contain sufficient data "
+                    "to answer this question."
+                )
+                yield f"data: {json.dumps({'type': 'answer_chunk', 'text': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'confidence': 0.0, 'is_grounded': False})}\n\n"
+                return
+
+            answer = raw_result.answer or ""
+            is_grounded = not answer.strip().startswith(_INSUFFICIENT_PREFIX)
+            if not is_grounded:
+                answer = (
+                    "The knowledge graph does not contain sufficient data "
+                    "to answer this question."
+                )
+
+            confidence = self._calculate_confidence(retriever_items)
+            if not is_grounded:
+                confidence = max(confidence * 0.3, 0.0)
+
+            # Emit answer in word-level chunks to simulate streaming.
+            words = answer.split(" ")
+            for i in range(0, len(words), 10):
+                chunk = " ".join(words[i : i + 10])
+                if i + 10 < len(words):
+                    chunk += " "
+                yield f"data: {json.dumps({'type': 'answer_chunk', 'text': chunk})}\n\n"
+
+            yield (
+                f"data: {json.dumps({'type': 'done', 'confidence': confidence, 'is_grounded': is_grounded, 'retriever_used': self.retriever_type.value})}\n\n"
+            )
+
+        except Exception as exc:
+            import json
+
+            logger.error(f"Streaming search failed for graph {self.graph_id}: {exc}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_sources(retriever_items: list[Any]) -> list[dict[str, Any]]:
+        """
+        Extract structured source citations from retriever result items.
+
+        Each item's `metadata` dict typically contains node properties
+        (id, labels, name, text, score) depending on the retriever type
+        and the configured return_properties / retrieval_query.
+        """
+        sources: list[dict[str, Any]] = []
+        for item in retriever_items:
+            metadata: dict[str, Any] = getattr(item, "metadata", {}) or {}
+            content: str = getattr(item, "content", "") or ""
+
+            source: dict[str, Any] = {
+                "node_id": metadata.get("id") or metadata.get("elementId"),
+                "node_labels": metadata.get("labels"),
+                "content": content[:500] if content else None,
+                "relevance_score": (
+                    getattr(item, "score", None) or metadata.get("score")
+                ),
+                "properties": {
+                    k: v
+                    for k, v in metadata.items()
+                    if k not in {"id", "elementId", "labels", "score", "embedding"}
+                },
+            }
+            sources.append(source)
+        return sources
+
+    @staticmethod
+    def _calculate_confidence(retriever_items: list[Any]) -> float:
+        """
+        Compute a confidence score [0, 1] from retriever relevance scores.
+
+        Uses the mean of the top-3 scores (or fewer if less are available),
+        clamped to [0, 1].  Falls back to a low baseline if no scores exist.
+        """
+        scores: list[float] = []
+        for item in retriever_items[:3]:
+            score = getattr(item, "score", None)
+            if score is not None:
+                try:
+                    scores.append(float(score))
+                except (TypeError, ValueError):
+                    pass
+
+        if not scores:
+            # Context exists but scores are unavailable — moderate confidence.
+            return 0.5
+
+        return min(max(sum(scores) / len(scores), 0.0), 1.0)

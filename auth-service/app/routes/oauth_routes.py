@@ -67,8 +67,8 @@ async def callback(provider: str, request: Request):
         expires_at=token_data.get("expires_at"),
     )
 
-    jwt_token, _ = create_access_token({"sub": email, "is_superuser": False})
-    refresh_token = create_refresh_token({"sub": email, "is_superuser": False})
+    jwt_token, _ = create_access_token({"sub": str(user.id), "email": email, "is_superuser": False})
+    refresh_token = create_refresh_token({"sub": str(user.id), "email": email, "is_superuser": False})
     print("Access token:", jwt_token)
     params = {
         "access_token": jwt_token,

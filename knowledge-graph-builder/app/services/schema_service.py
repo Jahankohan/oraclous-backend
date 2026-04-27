@@ -1,402 +1,486 @@
-from typing import Dict, Any, List, Optional
-from langchain_community.graphs.neo4j_graph import Neo4jGraph
-from app.core.neo4j_client import neo4j_client
-from app.services.llm_service import llm_service
-from uuid import UUID
+"""
+Neo4j Schema Management Service
+
+Service for extracting, caching, and managing Neo4j database schemas
+to improve Text2CypherRetriever performance with dynamic schema updates.
+"""
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
 from app.core.logging import get_logger
+from app.core.neo4j_client import neo4j_client
 
 logger = get_logger(__name__)
 
-class SchemaService:
-    """Service for managing graph schemas - CORRECTED for single Neo4j database"""
-    
-    def __init__(self):
-        self.neo4j_graph = None
-    
-    async def get_existing_schema(self) -> Dict[str, Any]:
-        """
-        CORRECTED: Get current database schema without neo4j_database parameter
-        Since you're now using community version with single database
-        """
-        try:
-            # Get node labels - REMOVED database parameter
-            labels_query = "CALL db.labels()"
-            labels_result = await neo4j_client.execute_query(labels_query)
-            node_labels = [record["label"] for record in labels_result]
-            
-            # Get relationship types - REMOVED database parameter
-            rels_query = "CALL db.relationshipTypes()"
-            rels_result = await neo4j_client.execute_query(rels_query)
-            relationship_types = [record["relationshipType"] for record in rels_result]
-            
-            return {
-                "entities": node_labels,
-                "relationships": relationship_types,
-                "node_count": len(node_labels),
-                "relationship_count": len(relationship_types)
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get existing schema: {e}")
-            return {"entities": [], "relationships": [], "node_count": 0, "relationship_count": 0}
-    
-    async def get_graph_specific_schema(self, graph_id: str) -> Dict[str, Any]:
-        """
-        NEW: Get schema for a specific graph using graph_id filtering
-        This replaces the old per-database approach
-        """
-        try:
-            # Get node labels for specific graph
-            labels_query = """
-            MATCH (n)
-            WHERE n.graph_id = $graph_id
-            RETURN DISTINCT labels(n) as labels
-            """
-            
-            # Get relationship types for specific graph
-            rels_query = """
-            MATCH ()-[r]->()
-            WHERE r.graph_id = $graph_id
-            RETURN DISTINCT type(r) as relationship_type
-            """
-            
-            params = {"graph_id": str(graph_id)}
-            
-            labels_result = await neo4j_client.execute_query(labels_query, params)
-            rels_result = await neo4j_client.execute_query(rels_query, params)
-            
-            # Extract unique entity types
-            entity_types = set()
-            for record in labels_result:
-                for label in record["labels"]:
-                    if label != "Entity":  # Filter out generic Entity label
-                        entity_types.add(label)
-            
-            # Extract relationship types
-            relationship_types = [record["relationship_type"] for record in rels_result]
-            
-            return {
-                "entities": sorted(list(entity_types)),
-                "relationships": sorted(relationship_types),
-                "node_count": len(entity_types),
-                "relationship_count": len(relationship_types)
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get schema for graph {graph_id}: {e}")
-            return {"entities": [], "relationships": [], "node_count": 0, "relationship_count": 0}
-    
-    async def get_graph_schema(self, graph_id: UUID) -> Dict[str, Any]:
-        """
-        Get schema for specific graph (method that chat_service expects)
-        This is a wrapper around get_graph_specific_schema for consistency
-        """
-        try:
-            return await self.get_graph_specific_schema(str(graph_id))
-        except Exception as e:
-            logger.error(f"Failed to get graph schema: {e}")
-            return {"entities": [], "relationships": []}
 
-    async def consolidate_schema(
-        self, 
-        existing_entities: List[str],
-        new_schema: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Consolidate existing and new schema elements"""
-        
-        # Combine and deduplicate entities
-        all_entities = list(set(existing_entities + new_schema.get("entities", [])))
-        
-        # Get existing relationships
-        existing_relationships = await self._get_existing_relationships()
-        all_relationships = list(set(
-            existing_relationships + new_schema.get("relationships", [])
-        ))
-        
-        return {
-            "entities": sorted(all_entities),
-            "relationships": sorted(all_relationships)
-        }
-    
-    async def consolidate_graph_schema(
-        self,
-        graph_id: str,
-        new_schema: Dict[str, Any]
-    ) -> Dict[str, Any]:
+@dataclass
+class NodeSchema:
+    """Schema information for a node type"""
+
+    label: str
+    properties: dict[str, str]  # property_name -> type
+    sample_count: int
+    indexes: list[str]
+
+
+@dataclass
+class RelationshipSchema:
+    """Schema information for a relationship type"""
+
+    type: str
+    properties: dict[str, str]  # property_name -> type
+    start_labels: set[str]
+    end_labels: set[str]
+    sample_count: int
+
+
+@dataclass
+class GraphSchema:
+    """Complete graph schema information"""
+
+    graph_id: str
+    nodes: dict[str, NodeSchema]
+    relationships: dict[str, RelationshipSchema]
+    constraints: list[dict[str, Any]]
+    indexes: list[dict[str, Any]]
+    last_updated: datetime
+    schema_version: str
+
+
+class Neo4jSchemaManager:
+    """
+    Manager for Neo4j database schemas with multi-tenant support.
+
+    Features:
+    - Dynamic schema extraction from live database
+    - Multi-tenant schema isolation
+    - Schema caching for performance
+    - Automatic schema updates
+    - Text2Cypher optimization
+    """
+
+    def __init__(self):
+        """Initialize schema manager"""
+        self._schema_cache: dict[str, GraphSchema] = {}
+        self._cache_ttl_minutes = 60  # Cache for 1 hour
+
+    async def _ensure_connections(self):
+        """Ensure Neo4j connections are available"""
+        await neo4j_client.connect_async()
+
+        if neo4j_client.async_driver is None:
+            raise ConnectionError(
+                "Neo4j async driver not available for schema operations"
+            )
+
+    async def extract_schema(
+        self, graph_id: str, force_refresh: bool = False
+    ) -> GraphSchema:
         """
-        NEW: Consolidate schema for a specific graph
-        More accurate than global schema consolidation
-        """
-        
-        # Get existing schema for this specific graph
-        existing_schema = await self.get_graph_specific_schema(graph_id)
-        
-        # Combine and deduplicate entities
-        all_entities = list(set(
-            existing_schema.get("entities", []) + new_schema.get("entities", [])
-        ))
-        
-        # Combine and deduplicate relationships
-        all_relationships = list(set(
-            existing_schema.get("relationships", []) + new_schema.get("relationships", [])
-        ))
-        
-        return {
-            "entities": sorted(all_entities),
-            "relationships": sorted(all_relationships)
-        }
-    
-    async def _get_existing_relationships(self) -> List[str]:
-        """CORRECTED: Get existing relationship types without database parameter"""
-        try:
-            query = "CALL db.relationshipTypes()"
-            result = await neo4j_client.execute_query(query)
-            return [record["relationshipType"] for record in result]
-        except Exception:
-            return []
-    
-    async def _get_graph_relationships(self, graph_id: str) -> List[str]:
-        """NEW: Get relationship types for specific graph"""
-        try:
-            query = """
-            MATCH ()-[r]->()
-            WHERE r.graph_id = $graph_id
-            RETURN DISTINCT type(r) as relationship_type
-            """
-            result = await neo4j_client.execute_query(query, {"graph_id": str(graph_id)})
-            return [record["relationship_type"] for record in result]
-        except Exception:
-            return []
-    
-    async def create_graph_constraints(
-        self, 
-        schema_config: Dict[str, Any]
-    ):
-        """
-        CORRECTED: Create constraints without neo4j_database parameter
+        Extract comprehensive schema for a specific graph.
+
+        Args:
+            graph_id: Graph identifier for multi-tenant isolation
+            force_refresh: Force schema refresh even if cached
+
+        Returns:
+            Complete graph schema information
         """
         try:
-            entities = schema_config.get("entities", [])
-            
-            for entity_type in entities:
-                # Create uniqueness constraint on id property
-                constraint_query = f"""
-                CREATE CONSTRAINT {entity_type.lower()}_id_unique IF NOT EXISTS
-                FOR (n:{entity_type}) 
-                REQUIRE n.id IS UNIQUE
-                """
-                
-                try:
-                    # REMOVED: database parameter
-                    await neo4j_client.execute_write_query(constraint_query)
-                    logger.debug(f"Created constraint for {entity_type}")
-                except Exception as e:
-                    logger.debug(f"Constraint for {entity_type} might already exist: {e}")
-            
-            # Create index on graph_id for efficient filtering
-            graph_id_index = """
-            CREATE INDEX graph_id_entities_general IF NOT EXISTS
-            FOR (n:Entity)
-            ON (n.graph_id)
-            """
-            
-            try:
-                await neo4j_client.execute_write_query(graph_id_index)
-                logger.debug("Created graph_id index for entities")
-            except Exception as e:
-                logger.debug(f"Graph ID index might already exist: {e}")
-                
-            logger.info(f"Schema constraints created for {len(entities)} entity types")
-            
+            # Check cache first
+            if not force_refresh and graph_id in self._schema_cache:
+                cached_schema = self._schema_cache[graph_id]
+                age_minutes = (
+                    datetime.now(UTC) - cached_schema.last_updated
+                ).total_seconds() / 60
+                if age_minutes < self._cache_ttl_minutes:
+                    logger.info(
+                        f"Using cached schema for graph {graph_id} (age: {age_minutes:.1f}min)"
+                    )
+                    return cached_schema
+
+            await self._ensure_connections()
+
+            logger.info(f"Extracting schema for graph {graph_id}")
+
+            # Extract node schemas
+            nodes = await self._extract_node_schemas(graph_id)
+
+            # Extract relationship schemas
+            relationships = await self._extract_relationship_schemas(graph_id)
+
+            # Get constraints and indexes
+            constraints = await self._get_constraints()
+            indexes = await self._get_indexes()
+
+            # Create schema object
+            schema = GraphSchema(
+                graph_id=graph_id,
+                nodes=nodes,
+                relationships=relationships,
+                constraints=constraints,
+                indexes=indexes,
+                last_updated=datetime.now(UTC),
+                schema_version=f"{len(nodes)}n_{len(relationships)}r_{hash(graph_id) % 10000}",
+            )
+
+            # Cache the schema
+            self._schema_cache[graph_id] = schema
+
+            logger.info(
+                f"Schema extracted for graph {graph_id}: {len(nodes)} node types, {len(relationships)} relationship types"
+            )
+            return schema
+
         except Exception as e:
-            logger.error(f"Error creating graph constraints: {e}")
+            logger.error(f"Failed to extract schema for graph {graph_id}: {e}")
             raise
 
-    # ==================== NEW HELPER METHODS ====================
-    
-    async def validate_schema_for_graph(
-        self,
-        graph_id: str,
-        proposed_schema: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Validate proposed schema against existing graph data"""
-        
+    async def _extract_node_schemas(self, graph_id: str) -> dict[str, NodeSchema]:
+        """Extract node type schemas"""
         try:
-            # Get current graph schema
-            current_schema = await self.get_graph_specific_schema(graph_id)
-            
-            # Check for conflicts or issues
-            warnings = []
-            errors = []
-            
-            proposed_entities = set(proposed_schema.get("entities", []))
-            current_entities = set(current_schema.get("entities", []))
-            
-            # Warn about removing existing entities
-            removed_entities = current_entities - proposed_entities
-            if removed_entities:
-                warnings.append(f"Schema removes existing entities: {list(removed_entities)}")
-            
-            # Validate entity names
-            for entity in proposed_entities:
-                if not entity.replace("_", "").isalnum():
-                    errors.append(f"Invalid entity name: {entity}")
-            
-            return {
-                "valid": len(errors) == 0,
-                "warnings": warnings,
-                "errors": errors,
-                "proposed_schema": proposed_schema,
-                "current_schema": current_schema
-            }
-            
+            # Get all node labels and their property schemas
+            query = """
+            MATCH (n {graph_id: $graph_id})
+            WITH labels(n) as nodeLabels, keys(n) as props, n
+            UNWIND nodeLabels as label
+            WITH label, props, n
+            UNWIND props as prop
+            WITH label, prop, n[prop] as value
+            WHERE prop <> 'graph_id'
+            RETURN label,
+                   prop,
+                   apoc.meta.cypher.type(value) as propType,
+                   count(*) as frequency
+            ORDER BY label, prop
+            """
+
+            records = await neo4j_client.execute_query(query, {"graph_id": graph_id})
+
+            # Group by label with proper typing
+            label_schemas: dict[str, dict[str, Any]] = {}
+            for record in records:
+                label = str(record["label"])
+                if label not in label_schemas:
+                    label_schemas[label] = {"properties": {}, "total_count": 0}
+
+                prop_name = str(record["prop"])
+                prop_type = str(record["propType"])
+                frequency = int(record["frequency"])
+
+                label_schemas[label]["properties"][prop_name] = prop_type
+                label_schemas[label]["total_count"] = max(
+                    int(label_schemas[label]["total_count"]), frequency
+                )
+
+            # Get node counts and indexes
+            nodes: dict[str, NodeSchema] = {}
+            for label, schema_info in label_schemas.items():
+                # Guard: backtick-escaped labels are safe for Neo4j, but reject any label that
+                # itself contains a backtick (Neo4j never produces such labels normally).
+                if "`" in label:
+                    logger.warning(
+                        f"Skipping label with unexpected backtick character: {label!r}"
+                    )
+                    continue
+                # Get sample count for this label ($graph_id is parameterized)
+                count_query = f"MATCH (n:`{label}` {{graph_id: $graph_id}}) RETURN count(n) as count"
+                count_records = await neo4j_client.execute_query(
+                    count_query, {"graph_id": graph_id}
+                )
+                sample_count = int(count_records[0]["count"]) if count_records else 0
+
+                # Get indexes for this label (simplified)
+                indexes: list[str] = (
+                    []
+                )  # Would need to query SHOW INDEXES for actual indexes
+
+                nodes[label] = NodeSchema(
+                    label=label,
+                    properties=dict(schema_info["properties"]),
+                    sample_count=sample_count,
+                    indexes=indexes,
+                )
+
+            return nodes
+
         except Exception as e:
-            logger.error(f"Schema validation failed: {e}")
-            return {
-                "valid": False,
-                "warnings": [],
-                "errors": [f"Validation failed: {str(e)}"],
-                "proposed_schema": proposed_schema,
-                "current_schema": {}
-            }
-    
-    async def get_schema_evolution_suggestions(
-        self,
-        graph_id: str,
-        text_sample: str
-    ) -> Dict[str, Any]:
-        """
-        NEW: Get suggestions for schema evolution based on text analysis
-        """
-        
+            logger.error(f"Failed to extract node schemas: {e}")
+            return {}
+
+    async def _extract_relationship_schemas(
+        self, graph_id: str
+    ) -> dict[str, RelationshipSchema]:
+        """Extract relationship type schemas"""
         try:
-            # Get current schema
-            current_schema = await self.get_graph_specific_schema(graph_id)
-            
-            # Analyze text for potential new types (simplified version)
-            # This could be enhanced with more sophisticated NLP
-            potential_entities = []
-            potential_relationships = []
-            
-            # Simple keyword-based detection (you can enhance this)
-            common_entity_patterns = [
-                "person", "organization", "company", "location", "product",
-                "technology", "system", "project", "document", "event"
-            ]
-            
-            common_relation_patterns = [
-                "works_for", "located_in", "develops", "uses", "manages",
-                "belongs_to", "creates", "owns", "partners_with"
-            ]
-            
-            text_lower = text_sample.lower()
-            
-            for pattern in common_entity_patterns:
-                if pattern in text_lower and pattern.title() not in current_schema.get("entities", []):
-                    potential_entities.append(pattern.title())
-            
-            for pattern in common_relation_patterns:
-                if pattern in text_lower and pattern.upper() not in current_schema.get("relationships", []):
-                    potential_relationships.append(pattern.upper())
-            
-            return {
-                "current_schema": current_schema,
-                "suggested_additions": {
-                    "entities": potential_entities[:5],  # Limit suggestions
-                    "relationships": potential_relationships[:5]
-                },
-                "confidence": "low"  # Since this is a simple implementation
-            }
-            
+            # Get all relationship types and their schemas
+            query = """
+            MATCH (start {graph_id: $graph_id})-[r]->(end {graph_id: $graph_id})
+            WITH type(r) as relType, labels(start) as startLabels, labels(end) as endLabels, 
+                 keys(r) as props, r
+            UNWIND props as prop
+            WITH relType, startLabels, endLabels, prop, r[prop] as value
+            WHERE prop <> 'graph_id'
+            RETURN relType,
+                   collect(DISTINCT startLabels) as allStartLabels,
+                   collect(DISTINCT endLabels) as allEndLabels,
+                   prop,
+                   apoc.meta.cypher.type(value) as propType,
+                   count(*) as frequency
+            ORDER BY relType, prop
+            """
+
+            records = await neo4j_client.execute_query(query, {"graph_id": graph_id})
+
+            # Group by relationship type with proper typing
+            rel_schemas: dict[str, dict[str, Any]] = {}
+            for record in records:
+                rel_type = str(record["relType"])
+                if rel_type not in rel_schemas:
+                    rel_schemas[rel_type] = {
+                        "properties": {},
+                        "start_labels": set(),
+                        "end_labels": set(),
+                        "total_count": 0,
+                    }
+
+                # Add property info
+                if record.get("prop"):
+                    rel_schemas[rel_type]["properties"][str(record["prop"])] = str(
+                        record["propType"]
+                    )
+
+                # Add label info
+                for start_labels in record.get("allStartLabels", []):
+                    if isinstance(start_labels, list):
+                        rel_schemas[rel_type]["start_labels"].update(start_labels)
+                for end_labels in record.get("allEndLabels", []):
+                    if isinstance(end_labels, list):
+                        rel_schemas[rel_type]["end_labels"].update(end_labels)
+
+                rel_schemas[rel_type]["total_count"] = max(
+                    int(rel_schemas[rel_type]["total_count"]), int(record["frequency"])
+                )
+
+            # Create relationship schema objects
+            relationships: dict[str, RelationshipSchema] = {}
+            for rel_type, schema_info in rel_schemas.items():
+                relationships[rel_type] = RelationshipSchema(
+                    type=rel_type,
+                    properties=dict(schema_info["properties"]),
+                    start_labels=set(schema_info["start_labels"]),
+                    end_labels=set(schema_info["end_labels"]),
+                    sample_count=int(schema_info["total_count"]),
+                )
+
+            return relationships
+
         except Exception as e:
-            logger.error(f"Schema evolution suggestions failed: {e}")
-            return {
-                "current_schema": {},
-                "suggested_additions": {"entities": [], "relationships": []},
-                "confidence": "none",
-                "error": str(e)
-            }
+            logger.error(f"Failed to extract relationship schemas: {e}")
+            return {}
 
-# Create singleton instance
-schema_service = SchemaService()
+    async def _get_constraints(self) -> list[dict[str, Any]]:
+        """Get database constraints"""
+        try:
+            query = "SHOW CONSTRAINTS"
+            records = await neo4j_client.execute_query(query)
 
-# ==================== MIGRATION HELPER FUNCTIONS ====================
+            return [
+                {
+                    "name": record.get("name"),
+                    "type": record.get("type"),
+                    "entityType": record.get("entityType"),
+                    "labelsOrTypes": record.get("labelsOrTypes"),
+                    "properties": record.get("properties"),
+                }
+                for record in records
+            ]
 
-async def migrate_legacy_neo4j_references():
-    """
-    Helper function to identify and fix any remaining neo4j_database references
-    Run this once during migration
-    """
-    
-    logger.info("Checking for legacy neo4j_database references...")
-    
-    try:
-        # Test basic connectivity
-        result = await neo4j_client.execute_query("RETURN 1 as test")
-        if result:
-            logger.info("✅ Neo4j connectivity confirmed - single database mode")
-        
-        # Check if graph_id indexing is working
-        index_query = "SHOW INDEXES YIELD name, labelsOrTypes, properties WHERE name CONTAINS 'graph_id'"
-        indexes = await neo4j_client.execute_query(index_query)
-        
-        if indexes:
-            logger.info(f"Found {len(indexes)} graph_id indexes")
+        except Exception as e:
+            logger.error(f"Failed to get constraints: {e}")
+            return []
+
+    async def _get_indexes(self) -> list[dict[str, Any]]:
+        """Get database indexes"""
+        try:
+            query = "SHOW INDEXES"
+            records = await neo4j_client.execute_query(query)
+
+            return [
+                {
+                    "name": record.get("name"),
+                    "type": record.get("type"),
+                    "entityType": record.get("entityType"),
+                    "labelsOrTypes": record.get("labelsOrTypes"),
+                    "properties": record.get("properties"),
+                    "state": record.get("state"),
+                }
+                for record in records
+            ]
+
+        except Exception as e:
+            logger.error(f"Failed to get indexes: {e}")
+            return []
+
+    def format_schema_for_text2cypher(self, schema: GraphSchema) -> str:
+        """
+        Format schema information for Text2CypherRetriever.
+
+        Args:
+            schema: Graph schema to format
+
+        Returns:
+            Formatted schema string for LLM consumption
+        """
+        try:
+            schema_parts = [
+                f"# Neo4j Knowledge Graph Schema for {schema.graph_id}",
+                f"# Last Updated: {schema.last_updated.isoformat()}",
+                f"# Schema Version: {schema.schema_version}",
+                "",
+                "## Node Types",
+            ]
+
+            # Add node information
+            for label, node in schema.nodes.items():
+                schema_parts.append(f"### {label} ({node.sample_count:,} nodes)")
+                if node.properties:
+                    schema_parts.append("Properties:")
+                    for prop, prop_type in node.properties.items():
+                        schema_parts.append(f"  - {prop}: {prop_type}")
+                if node.indexes:
+                    schema_parts.append("Indexes:")
+                    for index in node.indexes:
+                        schema_parts.append(f"  - {index}")
+                schema_parts.append("")
+
+            # Add relationship information
+            schema_parts.append("## Relationship Types")
+            for rel_type, rel in schema.relationships.items():
+                start_labels = ", ".join(sorted(rel.start_labels))
+                end_labels = ", ".join(sorted(rel.end_labels))
+                schema_parts.append(
+                    f"### {rel_type} ({rel.sample_count:,} relationships)"
+                )
+                schema_parts.append(
+                    f"Pattern: ({start_labels})-[:{rel_type}]->({end_labels})"
+                )
+                if rel.properties:
+                    schema_parts.append("Properties:")
+                    for prop, prop_type in rel.properties.items():
+                        schema_parts.append(f"  - {prop}: {prop_type}")
+                schema_parts.append("")
+
+            # Add constraints
+            if schema.constraints:
+                schema_parts.append("## Constraints")
+                for constraint in schema.constraints:
+                    constraint_desc = f"{constraint.get('type', 'Unknown')} on {constraint.get('labelsOrTypes', [])} ({constraint.get('properties', [])})"
+                    schema_parts.append(f"- {constraint_desc}")
+                schema_parts.append("")
+
+            # Add important notes
+            schema_parts.extend(
+                [
+                    "## Important Notes",
+                    "- All nodes and relationships have a 'graph_id' property for multi-tenant isolation",
+                    f"- Always include 'graph_id: \"{schema.graph_id}\"' in WHERE clauses",
+                    "- Use proper Cypher syntax and be mindful of performance",
+                    "- Prefer specific patterns over broad MATCH statements",
+                ]
+            )
+
+            return "\n".join(schema_parts)
+
+        except Exception as e:
+            logger.error(f"Failed to format schema: {e}")
+            return f"Error formatting schema for graph {schema.graph_id}"
+
+    async def get_schema_for_text2cypher(self, graph_id: str) -> str:
+        """
+        Get formatted schema string for Text2CypherRetriever.
+
+        Args:
+            graph_id: Graph identifier
+
+        Returns:
+            Formatted schema string ready for Text2CypherRetriever
+        """
+        try:
+            schema = await self.extract_schema(graph_id)
+            return self.format_schema_for_text2cypher(schema)
+
+        except Exception as e:
+            logger.error(f"Failed to get schema for Text2Cypher: {e}")
+            # Return a basic fallback schema
+            return f"""
+            # Basic Schema for {graph_id}
+            
+            ## Node Types
+            - Entity (name: string, type: string, graph_id: string)
+            - Chunk (text: string, graph_id: string)
+            - Document (path: string, title: string, graph_id: string)
+            
+            ## Relationship Types
+            - (Entity)-[:FOUNDED_BY]->(Entity)
+            - (Entity)-[:CEO_OF]->(Entity)
+            - (Entity)-[:LOCATED_IN]->(Entity)
+            - (Entity)-[:FROM_CHUNK]->(Chunk)
+            - (Chunk)-[:FROM_DOCUMENT]->(Document)
+            
+            ## Important Notes
+            - Always include 'graph_id: "{graph_id}"' in WHERE clauses
+            """
+
+    def clear_cache(self, graph_id: str | None = None):
+        """Clear schema cache for specific graph or all graphs"""
+        if graph_id:
+            self._schema_cache.pop(graph_id, None)
+            logger.info(f"Cleared schema cache for graph {graph_id}")
         else:
-            logger.warning("No graph_id indexes found - consider creating them")
-            
-        return True
-        
-    except Exception as e:
-        logger.error(f"Legacy migration check failed: {e}")
-        return False
+            self._schema_cache.clear()
+            logger.info("Cleared all schema cache")
 
-async def create_missing_graph_indexes():
-    """Create any missing indexes for graph isolation"""
-    
-    try:
-        # ✅ FIXED: Create graph_id indexes for specific node types
-        node_index_queries = [
-            "CREATE INDEX graph_id_entities IF NOT EXISTS FOR (n:Entity) ON (n.graph_id)",
-            "CREATE INDEX graph_id_chunks IF NOT EXISTS FOR (n:Chunk) ON (n.graph_id)", 
-            "CREATE INDEX graph_id_documents IF NOT EXISTS FOR (n:Document) ON (n.graph_id)"
-        ]
-        
-        for query in node_index_queries:
-            try:
-                await neo4j_client.execute_write_query(query)
-                logger.debug(f"Created node index: {query}")
-            except Exception as e:
-                logger.debug(f"Node index might already exist: {e}")
-        
-        # ✅ FIXED: Create graph_id indexes for common relationship types  
-        rel_index_queries = [
-            "CREATE INDEX graph_id_rels_general IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id)",
-        ]
-        
-        # Try general relationship index first (works in Neo4j 5.13+)
-        try:
-            await neo4j_client.execute_write_query(rel_index_queries[0])
-            logger.debug("Created general relationship index")
-        except Exception as e:
-            logger.debug(f"General relationship index not supported, creating specific types: {e}")
-            
-            # Fallback: Create indexes for common relationship types
-            specific_rel_queries = [
-                "CREATE INDEX graph_id_related IF NOT EXISTS FOR ()-[r:RELATED_TO]-() ON (r.graph_id)",
-                "CREATE INDEX graph_id_mentions IF NOT EXISTS FOR ()-[r:MENTIONS]-() ON (r.graph_id)",
-                "CREATE INDEX graph_id_contains IF NOT EXISTS FOR ()-[r:CONTAINS]-() ON (r.graph_id)"
-            ]
-            
-            for query in specific_rel_queries:
-                try:
-                    await neo4j_client.execute_write_query(query)
-                except Exception as e:
-                    logger.debug(f"Specific relationship index warning: {e}")
-        
-        logger.info("Graph isolation indexes created/verified")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Failed to create graph indexes: {e}")
-        return False
+    def get_cached_schemas(self) -> dict[str, str]:
+        """Get summary of cached schemas"""
+        return {
+            graph_id: f"Version {schema.schema_version}, updated {schema.last_updated.isoformat()}"
+            for graph_id, schema in self._schema_cache.items()
+        }
+
+    def get_cache_details(self) -> dict[str, GraphSchema]:
+        """Get detailed cached schema information"""
+        return dict(self._schema_cache)
+
+    def get_cache_stats(self) -> dict[str, Any]:
+        """Get cache statistics"""
+        return {
+            "cached_count": len(self._schema_cache),
+            "cache_ttl_minutes": self._cache_ttl_minutes,
+        }
+
+
+# ==================== GLOBAL MANAGER INSTANCE ====================
+
+# Global manager instance for dependency injection
+schema_manager = Neo4jSchemaManager()
+
+
+# ==================== CONVENIENCE FUNCTIONS ====================
+
+
+async def get_text2cypher_schema(graph_id: str) -> str:
+    """Convenience function to get schema for Text2CypherRetriever"""
+    return await schema_manager.get_schema_for_text2cypher(graph_id)
+
+
+async def refresh_schema_cache(graph_id: str) -> GraphSchema:
+    """Convenience function to force refresh schema cache"""
+    return await schema_manager.extract_schema(graph_id, force_refresh=True)
+
+
+def clear_schema_cache(graph_id: str | None = None):
+    """Convenience function to clear schema cache"""
+    schema_manager.clear_cache(graph_id)
