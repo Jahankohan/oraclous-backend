@@ -54,7 +54,7 @@ class TestChatOwnership:
             p.stop()
 
         assert response.status_code == 403
-        assert response.json()["detail"] == "Access denied"
+        assert response.json()["error_code"] == "KGB-4003"
 
     @pytest.mark.unit
     async def test_chat_returns_403_when_graph_owned_by_other_user(self, async_client):
@@ -77,7 +77,7 @@ class TestChatOwnership:
             p.stop()
 
         assert response.status_code == 403
-        assert response.json()["detail"] == "Access denied"
+        assert response.json()["error_code"] == "KGB-4003"
 
     @pytest.mark.unit
     async def test_chat_proceeds_when_ownership_verified(self, async_client):
@@ -168,7 +168,7 @@ class TestChatStreamOwnership:
             p.stop()
 
         assert response.status_code == 403
-        assert response.json()["detail"] == "Access denied"
+        assert response.json()["error_code"] == "KGB-4003"
 
     @pytest.mark.unit
     async def test_stream_returns_403_when_graph_owned_by_other_user(
@@ -193,7 +193,7 @@ class TestChatStreamOwnership:
             p.stop()
 
         assert response.status_code == 403
-        assert response.json()["detail"] == "Access denied"
+        assert response.json()["error_code"] == "KGB-4003"
 
     @pytest.mark.unit
     async def test_stream_proceeds_when_ownership_verified(self, async_client):
