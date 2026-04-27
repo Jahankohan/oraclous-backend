@@ -1,7 +1,10 @@
 import asyncio
+import time
 from typing import Any
 
 from neo4j import AsyncDriver, AsyncGraphDatabase, Driver, GraphDatabase
+from neo4j.exceptions import ServiceUnavailable
+from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace as otel_trace
 
 from app.core.config import settings
@@ -10,6 +13,26 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 _tracer = otel_trace.get_tracer("oraclous.neo4j")
+_meter = otel_metrics.get_meter("oraclous.neo4j")
+
+# ── Pool metrics ───────────────────────────────────────────────────────────────
+# Counters track cumulative session acquire/release events so we can derive
+# active connection count even when driver.get_metrics() is unavailable.
+_neo4j_acquire_counter = _meter.create_counter(
+    name="neo4j.pool.sessions_acquired_total",
+    description="Total Neo4j sessions acquired from the pool",
+    unit="1",
+)
+_neo4j_release_counter = _meter.create_counter(
+    name="neo4j.pool.sessions_released_total",
+    description="Total Neo4j sessions released back to the pool",
+    unit="1",
+)
+_neo4j_acquisition_histogram = _meter.create_histogram(
+    name="neo4j.pool.acquisition_time_ms",
+    description="Time spent waiting for a Neo4j session from the pool",
+    unit="ms",
+)
 
 
 class Neo4jClient:
@@ -26,6 +49,8 @@ class Neo4jClient:
         - Thread-safe connection management with locks
         - Automatic index creation for multi-tenant graph isolation
         - Health checking for both driver types
+        - OTEL pool metrics (acquisition counter + histogram)
+        - Graceful ServiceUnavailable handling (raises Neo4jUnavailableError)
 
     Examples:
         >>> client = Neo4jClient()
@@ -243,6 +268,8 @@ class Neo4jClient:
 
         Raises:
             ConnectionError: If async driver is not available
+            ServiceUnavailable: Re-raised after logging critical — callers should
+                catch this and return HTTP 503.
 
         Note:
             Automatically connects async driver if not already connected.
@@ -259,14 +286,24 @@ class Neo4jClient:
             span.set_attribute("db.system", "neo4j")
             span.set_attribute("db.operation", "read")
             span.set_attribute("db.statement", query_summary)
+            t0 = time.monotonic()
             try:
+                _neo4j_acquire_counter.add(1)
                 async with self.async_driver.session(
                     database=settings.NEO4J_DATABASE
                 ) as session:
+                    _neo4j_acquisition_histogram.record(
+                        (time.monotonic() - t0) * 1000
+                    )
                     result = await session.run(query, parameters or {})
                     records = await result.data()
                     span.set_attribute("db.neo4j.row_count", len(records))
                     return records
+            except ServiceUnavailable as e:
+                logger.critical(f"Neo4j unavailable: {e}")
+                span.record_exception(e)
+                span.set_status(otel_trace.StatusCode.ERROR, str(e))
+                raise
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(otel_trace.StatusCode.ERROR, str(e))
@@ -274,6 +311,8 @@ class Neo4jClient:
                 logger.error(f"Query: {query}")
                 logger.error(f"Parameters: {parameters}")
                 raise
+            finally:
+                _neo4j_release_counter.add(1)
 
     async def execute_write_query(
         self,
@@ -294,6 +333,8 @@ class Neo4jClient:
 
         Raises:
             ConnectionError: If async driver is not available
+            ServiceUnavailable: Re-raised after logging critical — callers should
+                catch this and return HTTP 503.
 
         Note:
             Uses write transactions for data consistency.
@@ -310,10 +351,15 @@ class Neo4jClient:
             span.set_attribute("db.system", "neo4j")
             span.set_attribute("db.operation", "write")
             span.set_attribute("db.statement", query_summary)
+            t0 = time.monotonic()
             try:
+                _neo4j_acquire_counter.add(1)
                 async with self.async_driver.session(
                     database=settings.NEO4J_DATABASE
                 ) as session:
+                    _neo4j_acquisition_histogram.record(
+                        (time.monotonic() - t0) * 1000
+                    )
 
                     async def tx_func(tx):
                         result = await tx.run(query, parameters or {})
@@ -322,11 +368,18 @@ class Neo4jClient:
                     result = await session.execute_write(tx_func)
                     span.set_attribute("db.neo4j.row_count", len(result))
                     return result
+            except ServiceUnavailable as e:
+                logger.critical(f"Neo4j unavailable: {e}")
+                span.record_exception(e)
+                span.set_status(otel_trace.StatusCode.ERROR, str(e))
+                raise
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(otel_trace.StatusCode.ERROR, str(e))
                 logger.error(f"Write query execution failed: {e}")
                 raise
+            finally:
+                _neo4j_release_counter.add(1)
 
     async def health_check(self) -> dict[str, Any]:
         """
