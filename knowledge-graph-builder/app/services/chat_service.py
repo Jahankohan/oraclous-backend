@@ -8,6 +8,7 @@ detection, multi-hop reasoning, and auto retriever selection.
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, cast
 
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
@@ -20,6 +21,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.telemetry import get_tracer
+from app.schemas.chat_schemas import TemporalMode
 from app.schemas.graph_schemas import TemporalFilter
 from app.schemas.retriever_schemas import (
     HybridCypherRetrieverConfig,
@@ -293,6 +295,58 @@ class ChatService:
                 logger.error(f"Fallback retriever creation failed: {fallback_error}")
                 raise RuntimeError("Failed to create any retriever") from fallback_error
 
+    # ------------------------------------------------------------------
+    # Temporal WHERE clause builder (TASK-007)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_temporal_filter(
+        temporal_mode: TemporalMode | None,
+        temporal_at: datetime | None,
+        temporal_since: datetime | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build a trusted Cypher WHERE clause fragment and parameter dict.
+
+        The clause text is constructed from internal constants only — it never
+        contains user-supplied strings.  All datetime values are bound as Cypher
+        parameters ($temporal_at / $temporal_since) and must be forwarded via
+        query_params; they are never interpolated into the query string.
+
+        Modes:
+            POINT_IN_TIME:   relationships where event_time <= $temporal_at
+                             AND (event_time_end IS NULL OR event_time_end >= $temporal_at)
+            KNOWLEDGE_AS_OF: relationships where ingestion_time <= $temporal_at
+            CHANGES_SINCE:   relationships where ingestion_time > $temporal_since
+
+        Returns:
+            (clause, params) — both empty when temporal_mode is None, preserving
+            identical behavior to pre-TASK-007 callers (backward compatible).
+        """
+        if temporal_mode == TemporalMode.POINT_IN_TIME:
+            clause = (
+                "(r.event_time IS NULL OR r.event_time <= $temporal_at)"
+                " AND (r.event_time_end IS NULL OR r.event_time_end >= $temporal_at)"
+            )
+            params: dict[str, Any] = {
+                "temporal_at": temporal_at.isoformat() if temporal_at else None
+            }
+        elif temporal_mode == TemporalMode.KNOWLEDGE_AS_OF:
+            clause = "r.ingestion_time <= $temporal_at"
+            params = {
+                "temporal_at": temporal_at.isoformat() if temporal_at else None
+            }
+        elif temporal_mode == TemporalMode.CHANGES_SINCE:
+            clause = "r.ingestion_time > $temporal_since"
+            params = {
+                "temporal_since": (
+                    temporal_since.isoformat() if temporal_since else None
+                )
+            }
+        else:
+            return "", {}
+
+        return clause, params
+
     async def search(
         self,
         query_text: str,
@@ -300,6 +354,9 @@ class ChatService:
         return_context: bool = False,
         examples: str = "",
         temporal_filter: TemporalFilter | None = None,
+        temporal_mode: TemporalMode | None = None,
+        temporal_at: datetime | None = None,
+        temporal_since: datetime | None = None,
     ) -> GroundedSearchResult:
         """
         Perform a graph-grounded GraphRAG search with hallucination prevention.
@@ -315,10 +372,23 @@ class ChatService:
             retriever_config: Configuration for retriever (e.g., top_k)
             return_context: Whether to include retriever_result in the returned object
             examples: Examples for few-shot learning
+            temporal_filter: Legacy TemporalFilter for multi-hop enrichment scoping
+            temporal_mode: Bitemporal query mode (point_in_time / knowledge_as_of /
+                changes_since).  When set, injects a Cypher WHERE clause on
+                relationship temporal properties via query_params.  Omitting this
+                produces identical behavior to the pre-TASK-007 baseline.
+            temporal_at: Reference timestamp for point_in_time and knowledge_as_of.
+            temporal_since: Reference timestamp for changes_since.
 
         Returns:
             GroundedSearchResult with answer, sources, confidence, and grounding flag
         """
+        # Build temporal WHERE clause + params (TASK-007).
+        # An empty clause means no temporal filtering — backward compatible.
+        temporal_clause, temporal_params = self._build_temporal_filter(
+            temporal_mode, temporal_at, temporal_since
+        )
+
         with _chat_tracer.start_as_current_span(
             "chat.query",
             kind=otel_trace.SpanKind.INTERNAL,
@@ -326,6 +396,8 @@ class ChatService:
             span.set_attribute("graph_id", self.graph_id)
             span.set_attribute("chat.retriever_type", self.retriever_type.value)
             span.set_attribute("chat.query.length", len(query_text))
+            if temporal_mode:
+                span.set_attribute("chat.temporal_mode", temporal_mode.value)
             return await self._search_inner(
                 span,
                 query_text,
@@ -333,6 +405,8 @@ class ChatService:
                 return_context,
                 examples,
                 temporal_filter,
+                temporal_clause,
+                temporal_params,
             )
 
     async def _search_inner(
@@ -343,6 +417,8 @@ class ChatService:
         return_context: bool,
         examples: str,
         temporal_filter: TemporalFilter | None,
+        temporal_clause: str = "",
+        temporal_params: dict[str, Any] | None = None,
     ) -> "GroundedSearchResult":
         try:
             if not self.rag:
@@ -353,10 +429,22 @@ class ChatService:
 
             logger.info(f"Processing grounded search for graph {self.graph_id}")
 
+            # Merge temporal query parameters into the retriever_config so that
+            # Cypher-capable retrievers (VECTOR_CYPHER, HYBRID_CYPHER) can bind
+            # the $temporal_at / $temporal_since placeholders in their queries.
+            # Values are always passed as parameters — never interpolated into query text.
+            effective_retriever_config = dict(retriever_config or {"top_k": 5})
+            if temporal_clause and temporal_params:
+                existing_params = effective_retriever_config.get("query_params") or {}
+                effective_retriever_config["query_params"] = {
+                    **existing_params,
+                    **temporal_params,
+                }
+
             # Always request context so we can inspect retrieved items.
             raw_result: RagResultModel = self.rag.search(
                 query_text=query_text,
-                retriever_config=retriever_config or {"top_k": 5},
+                retriever_config=effective_retriever_config,
                 return_context=True,
                 examples=examples,
                 prompt_template=STRICT_GROUNDING_PROMPT,
@@ -398,7 +486,7 @@ class ChatService:
                             )
                             raw_result = self.rag.search(
                                 query_text=augmented_query,
-                                retriever_config=retriever_config or {"top_k": 5},
+                                retriever_config=effective_retriever_config,
                                 return_context=True,
                                 examples=examples,
                                 prompt_template=STRICT_GROUNDING_PROMPT,
