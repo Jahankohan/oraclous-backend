@@ -1,0 +1,4 @@
+# This file is a placeholder.
+# Run `python benchmarks/scripts/bench_ingestion.py` to populate it with
+# 100 Wikipedia article summaries fetched from the Wikipedia REST API.
+# The file will be overwritten with JSONL data (one JSON object per line).
