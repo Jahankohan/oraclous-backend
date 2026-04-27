@@ -47,8 +47,8 @@ COMMUNITY_DETECTION_CONCURRENCY: int = getattr(
 )
 LLM_SUMMARY_CONCURRENCY: int = getattr(settings, "LLM_SUMMARY_CONCURRENCY", 5)
 
-DEFAULT_LEVELS = [0, 1, 2]
-DEFAULT_RESOLUTIONS = [0.5, 1.0, 2.0]
+DEFAULT_LEVELS = [0, 1, 2, 3, 4]
+DEFAULT_RESOLUTIONS = [0.25, 0.5, 1.0, 2.0, 4.0]
 
 # Prompt template version — bump this to invalidate all cached summaries
 PROMPT_TEMPLATE_VERSION = "v1"
@@ -169,6 +169,18 @@ async def _detect_communities_async(
                 "status": "skipped",
                 "reason": f"Entity count {entity_count} < minimum {COMMUNITY_DETECTION_MIN_ENTITIES}",
                 "graph_id": graph_id,
+            }
+
+        MAX_ENTITIES = getattr(settings, "COMMUNITY_DETECTION_MAX_ENTITIES", 500_000)
+        if entity_count > MAX_ENTITIES:
+            logger.warning(
+                f"Graph {graph_id} has {entity_count} entities, exceeding max {MAX_ENTITIES}. "
+                "Skipping community detection."
+            )
+            return {
+                "status": "skipped",
+                "reason": f"entity_count_{entity_count}_exceeds_max_{MAX_ENTITIES}",
+                "graph_id": str(graph_id),
             }
 
         # Check current status and Redis lock
