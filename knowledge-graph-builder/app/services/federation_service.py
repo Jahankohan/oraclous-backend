@@ -210,8 +210,9 @@ class FederationService:
         principal_type = (principal or {}).get("principal_type", "user")
 
         # Fetch ownership + federatable status for all requested graph_ids
+        # Uses the ReBAC shadow Graph nodes (carry :__Rebac__) which hold federatable.
         query = """
-        MATCH (g:Graph {namespace: "__system__"})
+        MATCH (g:Graph:__Rebac__ {namespace: "__system__"})
         WHERE g.graph_id IN $graph_ids
         RETURN g.graph_id AS graph_id,
                g.owner_user_id AS user_id,

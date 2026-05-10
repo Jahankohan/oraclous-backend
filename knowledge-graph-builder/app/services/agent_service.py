@@ -70,7 +70,7 @@ class AgentService:
         now = int(time.time())
         await self._driver.execute_query(
             """
-            CREATE (a:Agent {
+            CREATE (a:Agent:__Platform__ {
                 agent_id:              $agent_id,
                 graph_id:              $graph_id,
                 name:                  $name,
@@ -109,7 +109,7 @@ class AgentService:
     async def list_agents(self, graph_id: str) -> list[dict[str, Any]]:
         result = await self._driver.execute_query(
             """
-            MATCH (a:Agent {graph_id: $graph_id})
+            MATCH (a:Agent:__Platform__ {graph_id: $graph_id})
             WHERE a.deactivated_at IS NULL
             RETURN a
             ORDER BY a.created_at DESC
@@ -123,7 +123,7 @@ class AgentService:
     ) -> dict[str, Any] | None:
         result = await self._driver.execute_query(
             """
-            MATCH (a:Agent {graph_id: $graph_id, agent_id: $agent_id})
+            MATCH (a:Agent:__Platform__ {graph_id: $graph_id, agent_id: $agent_id})
             WHERE a.deactivated_at IS NULL
             RETURN a
             """,
@@ -175,7 +175,7 @@ class AgentService:
             return existing
 
         query = f"""
-        MATCH (a:Agent {{graph_id: $graph_id, agent_id: $agent_id}})
+        MATCH (a:Agent:__Platform__ {{graph_id: $graph_id, agent_id: $agent_id}})
         WHERE a.deactivated_at IS NULL
         SET {', '.join(set_clauses)}
         RETURN a
@@ -189,7 +189,7 @@ class AgentService:
         now = int(time.time())
         result = await self._driver.execute_query(
             """
-            MATCH (a:Agent {graph_id: $graph_id, agent_id: $agent_id})
+            MATCH (a:Agent:__Platform__ {graph_id: $graph_id, agent_id: $agent_id})
             WHERE a.deactivated_at IS NULL
             SET a.deactivated_at = $now
             RETURN a.agent_id AS agent_id

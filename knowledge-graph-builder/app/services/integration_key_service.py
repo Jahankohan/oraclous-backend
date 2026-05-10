@@ -56,7 +56,7 @@ class IntegrationKeyService:
 
         result = await self._driver.execute_query(
             """
-            MATCH (a:Agent {agent_id: $agent_id, graph_id: $graph_id})
+            MATCH (a:Agent:__Platform__ {agent_id: $agent_id, graph_id: $graph_id})
             OPTIONAL MATCH (existing:PublishedAgent {slug: $slug})
               WHERE existing.unpublished_at IS NULL
             WITH a, existing
