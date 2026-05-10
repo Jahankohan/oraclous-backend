@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     agents,
     chat,
     code_graphs,
+    communities,
     connectors,
     evaluation,
     federation,
@@ -25,6 +26,7 @@ api_router = APIRouter()
 # Include all endpoint routers
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(graphs.router, tags=["graphs"])
+api_router.include_router(communities.router, tags=["communities"])
 api_router.include_router(agents.router, tags=["agents"])
 api_router.include_router(llm_configs.router, prefix="/api/v1", tags=["llm-configs"])
 api_router.include_router(integration.router, prefix="/api/v1", tags=["integration"])

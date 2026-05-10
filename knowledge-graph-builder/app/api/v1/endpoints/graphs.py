@@ -23,7 +23,6 @@ from app.schemas.graph_schemas import (
     CommunityDetailResponse,
     CommunityDetectRequest,
     CommunityDetectResponse,
-    CommunityListResponse,
     CommunityStatusResponse,
     DocumentResponse,
     GraphCreate,
@@ -1462,32 +1461,11 @@ async def get_community_status(
     return CommunityStatusResponse(**result)
 
 
-@router.get(
-    "/graphs/{graph_id}/communities",
-    response_model=CommunityListResponse,
-    summary="List communities for a graph",
-)
-async def list_communities(
-    graph_id: UUID,
-    level: int | None = None,
-    min_size: int = 2,
-    limit: int = 50,
-    offset: int = 0,
-    include_summary: bool = True,
-    user_id: str = Depends(get_current_user_id),
-    analytics: GraphAnalyticsService = Depends(_get_analytics_service),
-):
-    """Return paginated list of communities, optionally filtered by level."""
-    await _verify_graph_ownership(graph_id, user_id)
-    result = await analytics.get_communities_list(
-        graph_id=graph_id,
-        level=level,
-        min_size=min_size,
-        limit=limit,
-        offset=offset,
-        include_summary=include_summary,
-    )
-    return CommunityListResponse(**result)
+# NOTE: GET /graphs/{graph_id}/communities is owned by
+# app.api.v1.endpoints.communities (TASK-050) and returns the flat
+# `Community[]` shape the frontend expects.  The previous wrapped
+# `CommunityListResponse` route was removed; the per-community detail
+# and detection-status routes still live below.
 
 
 @router.get(
