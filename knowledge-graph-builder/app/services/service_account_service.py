@@ -176,7 +176,7 @@ class ServiceAccountService:
             result = await session.run(
                 """
                 MATCH (sa:AgentServiceAccount {tenant_id: $tenant_id})
-                      -[r:CAN_ACCESS]->(:Graph {graph_id: $graph_id})
+                      -[r:CAN_ACCESS]->(:Graph:__Platform__ {graph_id: $graph_id})
                 RETURN sa.service_account_id AS service_account_id,
                        sa.name               AS name,
                        sa.description        AS description,
@@ -403,7 +403,7 @@ class ServiceAccountService:
             result = await session.run(
                 """
                 MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
-                      -[r:CAN_ACCESS]->(g:Graph)
+                      -[r:CAN_ACCESS]->(g:Graph:__Platform__)
                 RETURN g.graph_id    AS graph_id,
                        g.name        AS graph_name,
                        r.level       AS level,
@@ -425,7 +425,7 @@ class ServiceAccountService:
             result = await session.run(
                 """
                 MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
-                      -[r:CAN_ACCESS]->(g:Graph {graph_id: $graph_id})
+                      -[r:CAN_ACCESS]->(g:Graph:__Platform__ {graph_id: $graph_id})
                 DELETE r
                 RETURN count(r) AS deleted_count
                 """,
@@ -492,7 +492,7 @@ class ServiceAccountService:
                 MATCH (sa:AgentServiceAccount {service_account_id: $sa_id,
                                                tenant_id: $tenant_id,
                                                status: 'active'})
-                      -[r:CAN_ACCESS]->(g:Graph)
+                      -[r:CAN_ACCESS]->(g:Graph:__Platform__)
                 WHERE g.graph_id IN $graph_ids
                   AND (r.expires_at IS NULL OR r.expires_at > datetime())
                 RETURN g.graph_id AS graph_id

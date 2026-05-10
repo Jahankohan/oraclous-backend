@@ -4,8 +4,8 @@ Neo4j Graph Node Service
 This service manages Graph nodes in Neo4j, replacing PostgreSQL knowledge_graphs table.
 Each Graph node represents a knowledge graph with metadata and tenant isolation.
 
-Graph Node Schema:
-(graph:Graph {
+Graph Node Schema (carries :__Platform__ marker — STORY-025):
+(graph:Graph:__Platform__ {
     graph_id: "uuid",
     name: "Graph Name",
     description: "Optional description",
@@ -16,6 +16,10 @@ Graph Node Schema:
     relationship_count: 0,
     status: "active"
 })
+
+A separate (:Graph:__Rebac__ {graph_id, namespace: "__system__"}) exists per
+graph as the ReBAC permission anchor. All user-facing queries filter by
+`:__Platform__` to avoid ambiguity. See STORY-025 for the full label namespace.
 """
 
 from typing import Any
