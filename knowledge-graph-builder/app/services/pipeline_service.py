@@ -928,7 +928,7 @@ class MultiTenantGraphRAGPipeline:
         # 5.1. Simple Document-Graph connection
         try:
             connect_query = """
-            MATCH (d:Document {path: $source, graph_id: $graph_id})
+            MATCH (d:Document:__KGBuilder__ {path: $source, graph_id: $graph_id})
             MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
             MERGE (d)-[:BELONGS_TO]->(g)
             """
@@ -1355,7 +1355,7 @@ class MultiTenantGraphRAGPipeline:
         """Return True if the stored contentHash matches new_hash (skip signal)."""
         try:
             query = """
-            MATCH (d:Document {path: $source, graph_id: $graph_id})
+            MATCH (d:Document:__KGBuilder__ {path: $source, graph_id: $graph_id})
             RETURN d.contentHash AS stored_hash
             LIMIT 1
             """
@@ -1375,16 +1375,25 @@ class MultiTenantGraphRAGPipeline:
     async def _set_document_provenance(
         self, source: str, content_hash: str, mode: "IngestMode", job_id: str | None
     ) -> None:
-        """Set contentHash, lastJobId, lastIngestedAt, ingestMode on the Document node (upsert)."""
+        """Set contentHash, lastJobId, lastIngestedAt, ingestMode on the Document node.
+
+        TASK-063 / STORY-025: the KGWriter (run earlier in the pipeline) is the
+        only code path that creates `:Document:__KGBuilder__` nodes. This method
+        only updates that existing node — never creates a new one. If the
+        Document is unexpectedly missing (e.g. extraction was skipped for an
+        empty doc), log and continue; the provenance fields catch up on the
+        next ingest.
+        """
         try:
             query = """
-            MERGE (d:Document {path: $source, graph_id: $graph_id})
+            MATCH (d:Document:__KGBuilder__ {path: $source, graph_id: $graph_id})
             SET d.contentHash    = $content_hash,
                 d.lastJobId      = $job_id,
                 d.lastIngestedAt = datetime(),
                 d.ingestMode     = $mode
+            RETURN d.path AS path
             """
-            await neo4j_client.execute_query(
+            result = await neo4j_client.execute_query(
                 query,
                 {
                     "source": source,
@@ -1394,6 +1403,15 @@ class MultiTenantGraphRAGPipeline:
                     "mode": mode.value,
                 },
             )
+            # neo4j_client.execute_query returns rows or a result-like object;
+            # if nothing matched, log a soft warning (Document should always exist
+            # by the time provenance runs).
+            records = getattr(result, "records", None) or result
+            if records is not None and len(records) == 0:
+                logger.warning(
+                    f"_set_document_provenance: no :Document:__KGBuilder__ node found for "
+                    f"source={source!r} graph_id={self.graph_id} — KGWriter likely skipped this doc"
+                )
         except Exception as e:
             logger.warning(f"Could not set document provenance for '{source}': {e}")
 
@@ -1401,7 +1419,7 @@ class MultiTenantGraphRAGPipeline:
         """Return the set of SHA1 contentHash values for chunks already in the graph for this document."""
         try:
             query = """
-            MATCH (d:Document {path: $source, graph_id: $graph_id})<-[:PART_OF]-(c:Chunk {graph_id: $graph_id})
+            MATCH (d:Document:__KGBuilder__ {path: $source, graph_id: $graph_id})<-[:PART_OF]-(c:Chunk {graph_id: $graph_id})
             WHERE c.contentHash IS NOT NULL
             RETURN collect(c.contentHash) AS hashes
             """
@@ -1421,7 +1439,7 @@ class MultiTenantGraphRAGPipeline:
         """Mark removed chunks as stale by setting staleAt / staleJobId (soft-delete)."""
         try:
             query = """
-            MATCH (d:Document {path: $source, graph_id: $graph_id})<-[:PART_OF]-(c:Chunk {graph_id: $graph_id})
+            MATCH (d:Document:__KGBuilder__ {path: $source, graph_id: $graph_id})<-[:PART_OF]-(c:Chunk {graph_id: $graph_id})
             WHERE c.contentHash IN $hashes AND c.staleAt IS NULL
             SET c.staleAt    = datetime(),
                 c.staleJobId = $job_id
@@ -1728,7 +1746,7 @@ class MultiTenantGraphRAGPipeline:
         """
         try:
             find_q = """
-            MATCH (d:Document {path: $source, graph_id: $graph_id})
+            MATCH (d:Document:__KGBuilder__ {path: $source, graph_id: $graph_id})
             MATCH (d)<-[:FROM_DOCUMENT]-(c:Chunk {graph_id: $graph_id})
             MATCH (src:__Entity__ {graph_id: $graph_id})<-[:FROM_CHUNK]-(c)
             MATCH (src)-[r {graph_id: $graph_id}]->(tgt:__Entity__ {graph_id: $graph_id})
