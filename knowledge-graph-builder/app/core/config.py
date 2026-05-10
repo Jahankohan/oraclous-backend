@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     LLM_API_KEY: str | None = None  # generic env-var fallback (aliases OPENAI_API_KEY when set)
     LLM_MODEL: str = "gpt-4o"
+    # Cap completion length. Critical for LM Studio: prompt+max_tokens must
+    # fit in the per-slot budget (n_ctx / n_parallel when kv_unified).
+    LLM_MAX_TOKENS: int = 3000
     ANTHROPIC_API_KEY: str | None = None
     DIFFBOT_API_KEY: str | None = None
     EMBEDDING_MODEL: str | None = "text-embedding-3-large"
