@@ -564,6 +564,76 @@ class TestDeleteGraphEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# Suite 1b'' — GET /graphs/{id}/chat/history (TASK-050)
+# ---------------------------------------------------------------------------
+
+
+class TestChatHistoryEndpoint:
+    """GET /api/v1/graphs/{graph_id}/chat/history — typed empty list (no persistence yet)."""
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_chat_history_returns_typed_empty_list(self, async_client):
+        """GET /graphs/{id}/chat/history → 200 with [] (no persistence layer yet)."""
+        auth_patch = _patch_auth(FAKE_USER_A)
+        try:
+            with patch(
+                "app.api.v1.endpoints.graphs.verify_graph_access",
+                new_callable=AsyncMock,
+            ) as mock_vga:
+                mock_vga.return_value = GRAPH_A_ID
+
+                response = await async_client.get(
+                    f"/api/v1/graphs/{GRAPH_A_ID}/chat/history",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_patch.stop()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert data == []
+        # ReBAC must be checked at read level
+        called_args = mock_vga.call_args
+        assert called_args.args[1] == "read" or called_args.kwargs.get("required_level") == "read"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_chat_history_returns_403_when_no_access(self, async_client):
+        """GET /graphs/{id}/chat/history → 403 when caller lacks read access."""
+        from fastapi import HTTPException, status as fastapi_status
+
+        auth_patch = _patch_auth(FAKE_USER_A)
+        try:
+            with patch(
+                "app.api.v1.endpoints.graphs.verify_graph_access",
+                new_callable=AsyncMock,
+            ) as mock_vga:
+                mock_vga.side_effect = HTTPException(
+                    status_code=fastapi_status.HTTP_403_FORBIDDEN, detail="Access denied"
+                )
+
+                response = await async_client.get(
+                    f"/api/v1/graphs/{GRAPH_A_ID}/chat/history",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_patch.stop()
+
+        assert response.status_code == 403
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_chat_history_requires_auth(self, async_client):
+        """GET /graphs/{id}/chat/history without token → 401/403."""
+        response = await async_client.get(
+            f"/api/v1/graphs/{GRAPH_A_ID}/chat/history"
+        )
+        assert response.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
 # Suite 1c — Ingestion
 # ---------------------------------------------------------------------------
 

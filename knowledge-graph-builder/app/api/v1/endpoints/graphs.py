@@ -17,6 +17,7 @@ from app.core.rate_limiter import limiter
 from app.models.graph import (  # Keep for job tracking only
     IngestionJob,
 )
+from app.schemas.chat_schemas import ChatHistoryEntry
 from app.schemas.graph_schemas import (
     AsyncRollbackResponse,
     CommunityDetailResponse,
@@ -420,6 +421,39 @@ async def delete_graph(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete graph: {str(e)}",
         )
+
+
+@router.get(
+    "/graphs/{graph_id}/chat/history",
+    response_model=list[ChatHistoryEntry],
+    summary="Return persisted chat turns for a graph",
+    responses={
+        403: {"description": "Caller lacks read access to the graph"},
+    },
+)
+async def get_chat_history(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Return persisted chat turns for the requesting user, ordered ascending
+    by `created_at`.
+
+    **Status (TASK-050):** the backend does not yet persist chat turns.
+    This endpoint always returns an empty list with the typed
+    `ChatHistoryEntry` shape so the frontend can mount the route safely;
+    a follow-up task will add a transcript store (Postgres table or a
+    `(:ChatTurn)` Neo4j subgraph) and start populating it from the
+    `POST /chat` and `POST /chat/stream` handlers.
+
+    Requires `read`-level access via ReBAC.
+    """
+    # ReBAC check — read level required to view chat history
+    await verify_graph_access(str(graph_id), "read", user_id)
+
+    # No persistence layer today (option (b) per TASK-050 decisions table).
+    # Return a typed empty list so the frontend contract holds.
+    return []
 
 
 # ==================== SIMPLIFIED INGESTION ENDPOINT ====================
