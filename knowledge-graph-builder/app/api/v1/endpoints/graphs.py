@@ -4,13 +4,13 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Core dependencies
-from app.api.dependencies import get_current_user_id, get_database, verify_graph_access
+from app.api.dependencies import get_current_user, get_current_user_id, get_database, verify_graph_access
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.rate_limiter import limiter
@@ -24,9 +24,11 @@ from app.schemas.graph_schemas import (
     CommunityDetectResponse,
     CommunityListResponse,
     CommunityStatusResponse,
+    DocumentResponse,
     GraphCreate,
     GraphInstructions,
     GraphInstructionsResponse,
+    GraphLLMConfigResponse,
     GraphResponse,
     GraphUpdate,
     IngestDataRequest,
@@ -53,6 +55,7 @@ from app.services.background_job_service import background_job_service
 
 # Neo4j Services
 from app.services.graph_node_service import GraphNodeService
+from app.services.llm_config_service import LLMConfigService
 from app.services.rollback_service import rollback_service
 from app.services.snapshot_service import snapshot_service
 
@@ -444,6 +447,7 @@ async def ingest_data_corrected(
     job = IngestionJob(
         graph_id=graph_id,
         source_type=data.source_type or "text",
+        filename=data.filename,
         source_content=data.content,
         status="pending",
         ingest_mode=data.mode.value,
@@ -456,7 +460,7 @@ async def ingest_data_corrected(
 
     # Start background ingestion job using pipeline service
     try:
-        job_result = background_job_service.start_ingestion_job(str(job.id), user_id)
+        job_result = await background_job_service.start_ingestion_job(str(job.id), user_id)
 
         if job_result["status"] == "failed":
             logger.error(f"Failed to start background job: {job_result['message']}")
@@ -484,6 +488,112 @@ async def ingest_data_corrected(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create ingestion job: {str(e)}",
         )
+
+
+@router.get(
+    "/graphs/{graph_id}/llm-config",
+    response_model=list[GraphLLMConfigResponse],
+    summary="List LLM configs visible to this graph (org-level)",
+)
+async def list_graph_llm_configs(
+    graph_id: UUID,
+    current_user: dict = Depends(get_current_user),
+):
+    await verify_graph_access(str(graph_id), "read", str(current_user["id"]))
+    org_id = str(current_user.get("tenant_id") or current_user.get("org_id") or current_user["id"])
+    if not neo4j_client.async_driver:
+        return []
+    svc = LLMConfigService(neo4j_client.async_driver)
+    configs = await svc.list_org_configs(org_id)
+    return [
+        GraphLLMConfigResponse(
+            config_id=c["config_id"],
+            provider=c["provider"],
+            model_name=c.get("model", ""),
+            is_active=c.get("deactivated_at") is None,
+        )
+        for c in configs
+    ]
+
+
+def _job_to_document(job: IngestionJob) -> DocumentResponse:
+    status_map = {"pending": "processing", "running": "processing", "completed": "ready", "failed": "error"}
+    ext = job.filename.rsplit(".", 1)[-1].lower() if job.filename and "." in job.filename else (job.source_type or "txt")
+    return DocumentResponse(
+        document_id=str(job.id),
+        filename=job.filename or f"document_{str(job.id)[:8]}",
+        file_type=ext,
+        status=status_map.get(job.status, "processing"),
+        node_count=job.extracted_entities or 0,
+        created_at=job.created_at,
+        error_message=job.error_message,
+    )
+
+
+@router.get(
+    "/graphs/{graph_id}/documents",
+    response_model=list[DocumentResponse],
+    summary="List documents ingested into a graph",
+)
+async def list_documents(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+):
+    await verify_graph_access(str(graph_id), "read", user_id)
+    result = await db.execute(
+        select(IngestionJob)
+        .where(IngestionJob.graph_id == graph_id)
+        .order_by(IngestionJob.created_at.desc())
+    )
+    jobs = result.scalars().all()
+    return [_job_to_document(j) for j in jobs]
+
+
+@router.post(
+    "/graphs/{graph_id}/documents",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload a file and ingest it into a graph",
+)
+@limiter.limit("10/minute")
+async def upload_document(
+    request: Request,
+    graph_id: UUID,
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+):
+    await verify_graph_access(str(graph_id), "write", user_id)
+
+    raw = await file.read()
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        content = raw.decode("latin-1")
+
+    if len(content.strip()) < 10:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="File content too short")
+
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in (file.filename or "") else "txt"
+
+    job = IngestionJob(
+        graph_id=graph_id,
+        source_type=ext,
+        filename=file.filename,
+        source_content=content,
+        status="pending",
+        ingest_mode="incremental",
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    job_result = await background_job_service.start_ingestion_job(str(job.id), user_id)
+    if job_result.get("status") == "failed":
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to start ingestion job")
+
+    return _job_to_document(job)
 
 
 @router.post(
