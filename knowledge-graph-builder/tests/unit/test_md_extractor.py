@@ -14,7 +14,7 @@ import tempfile
 
 import pytest
 
-from app.services.md_extractor import extract_markdown
+from app.services.md_extractor import extract_markdown, extract_markdown_from_text
 
 
 def _write_md(content: str) -> str:
@@ -57,6 +57,42 @@ class TestTitleDetection:
         finally:
             os.unlink(path)
         assert result["title"] == "First"
+
+
+class TestExtractMarkdownFromText:
+    """The from-text variant — used by document_processor when the caller
+    already has the markdown content in memory (no file path)."""
+
+    @pytest.mark.unit
+    def test_accepts_raw_text_no_path(self):
+        text = "# In-Memory Doc\n\nBody.\n\n## A subsection\n\nMore body.\n"
+        result = extract_markdown_from_text(text)
+        assert result["title"] == "In-Memory Doc"
+        assert len(result["sections"]) == 2
+        assert result["sections"][0]["heading"] == "In-Memory Doc"
+        assert result["sections"][1]["heading"] == "A subsection"
+
+    @pytest.mark.unit
+    def test_uses_fallback_title_when_no_h1(self):
+        text = "## Only an H2\n\nContent.\n"
+        result = extract_markdown_from_text(text, fallback_title="my-doc")
+        assert result["title"] == "my-doc"
+
+    @pytest.mark.unit
+    def test_fallback_empty_when_unspecified_and_no_h1(self):
+        text = "## Only an H2\n\nContent.\n"
+        result = extract_markdown_from_text(text)
+        assert result["title"] == ""
+
+    @pytest.mark.unit
+    def test_does_not_open_a_file(self, tmp_path):
+        # Regression: extract_markdown_from_text must NOT try to open content
+        # as a path. Earlier bug treated upload content as a filename and
+        # raised OSError [Errno 36] File name too long.
+        text = "# Long Heading That Would Be A Bad Path " * 50 + "\n\nbody"
+        # Should not raise
+        result = extract_markdown_from_text(text)
+        assert result["sections"][0]["heading"].startswith("Long Heading")
 
 
 # ─── Sections extraction ─────────────────────────────────────────────────────

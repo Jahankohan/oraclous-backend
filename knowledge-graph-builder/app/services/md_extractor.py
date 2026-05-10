@@ -65,9 +65,49 @@ def _build_hierarchy(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return hierarchy
 
 
+def extract_markdown_from_text(
+    text: str, fallback_title: str = ""
+) -> dict[str, Any]:
+    """
+    Extract structure from a Markdown string.
+
+    Args:
+        text: The raw markdown content.
+        fallback_title: Used when the document has no H1 heading. Pass the
+            filename stem from the caller, or leave empty.
+
+    Returns: see ``extract_markdown``.
+    """
+    matches = list(_HEADING_RE.finditer(text))
+
+    sections: list[dict[str, Any]] = []
+    for i, match in enumerate(matches):
+        level = len(match.group(1))
+        heading = match.group(2).strip()
+
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        content = text[start:end].strip()
+
+        sections.append({"level": level, "heading": heading, "content": content})
+
+    title = next(
+        (s["heading"] for s in sections if s["level"] == 1),
+        fallback_title,
+    )
+
+    hierarchy = _build_hierarchy(sections)
+
+    return {"title": title, "sections": sections, "hierarchy": hierarchy}
+
+
 def extract_markdown(file_path: str) -> dict[str, Any]:
     """
-    Extract structure from a Markdown file.
+    Extract structure from a Markdown file on disk.
+
+    Thin wrapper around ``extract_markdown_from_text`` for callers that have a
+    path. Callers that already have the markdown content as a string should use
+    ``extract_markdown_from_text`` directly to avoid the I/O round-trip.
 
     Args:
         file_path: Absolute path to the Markdown file.
@@ -87,28 +127,4 @@ def extract_markdown(file_path: str) -> dict[str, Any]:
     """
     with open(file_path, encoding="utf-8", errors="replace") as fh:
         text = fh.read()
-
-    # Find all heading positions
-    matches = list(_HEADING_RE.finditer(text))
-
-    sections: list[dict[str, Any]] = []
-    for i, match in enumerate(matches):
-        level = len(match.group(1))
-        heading = match.group(2).strip()
-
-        # Content: everything from after this heading line until the next heading (or EOF)
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        content = text[start:end].strip()
-
-        sections.append({"level": level, "heading": heading, "content": content})
-
-    # Determine title: first H1 or filename stem
-    title = next(
-        (s["heading"] for s in sections if s["level"] == 1),
-        Path(file_path).stem,
-    )
-
-    hierarchy = _build_hierarchy(sections)
-
-    return {"title": title, "sections": sections, "hierarchy": hierarchy}
+    return extract_markdown_from_text(text, fallback_title=Path(file_path).stem)
