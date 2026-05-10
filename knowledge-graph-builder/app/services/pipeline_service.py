@@ -1292,12 +1292,27 @@ class MultiTenantGraphRAGPipeline:
             incoming_valid_from = temporal_context.valid_from
             incoming_valid_to = temporal_context.valid_to
 
+        # The LLM emits valid_from/valid_to as strings sometimes, datetimes other
+        # times (depending on prompt + model). Coerce either form to an ISO-8601
+        # string for the Cypher parameter — anything else is treated as "no data".
+        def _as_iso(value: Any) -> str | None:
+            if value is None:
+                return None
+            if hasattr(value, "isoformat"):
+                return value.isoformat()
+            if isinstance(value, str):
+                return value
+            return None
+
         for rel in graph.relationships:
             props = rel.properties or {}
             rel_vf = props.get("valid_from") or incoming_valid_from
             rel_vt = props.get("valid_to") or incoming_valid_to
 
-            if rel_vf is None:
+            rel_vf_iso = _as_iso(rel_vf)
+            rel_vt_iso = _as_iso(rel_vt)
+
+            if rel_vf_iso is None:
                 continue  # No temporal info — cannot detect overlap
 
             # Build overlap check query
@@ -1313,7 +1328,7 @@ class MultiTenantGraphRAGPipeline:
             RETURN count(existing) AS overlap_count
             """
 
-            vt_or_max = rel_vt.isoformat() if rel_vt else "9999-12-31T00:00:00"
+            vt_or_max = rel_vt_iso if rel_vt_iso else "9999-12-31T00:00:00"
 
             # Resolve entity names from graph nodes (best-effort)
             node_map = {
@@ -1331,9 +1346,7 @@ class MultiTenantGraphRAGPipeline:
                             "src_name": src_name,
                             "tgt_name": tgt_name,
                             "rel_type": getattr(rel, "type", ""),
-                            "vf": (
-                                rel_vf.isoformat() if rel_vf else "0001-01-01T00:00:00"
-                            ),
+                            "vf": rel_vf_iso,
                             "vt_or_max": vt_or_max,
                         },
                     ).single()
@@ -1342,7 +1355,7 @@ class MultiTenantGraphRAGPipeline:
                         logger.warning(
                             f"Temporal contradiction: {src_name} -[{getattr(rel, 'type', '?')}]-> {tgt_name} "
                             f"overlaps with existing relationship in graph {self.graph_id} "
-                            f"(valid_from={rel_vf.isoformat() if rel_vf else None})"
+                            f"(valid_from={rel_vf_iso})"
                         )
             except Exception as e:
                 logger.debug(f"Contradiction check skipped for relationship: {e}")
