@@ -201,7 +201,10 @@ class PipelineConfig:
         self.chunk_size = getattr(settings, "CHUNK_SIZE", 1500)
         self.chunk_overlap = getattr(settings, "CHUNK_OVERLAP", 300)
         self.batch_size = 2000
-        self.max_concurrency = 10
+        # TASK-058: read from env so MAX_CONCURRENT_EXTRACTIONS actually
+        # throttles entity extraction. Default 5 matches the upstream
+        # LLMEntityRelationExtractor default; LM Studio operators set =1.
+        self.max_concurrency = getattr(settings, "MAX_CONCURRENT_EXTRACTIONS", 5)
 
         # Advanced Features
         self.enable_entity_resolution = True
