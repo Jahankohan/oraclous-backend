@@ -363,6 +363,32 @@ class MultiTenantKGWriter:
             if self.user_id:
                 node.properties["user_id"] = self.user_id
 
+        # === TASK-062: collapse identical relationships, attach a weight counter ===
+        # The LLM extracts the same (src, type, tgt) triple from multiple chunks;
+        # without dedup we get N copies of the same edge cluttering the graph and
+        # distorting any weighted graph algorithm. Collapse them here; `weight`
+        # carries the number of chunks that observed the relationship.
+        if graph.relationships:
+            rel_groups: dict[tuple[str, str, str], list] = {}
+            for rel in graph.relationships:
+                key = (rel.start_node_id, rel.type, rel.end_node_id)
+                rel_groups.setdefault(key, []).append(rel)
+            collapsed = 0
+            deduped_rels = []
+            for rels in rel_groups.values():
+                primary = rels[0]
+                if not primary.properties:
+                    primary.properties = {}
+                primary.properties["weight"] = len(rels)
+                deduped_rels.append(primary)
+                collapsed += len(rels) - 1
+            if collapsed:
+                logger.info(
+                    "MultiTenantKGWriter: collapsed %d duplicate relationships into %d unique edges (weight = source-chunk count)",
+                    collapsed, len(deduped_rels),
+                )
+            graph.relationships = deduped_rels
+
         # Inject graph_id, transaction_time, and bitemporal provenance into all relationships
         for rel in graph.relationships:
             if not rel.properties:
