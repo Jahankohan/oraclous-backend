@@ -32,7 +32,7 @@ class LLMConfigService:
         now = int(time.time())
         await self._driver.execute_query(
             """
-            CREATE (:LLMConfig {
+            CREATE (:LLMConfig:__Platform__ {
                 config_id:      $config_id,
                 scope:          "org",
                 org_id:         $org_id,
@@ -74,7 +74,7 @@ class LLMConfigService:
         now = int(time.time())
         await self._driver.execute_query(
             """
-            CREATE (:LLMConfig {
+            CREATE (:LLMConfig:__Platform__ {
                 config_id:      $config_id,
                 scope:          "project",
                 org_id:         $org_id,

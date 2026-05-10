@@ -97,7 +97,7 @@ class ServiceAccountService:
             await session.run(
                 """
                 MATCH (org:Organization {org_id: $tenant_id})
-                MERGE (sa:AgentServiceAccount {service_account_id: $sa_id})
+                MERGE (sa:AgentServiceAccount:__Platform__ {service_account_id: $sa_id})
                 ON CREATE SET
                     sa.tenant_id         = $tenant_id,
                     sa.name              = $name,

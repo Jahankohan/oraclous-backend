@@ -198,7 +198,7 @@ class ReBACService:
             for perm in _SYSTEM_PERMISSIONS:
                 await session.run(
                     """
-                    MERGE (p:Permission {name: $name})
+                    MERGE (p:Permission:__System__ {name: $name})
                     ON CREATE SET
                         p.permission_id = $pid,
                         p.resource_type = $resource_type,
@@ -241,9 +241,9 @@ class ReBACService:
             for kg in graphs:
                 await session.run(
                     """
-                    MERGE (u:User {user_id: $user_id, graph_id: "__system__"})
+                    MERGE (u:User:__Platform__ {user_id: $user_id, graph_id: "__system__"})
                     ON CREATE SET u.created_at = $now, u.status = "active"
-                    MERGE (g:Graph {graph_id: $graph_id, namespace: "__system__"})
+                    MERGE (g:Graph:__Rebac__ {graph_id: $graph_id, namespace: "__system__"})
                     ON CREATE SET
                         g.name = $name,
                         g.owner_user_id = $user_id,
@@ -422,9 +422,9 @@ class ReBACService:
         async with driver.session() as session:
             await session.run(
                 """
-                MERGE (u:User {user_id: $user_id, graph_id: "__system__"})
+                MERGE (u:User:__Platform__ {user_id: $user_id, graph_id: "__system__"})
                 ON CREATE SET u.created_at = $now, u.status = "active"
-                MERGE (g:Graph {graph_id: $graph_id, namespace: "__system__"})
+                MERGE (g:Graph:__Rebac__ {graph_id: $graph_id, namespace: "__system__"})
                 ON CREATE SET
                     g.name = $name,
                     g.owner_user_id = $user_id,
@@ -475,7 +475,7 @@ class ReBACService:
                 role_id = str(uuid4())
                 rec = await session.run(
                     """
-                    MERGE (r:Role {graph_id: $graph_id, name: $name})
+                    MERGE (r:Role:__System__ {graph_id: $graph_id, name: $name})
                     ON CREATE SET
                         r.role_id       = $role_id,
                         r.description   = $description,
@@ -541,10 +541,10 @@ class ReBACService:
             # Grant owner role to creating user
             await session.run(
                 """
-                MERGE (u:User {user_id: $user_id})
+                MERGE (u:User:__Platform__ {user_id: $user_id})
                 ON CREATE SET u.created_at = $now, u.is_service_account = false
                 WITH u
-                MATCH (r:Role {graph_id: $graph_id, name: 'owner'})
+                MATCH (r:Role:__System__ {graph_id: $graph_id, name: 'owner'})
                 MERGE (u)-[hr:HAS_ROLE {graph_id: $graph_id}]->(r)
                 ON CREATE SET
                     hr.granted_at  = $now,
@@ -584,7 +584,7 @@ class ReBACService:
         async with driver.session() as session:
             await session.run(
                 """
-                MERGE (u:User {user_id: $user_id})
+                MERGE (u:User:__Platform__ {user_id: $user_id})
                 ON CREATE SET
                     u.created_at       = $now,
                     u.is_service_account = false,
@@ -763,7 +763,7 @@ class ReBACService:
         async with driver.session() as session:
             result = await session.run(
                 """
-                MERGE (sg:SubGraph {graph_id: $graph_id, name: $name})
+                MERGE (sg:SubGraph:__Platform__ {graph_id: $graph_id, name: $name})
                 ON CREATE SET
                     sg.subgraph_id  = $subgraph_id,
                     sg.description  = $description,

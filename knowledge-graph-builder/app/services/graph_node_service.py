@@ -75,7 +75,7 @@ class GraphNodeService:
         """Create a new Graph node in Neo4j and ensure temporal indexes exist."""
 
         query = """
-        CREATE (g:Graph {
+        CREATE (g:Graph:__Platform__ {
             graph_id: $graph_id,
             name: $name,
             description: $description,
@@ -285,7 +285,7 @@ class GraphNodeService:
             # Only SET shadow.federatable — never overwrite owner_user_id, graph_name, etc.
             query = f"""
         MATCH (g:Graph {{graph_id: $graph_id, user_id: $user_id}})
-        MERGE (shadow:Graph {{graph_id: $graph_id, namespace: "__system__"}})
+        MERGE (shadow:Graph:__Rebac__ {{graph_id: $graph_id, namespace: "__system__"}})
         SET {set_clause}, shadow.federatable = $federatable
         RETURN g {{
             .graph_id,

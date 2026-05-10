@@ -70,7 +70,7 @@ class AgentService:
         now = int(time.time())
         await self._driver.execute_query(
             """
-            CREATE (a:Agent {
+            CREATE (a:Agent:__Platform__ {
                 agent_id:              $agent_id,
                 graph_id:              $graph_id,
                 name:                  $name,
