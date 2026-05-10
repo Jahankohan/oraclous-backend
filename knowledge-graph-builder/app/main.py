@@ -168,7 +168,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -192,6 +192,12 @@ async def add_process_time_header(request: Request, call_next):
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global exception on {request.url}: {exc}", exc_info=True)
+    origin = request.headers.get("origin", "")
+    cors_headers = {}
+    if origin:
+        cors_headers["Access-Control-Allow-Origin"] = origin
+        cors_headers["Access-Control-Allow-Credentials"] = "true"
+        cors_headers["Vary"] = "Origin"
     return JSONResponse(
         status_code=500,
         content={
@@ -199,6 +205,7 @@ async def global_exception_handler(request: Request, exc: Exception):
             "path": str(request.url.path),
             "method": request.method,
         },
+        headers=cors_headers,
     )
 
 

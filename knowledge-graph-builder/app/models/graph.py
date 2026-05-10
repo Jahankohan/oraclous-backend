@@ -56,6 +56,7 @@ class IngestionJob(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     graph_id = Column(UUID(as_uuid=True), nullable=False)
     source_type = Column(String(50))  # 'text', 'pdf', 'url', 'api'
+    filename = Column(String(512), nullable=True)
     source_content = Column(Text)
     status = Column(String(50), default="pending")
     progress = Column(Integer, default=0)

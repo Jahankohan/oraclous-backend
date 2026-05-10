@@ -4,6 +4,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from app.core.dependencies import get_token_repository, get_user_repository, verify_internal_service
+from app.core.config import settings
 from app.core.jwt_handler import decode_state, create_access_token, create_refresh_token
 from urllib.parse import urlencode
 from app.schema.oauth_schemas import TokenRefreshRequest, TokenRefreshResponse, ScopeValidationRequest, RuntimeTokenResponse, ScopeValidationResponse, UserTokensResponse, EnsureAccessResponse
@@ -77,8 +78,8 @@ async def callback(provider: str, request: Request):
         "state": redirect_path
     }
     
-    # Build the frontend callback URL
-    frontend_base_url = "http://localhost:8080/oauth/{}/callback".format(provider)
+    # Build the frontend callback URL using FRONTEND_URL from settings
+    frontend_base_url = f"{settings.FRONTEND_URL}/oauth/{provider}/callback"
     query_string = urlencode(params)
     response_url = f"{frontend_base_url}?{query_string}"
     
