@@ -286,9 +286,56 @@ class MultiTenantKGWriter:
         self.user_id = user_id
         self.ingestion_source = ingestion_source
 
+    # Labels that legitimately have no `name` property (chunks/documents carry
+    # `text` / `path` instead). Empty-name entity filtering only applies to
+    # other labels — i.e. things the LLM classified as entity types.
+    _LEXICAL_LABELS = frozenset({"Chunk", "Document"})
+
     async def run(self, graph: Neo4jGraph) -> None:
-        """Write graph with automatic tenant metadata injection"""
+        """Write graph with automatic tenant metadata injection.
+
+        Also drops LLM-extracted entities whose `name` property is missing or
+        empty (TASK-061 / STORY-025). Empty-name entities accumulate junk
+        relationships and never deduplicate (the resolver groups by `name`),
+        so the cleanest place to handle them is at write time.
+        """
         now = datetime.now(UTC)
+
+        # === TASK-061: drop empty-name entities before we touch anything else ===
+        # Build the set of dropped node IDs so we can also filter the relationships
+        # that would have pointed at them (avoids dangling MERGEs downstream).
+        dropped_ids: set[str] = set()
+        kept_nodes = []
+        for node in graph.nodes:
+            label = getattr(node, "label", None)
+            if label in self._LEXICAL_LABELS:
+                kept_nodes.append(node)
+                continue
+            raw_name = (node.properties or {}).get("name") if node.properties else None
+            if not (isinstance(raw_name, str) and raw_name.strip()):
+                dropped_ids.add(node.id)
+                continue
+            kept_nodes.append(node)
+
+        if dropped_ids:
+            logger.info(
+                "MultiTenantKGWriter: dropped %d empty-name entities for tenant %s, source=%s",
+                len(dropped_ids), self.graph_id, self.ingestion_source,
+            )
+            graph.nodes = kept_nodes
+            # Drop relationships that would dangle on a removed node
+            kept_rels = [
+                r for r in graph.relationships
+                if r.start_node_id not in dropped_ids
+                and r.end_node_id not in dropped_ids
+            ]
+            dropped_rel_count = len(graph.relationships) - len(kept_rels)
+            if dropped_rel_count:
+                logger.info(
+                    "MultiTenantKGWriter: dropped %d relationships pointing to filtered nodes",
+                    dropped_rel_count,
+                )
+                graph.relationships = kept_rels
 
         # Inject graph_id, transaction_time, and bitemporal provenance into all nodes
         for node in graph.nodes:
