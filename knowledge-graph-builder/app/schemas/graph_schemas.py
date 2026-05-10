@@ -654,6 +654,9 @@ class IngestDataRequest(BaseModel):
         min_length=10,
         description="Text content to ingest and extract entities from",
     )
+    filename: str | None = Field(
+        None, description="Original filename of the uploaded document"
+    )
     source_type: str = Field(
         default="text", description="Content type: text, pdf, url, api"
     )
@@ -734,11 +737,36 @@ class IngestDataRequest(BaseModel):
         return None
 
 
+class GraphLLMConfigResponse(BaseModel):
+    """LLM config shape expected by the visual-flow frontend."""
+
+    config_id: str
+    provider: str
+    model_name: str
+    is_active: bool
+
+
+class DocumentResponse(BaseModel):
+    """Document view of an ingestion job — used by the /documents endpoints."""
+
+    document_id: str
+    filename: str
+    file_type: str
+    status: str  # 'processing' | 'ready' | 'error'
+    node_count: int
+    created_at: datetime
+    error_message: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
 class IngestionJobResponse(BaseModel):
     """Schema for ingestion job response"""
 
     id: UUID
     graph_id: UUID
+    filename: str | None = None
     source_type: str | None
     status: str
     progress: int
