@@ -10,6 +10,53 @@ from fastapi import HTTPException
 
 from app.services.document_processor import DocumentProcessor, document_processor
 
+
+# ---------------------------------------------------------------------------
+# Tests: process_document for markdown
+# ---------------------------------------------------------------------------
+
+
+class TestProcessMarkdown:
+    """TASK-057 regression tests: markdown must yield non-empty text so the
+    chunking pipeline doesn't skip the document."""
+
+    SAMPLE = (
+        "# Behavioral Simulation\n\n"
+        "This document outlines the framework.\n\n"
+        "## Section A\n\nDetailed content for section A.\n\n"
+        "## Section B\n\nDetailed content for section B.\n"
+    )
+
+    @pytest.mark.unit
+    def test_markdown_returns_non_empty_text(self):
+        result = DocumentProcessor.process_document(
+            self.SAMPLE, source_type="md"
+        )
+        assert result["text"], "markdown text must be non-empty so chunker runs"
+        assert "Behavioral Simulation" in result["text"]
+        assert "Section A" in result["text"]
+        assert "Section B" in result["text"]
+
+    @pytest.mark.unit
+    def test_markdown_keeps_structured_hierarchy(self):
+        result = DocumentProcessor.process_document(
+            self.SAMPLE, source_type="markdown"
+        )
+        assert "structured" in result
+        assert result["structured"]["title"] == "Behavioral Simulation"
+        assert len(result["structured"]["sections"]) == 3
+
+    @pytest.mark.unit
+    def test_markdown_metadata_preserved(self):
+        result = DocumentProcessor.process_document(
+            self.SAMPLE,
+            source_type="md",
+            metadata={"filename": "behavioral-sim.md"},
+        )
+        assert result["metadata"]["content_type"] == "text/markdown"
+        assert result["metadata"]["processing_method"] == "md_extractor"
+        assert result["metadata"]["section_count"] == 3
+
 # ---------------------------------------------------------------------------
 # Tests: process_document routing
 # ---------------------------------------------------------------------------

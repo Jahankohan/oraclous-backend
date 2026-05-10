@@ -318,7 +318,10 @@ class DocumentProcessor:
         )
 
         return {
-            "text": "",
+            # Original markdown body — chunker treats heading lines as natural
+            # boundaries. Empty text would cause _process_pipeline_ingestion_async
+            # to skip the document (TASK-057).
+            "text": content.strip(),
             "structured": result,
             "metadata": processed_metadata,
             "success": True,
