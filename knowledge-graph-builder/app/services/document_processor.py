@@ -287,16 +287,20 @@ class DocumentProcessor:
         content: str, metadata: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """
-        Process a Markdown file.
+        Process a Markdown document.
 
         Args:
-            content: Absolute path to the Markdown file on disk.
+            content: Raw markdown content as a string. (Earlier versions of
+                this signature called it a path; the actual caller in
+                graphs.py upload_document passes raw decoded content.)
             metadata: Additional metadata dict.
         """
-        from app.services.md_extractor import extract_markdown
+        from app.services.md_extractor import extract_markdown_from_text
+
+        fallback_title = (metadata or {}).get("filename", "").rsplit(".", 1)[0]
 
         try:
-            result = extract_markdown(content)
+            result = extract_markdown_from_text(content, fallback_title=fallback_title)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
