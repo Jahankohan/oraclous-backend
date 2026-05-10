@@ -261,6 +261,18 @@ class TestListUserGraphs:
         with pytest.raises(Exception, match="Failed to list user graphs"):
             svc.list_user_graphs("user-1")
 
+    @pytest.mark.unit
+    def test_list_user_graphs_excludes_deactivated_graphs(self):
+        """Soft-deleted graphs (status='deactivated') must be filtered out (TASK-050)."""
+        mock_driver, mock_session, mock_result, _ = _make_driver()
+        mock_result.__iter__ = MagicMock(return_value=iter([]))
+
+        svc = GraphNodeService(mock_driver)
+        svc.list_user_graphs("user-1")
+
+        query = mock_session.run.call_args[0][0]
+        assert "deactivated" in query
+
 
 # ---------------------------------------------------------------------------
 # Tests: delete_graph
@@ -317,6 +329,84 @@ class TestDeleteGraph:
         svc = GraphNodeService(mock_driver)
         with pytest.raises(Exception, match="Failed to delete graph"):
             svc.delete_graph("g-1", "user-1")
+
+
+# ---------------------------------------------------------------------------
+# Tests: soft_delete_graph (TASK-050)
+# ---------------------------------------------------------------------------
+
+
+class TestSoftDeleteGraph:
+    @pytest.mark.unit
+    def test_soft_delete_returns_true_when_node_matched(self):
+        mock_driver, mock_session, mock_result, mock_record = _make_driver()
+        mock_record.__getitem__ = MagicMock(
+            side_effect=lambda k: 1 if k == "deactivated_count" else None
+        )
+        mock_result.single.return_value = mock_record
+
+        svc = GraphNodeService(mock_driver)
+        assert svc.soft_delete_graph("g-1") is True
+
+    @pytest.mark.unit
+    def test_soft_delete_returns_false_when_no_node(self):
+        mock_driver, mock_session, mock_result, mock_record = _make_driver()
+        mock_record.__getitem__ = MagicMock(
+            side_effect=lambda k: 0 if k == "deactivated_count" else None
+        )
+        mock_result.single.return_value = mock_record
+
+        svc = GraphNodeService(mock_driver)
+        assert svc.soft_delete_graph("g-missing") is False
+
+    @pytest.mark.unit
+    def test_soft_delete_query_sets_deactivated_at_and_status(self):
+        """The Cypher must SET status='deactivated' and a deactivated_at timestamp."""
+        mock_driver, mock_session, mock_result, mock_record = _make_driver()
+        mock_record.__getitem__ = MagicMock(side_effect=lambda k: 1)
+
+        svc = GraphNodeService(mock_driver)
+        svc.soft_delete_graph("g-1")
+
+        call_args = mock_session.run.call_args
+        query = call_args[0][0]
+        assert "status = 'deactivated'" in query
+        assert "deactivated_at = datetime()" in query
+        # No DETACH DELETE — must be a soft-delete only
+        assert "DETACH DELETE" not in query
+
+    @pytest.mark.unit
+    def test_soft_delete_passes_graph_id_param(self):
+        mock_driver, mock_session, mock_result, mock_record = _make_driver()
+        mock_record.__getitem__ = MagicMock(side_effect=lambda k: 1)
+
+        svc = GraphNodeService(mock_driver)
+        svc.soft_delete_graph("g-99")
+
+        call_args = mock_session.run.call_args
+        params = call_args[0][1] if len(call_args[0]) > 1 else call_args[1]
+        assert params.get("graph_id") == "g-99"
+
+    @pytest.mark.unit
+    def test_soft_delete_returns_false_when_no_record(self):
+        mock_driver, mock_session, mock_result, _ = _make_driver()
+        mock_result.single.return_value = None
+
+        svc = GraphNodeService(mock_driver)
+        assert svc.soft_delete_graph("g-1") is False
+
+    @pytest.mark.unit
+    def test_soft_delete_wraps_neo4j_error(self):
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_session.__enter__ = MagicMock(return_value=mock_session)
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_session.run.side_effect = Neo4jError("Boom")
+        mock_driver.session.return_value = mock_session
+
+        svc = GraphNodeService(mock_driver)
+        with pytest.raises(Exception, match="Failed to soft-delete graph"):
+            svc.soft_delete_graph("g-1")
 
 
 # ---------------------------------------------------------------------------

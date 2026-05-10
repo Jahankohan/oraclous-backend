@@ -359,6 +359,69 @@ async def update_graph(
         )
 
 
+@router.delete(
+    "/graphs/{graph_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Soft-delete a knowledge graph",
+    responses={
+        204: {"description": "Graph deactivated successfully"},
+        403: {"description": "Caller lacks admin permission on the graph"},
+        404: {"description": "Graph not found"},
+        503: {"description": "Neo4j service unavailable"},
+    },
+)
+async def delete_graph(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Soft-delete a knowledge graph.
+
+    Marks the graph as deactivated (sets `status = 'deactivated'` and a
+    `deactivated_at` timestamp on the Neo4j Graph node) without dropping
+    any underlying entities, relationships, documents, or chat history.
+    Soft-deleted graphs disappear from `GET /graphs` listings but are
+    preserved as an audit trail and can be restored manually if needed.
+
+    Requires `admin`-level access via ReBAC.
+    """
+    # ReBAC check — admin level required for delete (ORA-39 spec)
+    await verify_graph_access(str(graph_id), "admin", user_id)
+
+    if not neo4j_client.sync_driver:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j connection not available",
+        )
+
+    try:
+        graph_service = GraphNodeService(neo4j_client.sync_driver)
+
+        existing_graph = graph_service.get_graph(str(graph_id))
+        if not existing_graph:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
+            )
+
+        deactivated = graph_service.soft_delete_graph(str(graph_id))
+        if not deactivated:
+            # Race: get_graph saw the node but soft_delete didn't match.  Treat as 404.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
+            )
+
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to soft-delete graph {graph_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete graph: {str(e)}",
+        )
+
+
 # ==================== SIMPLIFIED INGESTION ENDPOINT ====================
 
 
