@@ -929,7 +929,7 @@ class MultiTenantGraphRAGPipeline:
         try:
             connect_query = """
             MATCH (d:Document {path: $source, graph_id: $graph_id})
-            MATCH (g:Graph {graph_id: $graph_id})
+            MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
             MERGE (d)-[:BELONGS_TO]->(g)
             """
             await neo4j_client.execute_query(

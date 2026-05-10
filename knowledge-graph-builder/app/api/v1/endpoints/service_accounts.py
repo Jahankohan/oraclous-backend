@@ -67,7 +67,7 @@ async def _resolve_tenant_id(current_user: dict, driver) -> str:
     async with driver.session() as session:
         result = await session.run(
             """
-            MATCH (u:User {user_id: $user_id, graph_id: "__system__"})
+            MATCH (u:User:__Platform__ {user_id: $user_id, graph_id: "__system__"})
                   -[:BELONGS_TO]->(org:Organization {graph_id: "__system__"})
             RETURN org.org_id AS org_id
             LIMIT 1

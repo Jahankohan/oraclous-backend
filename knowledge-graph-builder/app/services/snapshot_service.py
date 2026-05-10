@@ -97,7 +97,7 @@ class SnapshotService:
         now = datetime.now(UTC)
 
         create_q = """
-        MATCH (g:Graph {graph_id: $graph_id})
+        MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
         CREATE (v:GraphVersion {
             version_id:         $version_id,
             graph_id:           $graph_id,

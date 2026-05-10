@@ -303,8 +303,8 @@ class ReBACService:
             async with driver.session() as session:
                 result = await session.run(
                     """
-                    MATCH (u:User {user_id: $user_id})
-                      -[hr:HAS_ROLE]->(r:Role {graph_id: $graph_id})
+                    MATCH (u:User:__Platform__ {user_id: $user_id})
+                      -[hr:HAS_ROLE]->(r:Role:__System__ {graph_id: $graph_id})
                     WHERE hr.graph_id = $graph_id
                       AND hr.is_active = true
                       AND (hr.expires_at IS NULL OR hr.expires_at > datetime())
@@ -312,7 +312,7 @@ class ReBACService:
                     OPTIONAL MATCH (r)-[:HAS_PERMISSION|INHERITS_FROM*0..5]->
                                    (:Role)-[:HAS_PERMISSION]->(p1:Permission {name: $perm})
 
-                    OPTIONAL MATCH (r)-[:HAS_PERMISSION]->(p2:Permission {name: $perm})
+                    OPTIONAL MATCH (r)-[:HAS_PERMISSION]->(p2:Permission:__System__ {name: $perm})
 
                     WITH count(p1) + count(p2) AS perm_count
                     RETURN perm_count > 0 AS authorized
@@ -337,7 +337,7 @@ class ReBACService:
                     # Only return if Phase B nodes actually exist for this graph
                     # (count check: if there are any roles for this graph, trust Phase B)
                     role_check = await session.run(
-                        "MATCH (r:Role {graph_id: $graph_id}) RETURN count(r) AS cnt LIMIT 1",
+                        "MATCH (r:Role:__System__ {graph_id: $graph_id}) RETURN count(r) AS cnt LIMIT 1",
                         {"graph_id": graph_id},
                     )
                     role_record = await role_check.single()
@@ -350,23 +350,23 @@ class ReBACService:
         query = """
         WITH $user_id AS uid, $graph_id AS gid, $acceptable AS ok
 
-        OPTIONAL MATCH (u:User {user_id: uid, graph_id: "__system__"})
+        OPTIONAL MATCH (u:User:__Platform__ {user_id: uid, graph_id: "__system__"})
           -[r1:CAN_ACCESS]->
-          (g1:Graph {graph_id: gid, namespace: "__system__"})
+          (g1:Graph:__Rebac__ {graph_id: gid, namespace: "__system__"})
         WHERE r1.level IN ok
           AND (r1.expires_at IS NULL OR r1.expires_at > datetime())
 
-        OPTIONAL MATCH (u2:User {user_id: uid, graph_id: "__system__"})
+        OPTIONAL MATCH (u2:User:__Platform__ {user_id: uid, graph_id: "__system__"})
           -[:MEMBER_OF]->(:Team {graph_id: "__system__"})
           -[r2:CAN_ACCESS]->
-          (g2:Graph {graph_id: gid, namespace: "__system__"})
+          (g2:Graph:__Rebac__ {graph_id: gid, namespace: "__system__"})
         WHERE r2.level IN ok
           AND (r2.expires_at IS NULL OR r2.expires_at > datetime())
 
-        OPTIONAL MATCH (u3:User {user_id: uid, graph_id: "__system__"})
+        OPTIONAL MATCH (u3:User:__Platform__ {user_id: uid, graph_id: "__system__"})
           -[:BELONGS_TO {role: "owner"}]->(:Organization {graph_id: "__system__"})
           -[:OWNS]->
-          (g3:Graph {graph_id: gid, namespace: "__system__"})
+          (g3:Graph:__Rebac__ {graph_id: gid, namespace: "__system__"})
 
         RETURN (u IS NOT NULL OR u2 IS NOT NULL OR u3 IS NOT NULL) AS authorized
         """
@@ -501,8 +501,8 @@ class ReBACService:
                 for perm_name in perms:
                     await session.run(
                         """
-                        MATCH (r:Role {graph_id: $graph_id, name: $role_name})
-                        MATCH (p:Permission {name: $perm_name})
+                        MATCH (r:Role:__System__ {graph_id: $graph_id, name: $role_name})
+                        MATCH (p:Permission:__System__ {name: $perm_name})
                         MERGE (r)-[hp:HAS_PERMISSION]->(p)
                         ON CREATE SET hp.graph_id = $graph_id, hp.granted_at = $now
                         """,
@@ -525,8 +525,8 @@ class ReBACService:
             for parent, child in inheritance:
                 await session.run(
                     """
-                    MATCH (parent:Role {graph_id: $graph_id, name: $parent})
-                    MATCH (child:Role {graph_id: $graph_id, name: $child})
+                    MATCH (parent:Role:__System__ {graph_id: $graph_id, name: $parent})
+                    MATCH (child:Role:__System__ {graph_id: $graph_id, name: $child})
                     MERGE (parent)-[i:INHERITS_FROM]->(child)
                     ON CREATE SET i.graph_id = $graph_id, i.created_at = $now
                     """,
@@ -591,7 +591,7 @@ class ReBACService:
                     u.email            = $email
                 ON MATCH SET u.email = CASE WHEN $email IS NOT NULL THEN $email ELSE u.email END
                 WITH u
-                MATCH (r:Role {graph_id: $graph_id, name: $role_name})
+                MATCH (r:Role:__System__ {graph_id: $graph_id, name: $role_name})
                 MERGE (u)-[hr:HAS_ROLE {graph_id: $graph_id}]->(r)
                 ON CREATE SET
                     hr.granted_at = $now,
@@ -634,9 +634,9 @@ class ReBACService:
         async with driver.session() as session:
             result = await session.run(
                 """
-                MATCH (u:User {user_id: $user_id})
+                MATCH (u:User:__Platform__ {user_id: $user_id})
                   -[hr:HAS_ROLE {graph_id: $graph_id}]->
-                  (r:Role {graph_id: $graph_id, name: $role_name})
+                  (r:Role:__System__ {graph_id: $graph_id, name: $role_name})
                 SET hr.is_active = false
                 RETURN count(hr) AS revoked_count
                 """,
@@ -667,7 +667,7 @@ class ReBACService:
         async with driver.session() as session:
             result = await session.run(
                 """
-                MATCH (u:User)-[hr:HAS_ROLE {graph_id: $graph_id}]->(r:Role {graph_id: $graph_id})
+                MATCH (u:User:__Platform__)-[hr:HAS_ROLE {graph_id: $graph_id}]->(r:Role:__System__ {graph_id: $graph_id})
                 WHERE hr.is_active = true
                   AND (hr.expires_at IS NULL OR hr.expires_at > datetime())
                 RETURN
@@ -711,17 +711,17 @@ class ReBACService:
         async with driver.session() as session:
             result = await session.run(
                 """
-                MATCH (u:User {user_id: $user_id})
+                MATCH (u:User:__Platform__ {user_id: $user_id})
                   -[hr:HAS_ROLE {graph_id: $graph_id}]->
-                  (r:Role {graph_id: $graph_id})
+                  (r:Role:__System__ {graph_id: $graph_id})
                 WHERE hr.is_active = true
                   AND (hr.expires_at IS NULL OR hr.expires_at > datetime())
 
                 OPTIONAL MATCH (r)-[:APPLIES_TO]->(sg:SubGraph {graph_id: $graph_id})
 
                 OPTIONAL MATCH (r)-[:HAS_PERMISSION|INHERITS_FROM*0..5]->
-                               (:Role)-[:HAS_PERMISSION]->(p:Permission {name: 'graph:read'})
-                OPTIONAL MATCH (r)-[:HAS_PERMISSION]->(p2:Permission {name: 'graph:read'})
+                               (:Role)-[:HAS_PERMISSION]->(p:Permission:__System__ {name: 'graph:read'})
+                OPTIONAL MATCH (r)-[:HAS_PERMISSION]->(p2:Permission:__System__ {name: 'graph:read'})
 
                 WITH
                     count(p) + count(p2) > 0 AS has_global_read,

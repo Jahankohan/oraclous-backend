@@ -84,7 +84,7 @@ async def code_ingest(
             detail="Neo4j not available",
         )
     result = await neo4j_client.async_driver.execute_query(
-        "MATCH (g:Graph {graph_id: $graph_id}) RETURN g.graph_id LIMIT 1",
+        "MATCH (g:Graph:__Platform__ {graph_id: $graph_id}) RETURN g.graph_id LIMIT 1",
         {"graph_id": str(graph_id)},
     )
     if not result.records:

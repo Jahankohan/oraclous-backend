@@ -143,7 +143,7 @@ class InstructionsResolver:
     async def _load_from_neo4j(self, graph_id: str) -> GraphInstructions | None:
         """Read instructions_config JSON from the Graph node."""
         query = """
-        MATCH (g:Graph {graph_id: $graph_id})
+        MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
         RETURN g.instructions_config AS instructions_config
         """
         try:
@@ -287,7 +287,7 @@ class InstructionsService:
         now = datetime.now(UTC)
 
         query = """
-        MATCH (g:Graph {graph_id: $graph_id})
+        MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
         SET g.instructions_config = $config,
             g.instructions_version = COALESCE(g.instructions_version, 0) + 1,
             g.instructions_updated_at = datetime($updated_at)
@@ -315,7 +315,7 @@ class InstructionsService:
     async def get_instructions(self, graph_id: str) -> GraphInstructionsResponse | None:
         """Fetch GraphInstructions from the Graph node. Returns None if not configured."""
         query = """
-        MATCH (g:Graph {graph_id: $graph_id})
+        MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
         RETURN g.instructions_config AS config,
                g.instructions_version AS version,
                g.instructions_updated_at AS updated_at
@@ -356,7 +356,7 @@ class InstructionsService:
     async def delete_instructions(self, graph_id: str) -> None:
         """Remove all instruction properties from the Graph node."""
         query = """
-        MATCH (g:Graph {graph_id: $graph_id})
+        MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
         REMOVE g.instructions_config, g.instructions_version, g.instructions_updated_at
         """
         await neo4j_client.execute_query(query, {"graph_id": graph_id})

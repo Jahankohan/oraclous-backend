@@ -110,7 +110,7 @@ class ServiceAccountService:
                     sa.key_prefix        = ''
                 MERGE (org)-[:HAS_SERVICE_ACCOUNT]->(sa)
                 WITH sa
-                MATCH (g:Graph {graph_id: $graph_id})
+                MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
                 MERGE (sa)-[r:CAN_ACCESS]->(g)
                 ON CREATE SET
                     r.level       = $level,
@@ -354,7 +354,7 @@ class ServiceAccountService:
                 """
                 MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id,
                                                status: 'active'})
-                MATCH (g:Graph {graph_id: $graph_id})
+                MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
                 MATCH (org:Organization {org_id: $tenant_id})-[:OWNS]->(g)
                 MERGE (sa)-[r:CAN_ACCESS]->(g)
                 ON CREATE SET
@@ -458,7 +458,7 @@ class ServiceAccountService:
                 """
                 MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, status: 'active'})
                 MATCH (org:Organization {org_id: $tenant_id})-[:HAS_SERVICE_ACCOUNT]->(sa)
-                MATCH (org)-[:OWNS]->(g:Graph {graph_id: $graph_id})
+                MATCH (org)-[:OWNS]->(g:Graph:__Platform__ {graph_id: $graph_id})
                 MATCH (sa)-[r:CAN_ACCESS]->(g)
                 WHERE r.level IN $permitted_levels
                   AND (r.expires_at IS NULL OR r.expires_at > datetime())

@@ -155,7 +155,7 @@ class GraphNodeService:
             Graph metadata dict or None if not found
         """
         query = """
-        MATCH (g:Graph {graph_id: $graph_id})
+        MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
         RETURN g {
             .graph_id,
             .name,
@@ -202,7 +202,7 @@ class GraphNodeService:
             List of graph metadata dicts
         """
         query = """
-        MATCH (g:Graph {user_id: $user_id})
+        MATCH (g:Graph:__Platform__ {user_id: $user_id})
         WHERE coalesce(g.status, 'active') <> 'deactivated'
         RETURN g {
             .graph_id,
@@ -284,7 +284,7 @@ class GraphNodeService:
             # MERGE ensures the shadow node is created if it does not yet exist.
             # Only SET shadow.federatable — never overwrite owner_user_id, graph_name, etc.
             query = f"""
-        MATCH (g:Graph {{graph_id: $graph_id, user_id: $user_id}})
+        MATCH (g:Graph:__Platform__ {{graph_id: $graph_id, user_id: $user_id}})
         MERGE (shadow:Graph:__Rebac__ {{graph_id: $graph_id, namespace: "__system__"}})
         SET {set_clause}, shadow.federatable = $federatable
         RETURN g {{
@@ -303,7 +303,7 @@ class GraphNodeService:
         """
         else:
             query = f"""
-        MATCH (g:Graph {{graph_id: $graph_id, user_id: $user_id}})
+        MATCH (g:Graph:__Platform__ {{graph_id: $graph_id, user_id: $user_id}})
         SET {set_clause}
         RETURN g {{
             .graph_id,
@@ -348,7 +348,7 @@ class GraphNodeService:
         """
         if graph_ids is not None:
             query = """
-            MATCH (g:Graph {user_id: $user_id, federatable: true})
+            MATCH (g:Graph:__Platform__ {user_id: $user_id, federatable: true})
             WHERE g.graph_id IN $graph_ids
             RETURN g {
                 .graph_id,
@@ -361,7 +361,7 @@ class GraphNodeService:
             params: dict[str, Any] = {"user_id": user_id, "graph_ids": graph_ids}
         else:
             query = """
-            MATCH (g:Graph {user_id: $user_id, federatable: true})
+            MATCH (g:Graph:__Platform__ {user_id: $user_id, federatable: true})
             RETURN g {
                 .graph_id,
                 .name,
@@ -396,7 +396,7 @@ class GraphNodeService:
             True if deleted, False if not found
         """
         query = """
-        MATCH (g:Graph {graph_id: $graph_id, user_id: $user_id})
+        MATCH (g:Graph:__Platform__ {graph_id: $graph_id, user_id: $user_id})
         DETACH DELETE g
         RETURN count(g) as deleted_count
         """
@@ -437,7 +437,7 @@ class GraphNodeService:
             (i.e. graph_id is unknown).
         """
         query = """
-        MATCH (g:Graph {graph_id: $graph_id})
+        MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
         SET g.status = 'deactivated',
             g.deactivated_at = datetime(),
             g.updated_at = datetime()
@@ -566,7 +566,7 @@ class GraphNodeService:
             True if graph exists, False otherwise
         """
         query = """
-        MATCH (g:Graph {graph_id: $graph_id, user_id: $user_id})
+        MATCH (g:Graph:__Platform__ {graph_id: $graph_id, user_id: $user_id})
         RETURN count(g) > 0 as exists
         """
 
