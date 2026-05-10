@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     CHUNK_EMBEDDING_BATCH_SIZE: int = 5
     ENTITY_EMBEDDING_BATCH_SIZE: int = 10
 
+    # CORS
+    ALLOWED_ORIGINS: list[str] = [
+        "http://localhost:5174",
+        "http://localhost:5173",
+        "http://localhost:8080",
+    ]
+
     # Monitoring
     ENABLE_METRICS: bool = True
     LOG_LEVEL: str = "INFO"
