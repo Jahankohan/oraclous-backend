@@ -444,6 +444,196 @@ class TestGraphsCRUD:
 
 
 # ---------------------------------------------------------------------------
+# Suite 1b' — DELETE /graphs/{id} (TASK-050, soft-delete)
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteGraphEndpoint:
+    """DELETE /api/v1/graphs/{graph_id} — admin-level ReBAC, soft-delete only."""
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_delete_graph_returns_204_when_admin(self, async_client):
+        """DELETE /graphs/{id} → 204 when caller has admin access."""
+        graph_record = _neo4j_graph(GRAPH_A_ID, USER_A_ID)
+        auth_patch = _patch_auth(FAKE_USER_A)
+        try:
+            with (
+                patch("app.api.v1.endpoints.graphs.verify_graph_access",
+                      new_callable=AsyncMock) as mock_vga,
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
+                mock_vga.return_value = GRAPH_A_ID
+                mock_neo4j.sync_driver = MagicMock()
+                svc = MockService.return_value
+                svc.get_graph.return_value = graph_record
+                svc.soft_delete_graph.return_value = True
+
+                response = await async_client.delete(
+                    f"/api/v1/graphs/{GRAPH_A_ID}", headers=_auth_headers()
+                )
+        finally:
+            auth_patch.stop()
+
+        assert response.status_code == 204
+        assert response.content == b""
+        # Confirm soft-delete (not hard delete) was called
+        svc.soft_delete_graph.assert_called_once_with(GRAPH_A_ID)
+        svc.delete_graph.assert_not_called()
+        # Confirm admin-level access was required
+        called_args = mock_vga.call_args
+        assert called_args.args[1] == "admin" or called_args.kwargs.get("required_level") == "admin"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_delete_graph_returns_404_when_unknown(self, async_client):
+        """DELETE /graphs/{unknown_id} → 404."""
+        auth_patch = _patch_auth(FAKE_USER_A)
+        try:
+            with (
+                patch("app.api.v1.endpoints.graphs.verify_graph_access",
+                      new_callable=AsyncMock) as mock_vga,
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+            ):
+                mock_vga.return_value = GRAPH_A_ID
+                mock_neo4j.sync_driver = MagicMock()
+                MockService.return_value.get_graph.return_value = None
+
+                response = await async_client.delete(
+                    f"/api/v1/graphs/{uuid.uuid4()}", headers=_auth_headers()
+                )
+        finally:
+            auth_patch.stop()
+
+        assert response.status_code == 404
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_delete_graph_returns_403_when_not_admin(self, async_client):
+        """DELETE /graphs/{id} → 403 when caller lacks admin permission."""
+        from fastapi import HTTPException, status as fastapi_status
+
+        auth_patch = _patch_auth(FAKE_USER_A)
+        try:
+            with patch(
+                "app.api.v1.endpoints.graphs.verify_graph_access",
+                new_callable=AsyncMock,
+            ) as mock_vga:
+                mock_vga.side_effect = HTTPException(
+                    status_code=fastapi_status.HTTP_403_FORBIDDEN, detail="Access denied"
+                )
+
+                response = await async_client.delete(
+                    f"/api/v1/graphs/{GRAPH_A_ID}", headers=_auth_headers()
+                )
+        finally:
+            auth_patch.stop()
+
+        assert response.status_code == 403
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_delete_graph_returns_503_when_neo4j_unavailable(self, async_client):
+        """DELETE /graphs/{id} → 503 when Neo4j sync driver is None."""
+        auth_patch = _patch_auth(FAKE_USER_A)
+        try:
+            with (
+                patch("app.api.v1.endpoints.graphs.verify_graph_access",
+                      new_callable=AsyncMock) as mock_vga,
+                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
+            ):
+                mock_vga.return_value = GRAPH_A_ID
+                mock_neo4j.sync_driver = None
+
+                response = await async_client.delete(
+                    f"/api/v1/graphs/{GRAPH_A_ID}", headers=_auth_headers()
+                )
+        finally:
+            auth_patch.stop()
+
+        assert response.status_code == 503
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_delete_graph_requires_auth(self, async_client):
+        """DELETE /graphs/{id} without token → 401/403."""
+        response = await async_client.delete(f"/api/v1/graphs/{GRAPH_A_ID}")
+        assert response.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Suite 1b'' — GET /graphs/{id}/chat/history (TASK-050)
+# ---------------------------------------------------------------------------
+
+
+class TestChatHistoryEndpoint:
+    """GET /api/v1/graphs/{graph_id}/chat/history — typed empty list (no persistence yet)."""
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_chat_history_returns_typed_empty_list(self, async_client):
+        """GET /graphs/{id}/chat/history → 200 with [] (no persistence layer yet)."""
+        auth_patch = _patch_auth(FAKE_USER_A)
+        try:
+            with patch(
+                "app.api.v1.endpoints.graphs.verify_graph_access",
+                new_callable=AsyncMock,
+            ) as mock_vga:
+                mock_vga.return_value = GRAPH_A_ID
+
+                response = await async_client.get(
+                    f"/api/v1/graphs/{GRAPH_A_ID}/chat/history",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_patch.stop()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert data == []
+        # ReBAC must be checked at read level
+        called_args = mock_vga.call_args
+        assert called_args.args[1] == "read" or called_args.kwargs.get("required_level") == "read"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_chat_history_returns_403_when_no_access(self, async_client):
+        """GET /graphs/{id}/chat/history → 403 when caller lacks read access."""
+        from fastapi import HTTPException, status as fastapi_status
+
+        auth_patch = _patch_auth(FAKE_USER_A)
+        try:
+            with patch(
+                "app.api.v1.endpoints.graphs.verify_graph_access",
+                new_callable=AsyncMock,
+            ) as mock_vga:
+                mock_vga.side_effect = HTTPException(
+                    status_code=fastapi_status.HTTP_403_FORBIDDEN, detail="Access denied"
+                )
+
+                response = await async_client.get(
+                    f"/api/v1/graphs/{GRAPH_A_ID}/chat/history",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_patch.stop()
+
+        assert response.status_code == 403
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_chat_history_requires_auth(self, async_client):
+        """GET /graphs/{id}/chat/history without token → 401/403."""
+        response = await async_client.get(
+            f"/api/v1/graphs/{GRAPH_A_ID}/chat/history"
+        )
+        assert response.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
 # Suite 1c — Ingestion
 # ---------------------------------------------------------------------------
 

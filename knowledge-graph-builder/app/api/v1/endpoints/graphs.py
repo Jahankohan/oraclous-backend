@@ -17,12 +17,12 @@ from app.core.rate_limiter import limiter
 from app.models.graph import (  # Keep for job tracking only
     IngestionJob,
 )
+from app.schemas.chat_schemas import ChatHistoryEntry
 from app.schemas.graph_schemas import (
     AsyncRollbackResponse,
     CommunityDetailResponse,
     CommunityDetectRequest,
     CommunityDetectResponse,
-    CommunityListResponse,
     CommunityStatusResponse,
     DocumentResponse,
     GraphCreate,
@@ -357,6 +357,102 @@ async def update_graph(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update graph: {str(e)}",
         )
+
+
+@router.delete(
+    "/graphs/{graph_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Soft-delete a knowledge graph",
+    responses={
+        204: {"description": "Graph deactivated successfully"},
+        403: {"description": "Caller lacks admin permission on the graph"},
+        404: {"description": "Graph not found"},
+        503: {"description": "Neo4j service unavailable"},
+    },
+)
+async def delete_graph(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Soft-delete a knowledge graph.
+
+    Marks the graph as deactivated (sets `status = 'deactivated'` and a
+    `deactivated_at` timestamp on the Neo4j Graph node) without dropping
+    any underlying entities, relationships, documents, or chat history.
+    Soft-deleted graphs disappear from `GET /graphs` listings but are
+    preserved as an audit trail and can be restored manually if needed.
+
+    Requires `admin`-level access via ReBAC.
+    """
+    # ReBAC check — admin level required for delete (ORA-39 spec)
+    await verify_graph_access(str(graph_id), "admin", user_id)
+
+    if not neo4j_client.sync_driver:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neo4j connection not available",
+        )
+
+    try:
+        graph_service = GraphNodeService(neo4j_client.sync_driver)
+
+        existing_graph = graph_service.get_graph(str(graph_id))
+        if not existing_graph:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
+            )
+
+        deactivated = graph_service.soft_delete_graph(str(graph_id))
+        if not deactivated:
+            # Race: get_graph saw the node but soft_delete didn't match.  Treat as 404.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
+            )
+
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to soft-delete graph {graph_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete graph: {str(e)}",
+        )
+
+
+@router.get(
+    "/graphs/{graph_id}/chat/history",
+    response_model=list[ChatHistoryEntry],
+    summary="Return persisted chat turns for a graph",
+    responses={
+        403: {"description": "Caller lacks read access to the graph"},
+    },
+)
+async def get_chat_history(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Return persisted chat turns for the requesting user, ordered ascending
+    by `created_at`.
+
+    **Status (TASK-050):** the backend does not yet persist chat turns.
+    This endpoint always returns an empty list with the typed
+    `ChatHistoryEntry` shape so the frontend can mount the route safely;
+    a follow-up task will add a transcript store (Postgres table or a
+    `(:ChatTurn)` Neo4j subgraph) and start populating it from the
+    `POST /chat` and `POST /chat/stream` handlers.
+
+    Requires `read`-level access via ReBAC.
+    """
+    # ReBAC check — read level required to view chat history
+    await verify_graph_access(str(graph_id), "read", user_id)
+
+    # No persistence layer today (option (b) per TASK-050 decisions table).
+    # Return a typed empty list so the frontend contract holds.
+    return []
 
 
 # ==================== SIMPLIFIED INGESTION ENDPOINT ====================
@@ -1365,32 +1461,11 @@ async def get_community_status(
     return CommunityStatusResponse(**result)
 
 
-@router.get(
-    "/graphs/{graph_id}/communities",
-    response_model=CommunityListResponse,
-    summary="List communities for a graph",
-)
-async def list_communities(
-    graph_id: UUID,
-    level: int | None = None,
-    min_size: int = 2,
-    limit: int = 50,
-    offset: int = 0,
-    include_summary: bool = True,
-    user_id: str = Depends(get_current_user_id),
-    analytics: GraphAnalyticsService = Depends(_get_analytics_service),
-):
-    """Return paginated list of communities, optionally filtered by level."""
-    await _verify_graph_ownership(graph_id, user_id)
-    result = await analytics.get_communities_list(
-        graph_id=graph_id,
-        level=level,
-        min_size=min_size,
-        limit=limit,
-        offset=offset,
-        include_summary=include_summary,
-    )
-    return CommunityListResponse(**result)
+# NOTE: GET /graphs/{graph_id}/communities is owned by
+# app.api.v1.endpoints.communities (TASK-050) and returns the flat
+# `Community[]` shape the frontend expects.  The previous wrapped
+# `CommunityListResponse` route was removed; the per-community detail
+# and detection-status routes still live below.
 
 
 @router.get(

@@ -387,6 +387,33 @@ class ChatModesResponse(BaseModel):
         }
 
 
+class ChatHistoryEntry(BaseModel):
+    """A persisted chat turn (user prompt or assistant reply) for a graph.
+
+    Mirrors the `ChatHistoryEntry` interface in
+    oraclous-visual-flow-main/src/lib/api.ts so the frontend can render
+    transcripts without remapping field names.
+
+    NOTE (TASK-050): the chat-history persistence layer does not yet
+    exist on the backend.  GET /graphs/{graph_id}/chat/history currently
+    returns an empty list with this typed shape; a follow-up task will add
+    a Postgres or Neo4j-backed transcript store and start populating it
+    from the chat endpoints.
+    """
+
+    role: str = Field(
+        ..., description="'user' for prompts, 'assistant' for grounded replies"
+    )
+    content: str = Field(..., description="Plain-text turn content")
+    sources: list[SourceInfo] | None = Field(
+        default=None,
+        description="Optional list of grounding sources (assistant turns only)",
+    )
+    created_at: datetime | None = Field(
+        default=None, description="UTC timestamp the turn was persisted"
+    )
+
+
 class ErrorResponse(BaseModel):
     """Standardized error response"""
 

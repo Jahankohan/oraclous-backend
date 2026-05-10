@@ -193,6 +193,8 @@ class GraphNodeService:
         """
         List all Graph nodes for a specific user.
 
+        Soft-deleted graphs (status = 'deactivated') are excluded.
+
         Args:
             user_id: User identifier
 
@@ -201,6 +203,7 @@ class GraphNodeService:
         """
         query = """
         MATCH (g:Graph {user_id: $user_id})
+        WHERE coalesce(g.status, 'active') <> 'deactivated'
         RETURN g {
             .graph_id,
             .name,
@@ -412,6 +415,48 @@ class GraphNodeService:
 
         except Neo4jError as e:
             raise Exception(f"Failed to delete graph: {e}") from None
+
+    def soft_delete_graph(self, graph_id: str) -> bool:
+        """
+        Soft-delete a Graph node by setting status='deactivated' and
+        recording a deactivated_at timestamp.
+
+        Does NOT detach or remove the underlying entities, relationships,
+        documents, or chat history — those remain in Neo4j as an audit trail.
+        Subsequent reads via list_user_graphs() must filter on status='active'
+        to hide deactivated graphs from the user.
+
+        Idempotent — calling soft_delete_graph on an already-deactivated graph
+        refreshes deactivated_at but does not raise.
+
+        Args:
+            graph_id: Graph identifier
+
+        Returns:
+            True if a Graph node was deactivated, False if no node matched
+            (i.e. graph_id is unknown).
+        """
+        query = """
+        MATCH (g:Graph {graph_id: $graph_id})
+        SET g.status = 'deactivated',
+            g.deactivated_at = datetime(),
+            g.updated_at = datetime()
+        RETURN count(g) AS deactivated_count
+        """
+
+        try:
+            if not self.driver:
+                raise ValueError("Neo4j driver not initialized")
+
+            with self.driver.session() as session:
+                result = session.run(query, {"graph_id": graph_id})
+                record = result.single()
+                if record:
+                    return record["deactivated_count"] > 0
+                return False
+
+        except Neo4jError as e:
+            raise Exception(f"Failed to soft-delete graph: {e}") from None
 
     def migrate_relationship_properties(self, graph_id: str) -> dict[str, Any]:
         """
