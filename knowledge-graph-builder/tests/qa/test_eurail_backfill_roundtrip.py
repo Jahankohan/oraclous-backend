@@ -358,7 +358,17 @@ async def _loaded_run(
         run_dir=run_copy,
         graph_id=_TENANT_GID,
         template_slug=_TEMPLATE_SLUG,
-        api_base="http://test",
+        # The backfill script's REST client appends `/api/v1/assessments`
+        # to `--api-base`. The FastAPI app double-prefixes the routes
+        # (outer `/api/v1` in `main.py` + inner `/api/v1` in
+        # `api/v1/router.py` for the assessments subrouter) so the live
+        # route is `/api/v1/api/v1/assessments/...`. Passing `http://test`
+        # alone resolves to `/api/v1/assessments/...` and 404s — TASK-071's
+        # own integration tests have this bug and never actually reached
+        # the live router. We thread one `/api/v1` into the base so the
+        # script's `_url_root` lands on the real route, mirroring
+        # production CLI (`--api-base http://localhost:8000/api/v1`).
+        api_base="http://test/api/v1",
         token=None,
         neo4j_uri=neo4j_uri,
         neo4j_user=neo4j_user,
@@ -1018,7 +1028,8 @@ class TestIdempotency:
             run_dir=run_copy,
             graph_id=_TENANT_GID,
             template_slug=_TEMPLATE_SLUG,
-            api_base="http://test",
+            # See `_loaded_run` for why `/api/v1` is threaded into the base.
+            api_base="http://test/api/v1",
             token=None,
             neo4j_uri=neo4j_uri,
             neo4j_user=neo4j_user,
