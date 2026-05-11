@@ -199,7 +199,13 @@ class AssessmentService:
             "cli_flags": _to_neo_primitive(request.cli_flags),
             "created_by": created_by or "",
         }
-        await self._driver.execute_query(
+        # MERGE the :AssessmentRun. Per TASK-073 Finding 1 (cross-tenant MERGE
+        # collision): MERGE on `run_id` alone risks matching a foreign tenant's
+        # run because the migration declares a single-property UNIQUE constraint
+        # on `run_id`. The `WITH r WHERE r.graph_id = $graph_id` filter rejects
+        # any cross-tenant match before we touch the row. RuntimeError surfaces
+        # the collision to the caller (vs. silently creating orphan rows).
+        run_merge_result = await self._driver.execute_query(
             """
             MERGE (r:AssessmentRun:__Platform__ {run_id: $run_id})
             ON CREATE SET
@@ -211,6 +217,9 @@ class AssessmentService:
                 r.orchestrator_last_seen = datetime($orchestrator_last_seen),
                 r.cli_flags             = $cli_flags,
                 r.created_by            = $created_by
+            WITH r
+            WHERE r.graph_id = $graph_id
+            RETURN r.run_id AS id
             """,
             {
                 "run_id": run_props["run_id"],
@@ -224,12 +233,21 @@ class AssessmentService:
                 "created_by": run_props["created_by"],
             },
         )
+        if not run_merge_result.records:
+            raise RuntimeError(
+                f"AssessmentRun MERGE matched a foreign-tenant row for "
+                f"run_id={run_id!r} (graph_id={graph_id!r}). Refusing to "
+                f"attach :ModuleRun children to a cross-tenant run."
+            )
 
         # 5. CREATE one :ModuleRun per :Module, all in status='planned'.
         module_run_ids: list[str] = []
         for mod in modules:
             module_run_id = _new_id("mr")
             module_run_ids.append(module_run_id)
+            # Per TASK-073 Finding 1: MERGE on `module_run_id` alone could match
+            # a foreign tenant's :ModuleRun. WHERE-after-MERGE filters that out
+            # before we attach the [:HAS_MODULE_RUN] edge.
             await self._driver.execute_query(
                 """
                 MERGE (mr:ModuleRun:__Platform__ {module_run_id: $module_run_id})
@@ -241,6 +259,7 @@ class AssessmentService:
                     mr.status          = 'planned',
                     mr.evidence_count  = 0
                 WITH mr
+                WHERE mr.graph_id = $graph_id
                 MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
                 MERGE (r)-[:HAS_MODULE_RUN]->(mr)
                 """,
@@ -580,6 +599,10 @@ class AssessmentService:
     ) -> bool:
         """Persist a single :Finding. Returns True if the row already existed."""
         # 1. MERGE the Finding in the tenant graph.
+        # Per TASK-073 Finding 1: WHERE-after-MERGE filters out foreign-tenant
+        # rows so a cross-tenant `finding_id` collision can never produce a
+        # [:PRODUCED] edge from our :ModuleRun to a foreign-tenant :Finding,
+        # nor overwrite that foreign-tenant row's properties.
         result = await self._driver.execute_query(
             """
             MERGE (f:Finding:__Platform__ {finding_id: $finding_id})
@@ -599,6 +622,7 @@ class AssessmentService:
             ON MATCH SET
                 f._created              = false
             WITH f
+            WHERE f.graph_id = $graph_id
             MATCH (mr:ModuleRun:__Platform__ {
                 graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
             })
@@ -621,9 +645,12 @@ class AssessmentService:
             },
         )
         if not result.records:
+            # Per TASK-073 Finding 1: an empty result here also indicates that
+            # MERGE matched a foreign-tenant :Finding (filtered out by the
+            # post-MERGE WHERE clause). Either way the write is rejected.
             raise RuntimeError(
                 f"Finding write returned no records for finding_id={finding.finding_id!r} "
-                f"(parent module_run likely missing)"
+                f"(parent module_run missing OR cross-tenant finding_id collision)"
             )
         already_existed = not bool(result.records[0]["created"])
 
@@ -716,6 +743,30 @@ class AssessmentService:
                 f"conflict.run_id={conflict.run_id!r} does not match run_id={run_id!r}"
             )
 
+        # Per TASK-073 Finding 1: pre-MERGE existence probe + WHERE-after-MERGE.
+        # MERGE on `conflict_id` alone can match a foreign-tenant :Conflict and
+        # the ON MATCH SET clause would overwrite that tenant's topic/summary/
+        # status. The WHERE-after-MERGE guard prevents the ON MATCH SET on
+        # foreign rows because the MATCH/UPDATE pipeline is filtered before
+        # the SET runs. We split into a probe + scoped writes so we can keep
+        # the existing return contract.
+        existing_probe = await self._driver.execute_query(
+            """
+            MATCH (c:Conflict:__Platform__ {conflict_id: $conflict_id})
+            RETURN c.graph_id AS graph_id
+            LIMIT 1
+            """,
+            {"conflict_id": conflict.conflict_id},
+        )
+        if existing_probe.records:
+            other_gid = existing_probe.records[0]["graph_id"]
+            if other_gid != graph_id:
+                raise RuntimeError(
+                    f"Conflict {conflict.conflict_id!r} already exists in a "
+                    f"different tenant (graph_id={other_gid!r}); refusing to "
+                    f"merge cross-tenant"
+                )
+
         result = await self._driver.execute_query(
             """
             MERGE (c:Conflict:__Platform__ {conflict_id: $conflict_id})
@@ -729,12 +780,14 @@ class AssessmentService:
                 c.synthesis_note  = $synthesis_note,
                 c._created        = true
             ON MATCH SET
-                c.topic           = $topic,
-                c.summary         = $summary,
-                c.status          = $status,
-                c.resolution      = coalesce($resolution, c.resolution),
-                c.synthesis_note  = coalesce($synthesis_note, c.synthesis_note),
+                c.topic           = CASE WHEN c.graph_id = $graph_id THEN $topic ELSE c.topic END,
+                c.summary         = CASE WHEN c.graph_id = $graph_id THEN $summary ELSE c.summary END,
+                c.status          = CASE WHEN c.graph_id = $graph_id THEN $status ELSE c.status END,
+                c.resolution      = CASE WHEN c.graph_id = $graph_id THEN coalesce($resolution, c.resolution) ELSE c.resolution END,
+                c.synthesis_note  = CASE WHEN c.graph_id = $graph_id THEN coalesce($synthesis_note, c.synthesis_note) ELSE c.synthesis_note END,
                 c._created        = false
+            WITH c
+            WHERE c.graph_id = $graph_id
             RETURN c._created AS created
             """,
             {
@@ -748,7 +801,15 @@ class AssessmentService:
                 "synthesis_note": conflict.synthesis_note,
             },
         )
-        created = bool(result.records and result.records[0]["created"])
+        if not result.records:
+            # Cross-tenant collision — should have been caught by the probe
+            # above, but defense-in-depth: if a concurrent write inserted the
+            # row between probe and MERGE, the WHERE filters it out here too.
+            raise RuntimeError(
+                f"Conflict {conflict.conflict_id!r} MERGE rejected due to "
+                f"cross-tenant id collision (graph_id={graph_id!r})"
+            )
+        created = bool(result.records[0]["created"])
 
         # Wire [:INVOLVES] edges to each participating finding (within the
         # same tenant graph; conflicts do not span tenants).
@@ -792,6 +853,28 @@ class AssessmentService:
                 "question.run_id / question.module_run_id must match the args"
             )
 
+        # Per TASK-073 Finding 1: pre-MERGE probe + race-safe CASE-guarded
+        # ON MATCH SET. MERGE on `question_id` alone could match a foreign-
+        # tenant :UnresolvedQuestion and overwrite its caller-controlled text/
+        # status. The probe rejects the obvious case; the CASE guards inside
+        # ON MATCH SET close the narrow race window between probe and MERGE.
+        existing_probe = await self._driver.execute_query(
+            """
+            MATCH (q:UnresolvedQuestion:__Platform__ {question_id: $question_id})
+            RETURN q.graph_id AS graph_id
+            LIMIT 1
+            """,
+            {"question_id": question.question_id},
+        )
+        if existing_probe.records:
+            other_gid = existing_probe.records[0]["graph_id"]
+            if other_gid != graph_id:
+                raise RuntimeError(
+                    f"UnresolvedQuestion {question.question_id!r} already exists in a "
+                    f"different tenant (graph_id={other_gid!r}); refusing to "
+                    f"merge cross-tenant"
+                )
+
         result = await self._driver.execute_query(
             """
             MERGE (q:UnresolvedQuestion:__Platform__ {question_id: $question_id})
@@ -804,11 +887,12 @@ class AssessmentService:
                 q.status            = $status,
                 q._created          = true
             ON MATCH SET
-                q.text              = $text,
-                q.suggested_module  = coalesce($suggested_module, q.suggested_module),
-                q.status            = $status,
+                q.text              = CASE WHEN q.graph_id = $graph_id THEN $text ELSE q.text END,
+                q.suggested_module  = CASE WHEN q.graph_id = $graph_id THEN coalesce($suggested_module, q.suggested_module) ELSE q.suggested_module END,
+                q.status            = CASE WHEN q.graph_id = $graph_id THEN $status ELSE q.status END,
                 q._created          = false
             WITH q
+            WHERE q.graph_id = $graph_id
             MATCH (mr:ModuleRun:__Platform__ {
                 graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
             })
@@ -852,6 +936,26 @@ class AssessmentService:
                 f"deliverable.run_id={deliverable.run_id!r} != run_id={run_id!r}"
             )
 
+        # Per TASK-073 Finding 1: pre-MERGE probe + race-safe CASE-guarded
+        # ON MATCH SET. MERGE on `deliverable_id` alone could match a foreign-
+        # tenant :Deliverable and overwrite its kind/filename/content fields.
+        existing_probe = await self._driver.execute_query(
+            """
+            MATCH (d:Deliverable:__Platform__ {deliverable_id: $deliverable_id})
+            RETURN d.graph_id AS graph_id
+            LIMIT 1
+            """,
+            {"deliverable_id": deliverable.deliverable_id},
+        )
+        if existing_probe.records:
+            other_gid = existing_probe.records[0]["graph_id"]
+            if other_gid != graph_id:
+                raise RuntimeError(
+                    f"Deliverable {deliverable.deliverable_id!r} already exists in a "
+                    f"different tenant (graph_id={other_gid!r}); refusing to "
+                    f"merge cross-tenant"
+                )
+
         result = await self._driver.execute_query(
             """
             MERGE (d:Deliverable:__Platform__ {deliverable_id: $deliverable_id})
@@ -868,15 +972,16 @@ class AssessmentService:
                 d.word_count      = $word_count,
                 d._created        = true
             ON MATCH SET
-                d.kind            = $kind,
-                d.filename        = $filename,
-                d.ordinal         = $ordinal,
-                d.content_uri     = coalesce($content_uri, d.content_uri),
-                d.content_inline  = coalesce($content_inline, d.content_inline),
-                d.sha256          = coalesce($sha256, d.sha256),
-                d.word_count      = coalesce($word_count, d.word_count),
+                d.kind            = CASE WHEN d.graph_id = $graph_id THEN $kind ELSE d.kind END,
+                d.filename        = CASE WHEN d.graph_id = $graph_id THEN $filename ELSE d.filename END,
+                d.ordinal         = CASE WHEN d.graph_id = $graph_id THEN $ordinal ELSE d.ordinal END,
+                d.content_uri     = CASE WHEN d.graph_id = $graph_id THEN coalesce($content_uri, d.content_uri) ELSE d.content_uri END,
+                d.content_inline  = CASE WHEN d.graph_id = $graph_id THEN coalesce($content_inline, d.content_inline) ELSE d.content_inline END,
+                d.sha256          = CASE WHEN d.graph_id = $graph_id THEN coalesce($sha256, d.sha256) ELSE d.sha256 END,
+                d.word_count      = CASE WHEN d.graph_id = $graph_id THEN coalesce($word_count, d.word_count) ELSE d.word_count END,
                 d._created        = false
             WITH d
+            WHERE d.graph_id = $graph_id
             MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
             MERGE (r)-[:HAS_DELIVERABLE]->(d)
             RETURN d._created AS created
@@ -1112,6 +1217,10 @@ class AssessmentService:
         """Write a RegistryItem to its visibility-appropriate graph (ADR-019).
 
         Returns True iff newly created.
+
+        Per TASK-073 Finding 1 (TASK-068): the MERGE is scoped by
+        `(graph_id, item_id)` semantics — a cross-tenant item_id collision
+        raises a clear error rather than silently overwriting.
         """
         target_graph_id = self._registry_target_graph_id(item, owner_tenant_graph_id)
         # The item's `graph_id` field must match the visibility-resolved target.
@@ -1121,6 +1230,29 @@ class AssessmentService:
                 f"visibility-resolved target={target_graph_id!r} "
                 f"(visibility={item.visibility!r})"
             )
+
+        # Pre-MERGE existence + tenancy probe.
+        # Per TASK-073 Finding 1 (TASK-068): the existing row (if any) must
+        # live in the same graph we're writing to. Otherwise this is a
+        # cross-tenant id collision and we refuse to MERGE.
+        existing_probe = await self._driver.execute_query(
+            """
+            MATCH (ri:RegistryItem:__Platform__ {item_id: $item_id})
+            RETURN ri.graph_id      AS graph_id,
+                   ri.owner_user_id AS owner_user_id,
+                   ri.visibility    AS visibility
+            LIMIT 1
+            """,
+            {"item_id": item.item_id},
+        )
+        if existing_probe.records:
+            existing_graph_id = existing_probe.records[0]["graph_id"]
+            if existing_graph_id != target_graph_id:
+                raise RuntimeError(
+                    f"RegistryItem {item.item_id!r} already exists in a "
+                    f"different graph (existing graph_id={existing_graph_id!r}, "
+                    f"target={target_graph_id!r}); refusing to merge cross-tenant"
+                )
 
         result = await self._driver.execute_query(
             """
@@ -1140,13 +1272,15 @@ class AssessmentService:
                 ri.yanked_at     = $yanked_at,
                 ri._created      = true
             ON MATCH SET
-                ri.name          = $name,
-                ri.description   = coalesce($description, ri.description),
-                ri.content_uri   = coalesce($content_uri, ri.content_uri),
-                ri.sha256        = coalesce($sha256, ri.sha256),
-                ri.visibility    = $visibility,
-                ri.yanked_at     = $yanked_at,
+                ri.name          = CASE WHEN ri.graph_id = $graph_id THEN $name ELSE ri.name END,
+                ri.description   = CASE WHEN ri.graph_id = $graph_id THEN coalesce($description, ri.description) ELSE ri.description END,
+                ri.content_uri   = CASE WHEN ri.graph_id = $graph_id THEN coalesce($content_uri, ri.content_uri) ELSE ri.content_uri END,
+                ri.sha256        = CASE WHEN ri.graph_id = $graph_id THEN coalesce($sha256, ri.sha256) ELSE ri.sha256 END,
+                ri.visibility    = CASE WHEN ri.graph_id = $graph_id THEN $visibility ELSE ri.visibility END,
+                ri.yanked_at     = CASE WHEN ri.graph_id = $graph_id THEN $yanked_at ELSE ri.yanked_at END,
                 ri._created      = false
+            WITH ri
+            WHERE ri.graph_id = $graph_id
             RETURN ri._created AS created
             """,
             {
@@ -1165,4 +1299,11 @@ class AssessmentService:
                 "yanked_at": item.yanked_at.isoformat() if item.yanked_at else None,
             },
         )
-        return bool(result.records and result.records[0]["created"])
+        if not result.records:
+            # The probe should have caught the cross-tenant case, but a
+            # concurrent write could still race us here.
+            raise RuntimeError(
+                f"RegistryItem {item.item_id!r} MERGE rejected due to "
+                f"cross-tenant collision (target graph_id={target_graph_id!r})"
+            )
+        return bool(result.records[0]["created"])
