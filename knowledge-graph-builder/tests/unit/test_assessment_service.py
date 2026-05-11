@@ -441,6 +441,25 @@ class TestRecordConflict:
         for call in driver.execute_query.call_args_list[1:]:
             assert call[0][1]["graph_id"] == "tenant-A"
 
+    async def test_record_conflict_cross_tenant_collision_rejected(self):
+        """Pre-MERGE probe detects a foreign-tenant :Conflict with the same id."""
+        # 1) probe returns a foreign-tenant row
+        driver = _make_driver(
+            record_sequences=[[_rec(graph_id="OTHER-tenant")]]
+        )
+        svc = AssessmentService(driver)
+        conflict = Conflict(
+            conflict_id="cf-x",
+            graph_id="tenant-A",
+            run_id="run-1",
+            topic="x",
+            summary="y",
+        )
+        with pytest.raises(RuntimeError, match="different tenant"):
+            await svc.record_conflict("tenant-A", "run-1", conflict)
+        # MERGE never ran — only the probe
+        assert driver.execute_query.call_count == 1
+
     async def test_record_conflict_rejects_run_id_mismatch(self):
         svc = AssessmentService(_make_driver())
         bad = Conflict(
@@ -480,6 +499,24 @@ class TestRecordUnresolvedQuestion:
         assert "MERGE (q:UnresolvedQuestion:__Platform__" in cypher
         assert "MERGE (mr)-[:RAISED]->(q)" in cypher
         assert params["graph_id"] == "tenant-A"
+
+    async def test_question_cross_tenant_collision_rejected(self):
+        """Pre-MERGE probe detects foreign-tenant :UnresolvedQuestion."""
+        driver = _make_driver(
+            record_sequences=[[_rec(graph_id="OTHER-tenant")]]
+        )
+        svc = AssessmentService(driver)
+        q = UnresolvedQuestion(
+            question_id="q-x",
+            graph_id="tenant-A",
+            run_id="run-1",
+            module_run_id="mr-1",
+            text="?",
+        )
+        with pytest.raises(RuntimeError, match="different tenant"):
+            await svc.record_unresolved_question("tenant-A", "run-1", "mr-1", q)
+        assert driver.execute_query.call_count == 1
+
 
 # ── persist_deliverable / persist_final_docs ──────────────────────────────────
 
@@ -522,6 +559,23 @@ class TestPersistDeliverable:
         created = await svc.persist_deliverable("tenant-A", "run-1", d)
         assert created is True
         assert driver.execute_query.call_count == 2
+
+    async def test_deliverable_cross_tenant_collision_rejected(self):
+        """Pre-MERGE probe detects foreign-tenant :Deliverable."""
+        driver = _make_driver(
+            record_sequences=[[_rec(graph_id="OTHER-tenant")]]
+        )
+        svc = AssessmentService(driver)
+        d = Deliverable(
+            deliverable_id="d-x",
+            graph_id="tenant-A",
+            run_id="run-1",
+            kind="module-md",
+            filename="x.md",
+        )
+        with pytest.raises(RuntimeError, match="different tenant"):
+            await svc.persist_deliverable("tenant-A", "run-1", d)
+        assert driver.execute_query.call_count == 1
 
     async def test_persist_final_docs_returns_bulk_response(self):
         # 5 final docs: each gets a probe + a MERGE call (no module_run_id).
@@ -670,6 +724,121 @@ class TestRegistryRouting:
         await svc.persist_registry_item(item)
         params = driver.execute_query.call_args[0][1]
         assert params["graph_id"] == REGISTRY_CATALOG_GRAPH_ID
+
+    async def test_public_non_owner_update_raises_ownership_error(self):
+        """Per TASK-073 Finding 1 (TASK-069): non-owner overwrite is rejected."""
+        from app.services.assessment_service import RegistryOwnershipError
+
+        # 1) probe returns an existing public item owned by 'alice'
+        driver = _make_driver(
+            record_sequences=[
+                [_rec(
+                    graph_id=REGISTRY_CATALOG_GRAPH_ID,
+                    owner_user_id="alice",
+                    visibility="public",
+                )]
+            ]
+        )
+        svc = AssessmentService(driver)
+        # 'bob' (different owner) tries to update Alice's public item
+        item = RegistryItem(
+            item_id="ri-alice",
+            graph_id=REGISTRY_CATALOG_GRAPH_ID,
+            kind="skill",
+            slug="alice-skill",
+            visibility="yanked",
+            owner_user_id="bob",
+            name="Alice's skill (hijacked)",
+        )
+        with pytest.raises(RegistryOwnershipError, match="owned by another user"):
+            await svc.persist_registry_item(item)
+        # MERGE never ran — only the probe
+        assert driver.execute_query.call_count == 1
+
+    async def test_public_owner_update_succeeds(self):
+        """Owner CAN update their own public item."""
+        # 1) probe returns Alice's existing public item
+        # 2) MERGE
+        driver = _make_driver(
+            record_sequences=[
+                [_rec(
+                    graph_id=REGISTRY_CATALOG_GRAPH_ID,
+                    owner_user_id="alice",
+                    visibility="public",
+                )],
+                [_rec(created=False)],
+            ]
+        )
+        svc = AssessmentService(driver)
+        item = RegistryItem(
+            item_id="ri-alice",
+            graph_id=REGISTRY_CATALOG_GRAPH_ID,
+            kind="skill",
+            slug="alice-skill",
+            visibility="public",
+            owner_user_id="alice",  # same as existing
+            name="Alice's skill v2",
+        )
+        created = await svc.persist_registry_item(item)
+        assert created is False  # already existed
+        assert driver.execute_query.call_count == 2
+
+    async def test_curated_admin_can_update_others_item(self):
+        """Curated writes are admin-gated at the endpoint and exempt from
+        the owner check (admins may update items owned by other users)."""
+        # 1) probe returns an existing curated item owned by 'eve'
+        # 2) MERGE
+        driver = _make_driver(
+            record_sequences=[
+                [_rec(
+                    graph_id=REGISTRY_CATALOG_GRAPH_ID,
+                    owner_user_id="eve",
+                    visibility="curated",
+                )],
+                [_rec(created=False)],
+            ]
+        )
+        svc = AssessmentService(driver)
+        item = RegistryItem(
+            item_id="ri-curated",
+            graph_id=REGISTRY_CATALOG_GRAPH_ID,
+            kind="skill",
+            slug="eurail-report",
+            visibility="curated",
+            owner_user_id="oraclous-admin",
+            name="Eurail Report (curated update)",
+        )
+        # Should NOT raise — curated → no owner check
+        created = await svc.persist_registry_item(item)
+        assert created is False
+        assert driver.execute_query.call_count == 2
+
+    async def test_public_cross_tenant_collision_rejected(self):
+        """Existing RegistryItem in a different graph than the target raises."""
+        # 1) probe returns existing item in tenant graph 'tenant-X' but we're
+        # writing public (target = __registry__)
+        driver = _make_driver(
+            record_sequences=[
+                [_rec(
+                    graph_id="tenant-X",
+                    owner_user_id="u1",
+                    visibility="private",
+                )],
+            ]
+        )
+        svc = AssessmentService(driver)
+        item = RegistryItem(
+            item_id="ri-collision",
+            graph_id=REGISTRY_CATALOG_GRAPH_ID,
+            kind="skill",
+            slug="something",
+            visibility="public",
+            owner_user_id="u1",
+            name="x",
+        )
+        with pytest.raises(RuntimeError, match="different graph"):
+            await svc.persist_registry_item(item)
+        assert driver.execute_query.call_count == 1
 
     async def test_private_without_owner_tenant_id_raises(self):
         svc = AssessmentService(_make_driver())

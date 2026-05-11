@@ -722,3 +722,86 @@ class TestPersistRegistryItemIntegration:
         )
         assert result.records[0]["gid"] == REGISTRY_CATALOG_GRAPH_ID
         assert result.records[0]["vis"] == "curated"
+
+    async def test_non_owner_cannot_hijack_public_item_via_endpoint(
+        self, client, neo4j_test_driver: AsyncDriver
+    ):
+        """Per TASK-073 Finding 1 (TASK-069): Alice publishes a public item;
+        Bob (different user, same __registry__ write permission) attempts to
+        yank/rewrite it via POST /assessments/registry/skill. The endpoint
+        must return 403 and Alice's row must be untouched.
+        """
+        from httpx import ASGITransport, AsyncClient
+
+        item_id = f"ri-rest-{_SESSION}-hijack"
+
+        # Step 1: Alice publishes a public item via her own client session.
+        # (The default `client` fixture's principal IS Alice — _USER.)
+        alice_body = {
+            "item_id": item_id,
+            "graph_id": "ignored",
+            "kind": "skill",
+            "slug": "alice-eurail",
+            "version": "1.0.0",
+            "visibility": "public",
+            "owner_user_id": "spoofed",  # endpoint pins to _USER (Alice)
+            "name": "Eurail Report",
+            "description": "Alice's flagship skill",
+        }
+        resp = await client.post(f"{_BASE}/registry/skill", json=alice_body)
+        assert resp.status_code == 201, resp.text
+
+        # Step 2: Bob (different user_id) attempts to overwrite. We swap in a
+        # second client wired to "bob"'s principal but keep the same Neo4j
+        # backend so the MERGE collision is real.
+        bob_user = f"bob-{_SESSION}"
+
+        original_user_dep = app.dependency_overrides.get(get_current_user)
+        original_id_dep = app.dependency_overrides.get(get_current_user_id)
+        app.dependency_overrides[get_current_user] = lambda: {
+            "id": bob_user,
+            "principal_type": "service_account",
+            "home_graph_id": _GID_A,
+        }
+        app.dependency_overrides[get_current_user_id] = lambda: bob_user
+
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as bob_client:
+                bob_body = {
+                    "item_id": item_id,  # collision with Alice's item
+                    "graph_id": "ignored",
+                    "kind": "skill",
+                    "slug": "alice-eurail",
+                    "version": "1.0.0",
+                    "visibility": "yanked",
+                    "owner_user_id": "ignored",
+                    "name": "Eurail Report (deprecated, do not use)",
+                    "description": "Bob's hijack",
+                }
+                hijack_resp = await bob_client.post(
+                    f"{_BASE}/registry/skill", json=bob_body
+                )
+                assert hijack_resp.status_code == 403, hijack_resp.text
+        finally:
+            if original_user_dep is not None:
+                app.dependency_overrides[get_current_user] = original_user_dep
+            if original_id_dep is not None:
+                app.dependency_overrides[get_current_user_id] = original_id_dep
+
+        # Step 3: Alice's row must be untouched.
+        result = await neo4j_test_driver.execute_query(
+            """
+            MATCH (ri:RegistryItem:__Platform__ {item_id: $id})
+            RETURN ri.name AS name, ri.visibility AS vis,
+                   ri.owner_user_id AS owner, ri.description AS description
+            """,
+            {"id": item_id},
+        )
+        assert len(result.records) == 1
+        rec = result.records[0]
+        assert rec["name"] == "Eurail Report"
+        assert rec["vis"] == "public"
+        assert rec["owner"] == _USER  # still Alice
+        assert rec["description"] == "Alice's flagship skill"

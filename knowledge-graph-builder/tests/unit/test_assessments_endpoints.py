@@ -514,6 +514,31 @@ class TestPersistRegistryItemEndpoint:
         item_arg = mock_svc.persist_registry_item.await_args.args[0]
         assert item_arg.graph_id == REGISTRY_CATALOG_GRAPH_ID
 
+    async def test_non_owner_public_update_returns_403(self, client, mock_svc):
+        """Per TASK-073 Finding 1 (TASK-069): RegistryOwnershipError → 403.
+
+        The service rejects non-owner attempts to overwrite a public/yanked
+        item; the endpoint must translate the typed exception to HTTP 403
+        rather than letting it bubble to a 500.
+        """
+        from app.services.assessment_service import RegistryOwnershipError
+
+        mock_svc.persist_registry_item.side_effect = RegistryOwnershipError(
+            "RegistryItem 'ri-alice' is owned by another user"
+        )
+        resp = await client.post(
+            f"{_BASE}/registry/skill",
+            json=self._body(visibility="yanked", item_id="ri-alice"),
+        )
+        # The global HTTPException handler normalizes 403 bodies to the
+        # structured KGB-4003 shape (see app/main.py http_exception_handler);
+        # we assert on the status code, which is the security-critical signal.
+        assert resp.status_code == 403, resp.text
+        # The MERGE must NOT have been allowed to run beyond the typed
+        # exception — the endpoint code translates RegistryOwnershipError
+        # before the service is asked to write.
+        mock_svc.persist_registry_item.assert_awaited_once()
+
 
 # ── Auth failures ────────────────────────────────────────────────────────────
 

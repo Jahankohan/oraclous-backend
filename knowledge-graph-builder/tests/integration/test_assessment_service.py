@@ -42,7 +42,7 @@ from app.schemas.assessment_schemas import (
     UnresolvedQuestion,
     UpdateModuleRunRequest,
 )
-from app.services.assessment_service import AssessmentService
+from app.services.assessment_service import AssessmentService, RegistryOwnershipError
 
 pytestmark = pytest.mark.skipif(
     not _NEO4J_AVAILABLE, reason="neo4j driver not installed"
@@ -783,6 +783,408 @@ class TestRegistryIntegration:
         )
         assert result.records[0]["graph_id"] == REGISTRY_CATALOG_GRAPH_ID
         assert result.records[0]["visibility"] == "public"
+
+
+# ── TASK-073 regression — cross-tenant MERGE collision (Finding 1) ──────────
+
+
+class TestCrossTenantMergeCollision:
+    """Regression tests for TASK-073 Finding 1 (TASK-068).
+
+    Pre-fix, a malicious tenant B could MERGE an entity whose natural id
+    (finding_id, conflict_id, …) collides with tenant A's row. The MERGE
+    matched A's row across the tenant boundary; subsequent ON MATCH SET
+    overwrote A's caller-controlled fields and the follow-up MATCH+MERGE
+    attached a cross-tenant edge from B's parent to A's row.
+
+    Post-fix: every entity MERGE either pre-probes for an existing-foreign-
+    tenant row (and refuses) or uses WHERE-after-MERGE to filter foreign
+    rows out before edge attachment. The expected behaviour for tenant B
+    submitting a colliding id is: B's write is rejected with a RuntimeError;
+    A's row is untouched; no cross-tenant edges exist.
+    """
+
+    @pytest.mark.parametrize(
+        "entity_kind",
+        ["finding", "conflict", "question", "deliverable", "registry_item"],
+    )
+    async def test_cross_tenant_id_collision_rejected_and_a_untouched(
+        self,
+        svc: AssessmentService,
+        neo4j_test_driver: AsyncDriver,
+        entity_kind: str,
+    ):
+        # Setup: tenant A creates a run + entity with a known id. Tenant B
+        # then attempts to MERGE an entity with the same id and tries to
+        # poison the data.
+        suffix = uuid.uuid4().hex[:6]
+        shared_id = f"shared-{entity_kind}-{suffix}"
+
+        # --- Tenant A: legitimate write ---
+        req_a = CreateRunRequest(
+            template_slug=_TEMPLATE_SLUG,
+            subject=Subject(
+                subject_id=f"subj-A-{suffix}",
+                graph_id=_GID_A,
+                slug=f"a-subj-{suffix}",
+                name="A",
+            ),
+        )
+        run_a = await svc.create_run(_GID_A, req_a)
+        mr_a = run_a.module_run_ids[0]
+
+        # Setup: tenant B has its own run with the SAME shared module_run_id
+        # so we can test the attack symmetrically.
+        req_b = CreateRunRequest(
+            template_slug=_TEMPLATE_SLUG,
+            subject=Subject(
+                subject_id=f"subj-B-{suffix}",
+                graph_id=_GID_B,
+                slug=f"b-subj-{suffix}",
+                name="B",
+            ),
+        )
+        run_b = await svc.create_run(_GID_B, req_b)
+        mr_b = run_b.module_run_ids[0]
+
+        if entity_kind == "finding":
+            # A creates a Finding with id `shared_id`
+            findings_a = [
+                Finding(
+                    finding_id=shared_id,
+                    graph_id=_GID_A,
+                    run_id=run_a.run_id,
+                    module_run_id=mr_a,
+                    claim="A's legitimate claim",
+                    label="DIRECT",
+                )
+            ]
+            bulk_a = await svc.record_finding_bulk(
+                _GID_A, run_a.run_id, mr_a, findings_a
+            )
+            assert bulk_a.succeeded == 1
+
+            # B attempts to MERGE a Finding with the SAME finding_id.
+            # Expected: B's write fails per-record (success=False).
+            findings_b = [
+                Finding(
+                    finding_id=shared_id,  # collision
+                    graph_id=_GID_B,
+                    run_id=run_b.run_id,
+                    module_run_id=mr_b,
+                    claim="B's hijacked claim",
+                    label="DIRECT",
+                )
+            ]
+            bulk_b = await svc.record_finding_bulk(
+                _GID_B, run_b.run_id, mr_b, findings_b
+            )
+            assert bulk_b.succeeded == 0, "B's cross-tenant write must fail"
+            assert bulk_b.failed == 1
+            assert (
+                "cross-tenant" in (bulk_b.results[0].error or "").lower()
+                or "module_run" in (bulk_b.results[0].error or "").lower()
+            )
+
+            # A's row is untouched (claim, graph_id preserved).
+            verify = await neo4j_test_driver.execute_query(
+                """
+                MATCH (f:Finding:__Platform__ {finding_id: $fid})
+                RETURN f.claim AS claim, f.graph_id AS graph_id
+                """,
+                {"fid": shared_id},
+            )
+            assert len(verify.records) == 1
+            assert verify.records[0]["claim"] == "A's legitimate claim"
+            assert verify.records[0]["graph_id"] == _GID_A
+
+            # No cross-tenant [:PRODUCED] edge from B's ModuleRun to A's Finding.
+            cross_edge = await neo4j_test_driver.execute_query(
+                """
+                MATCH (mr:ModuleRun:__Platform__ {graph_id: $gid_b, module_run_id: $mrid_b})
+                      -[:PRODUCED]->(f:Finding:__Platform__ {finding_id: $fid})
+                RETURN count(*) AS cnt
+                """,
+                {"gid_b": _GID_B, "mrid_b": mr_b, "fid": shared_id},
+            )
+            assert cross_edge.records[0]["cnt"] == 0
+
+            # B's finalize_run must NOT count A's finding.
+            finalize_b = await svc.finalize_run(_GID_B, run_b.run_id)
+            assert finalize_b.direct_finding_count == 0, (
+                "B's gate must not count A's findings"
+            )
+
+        elif entity_kind == "conflict":
+            conflict_a = Conflict(
+                conflict_id=shared_id,
+                graph_id=_GID_A,
+                run_id=run_a.run_id,
+                topic="A topic",
+                summary="A summary",
+                status="open",
+            )
+            created_a = await svc.record_conflict(_GID_A, run_a.run_id, conflict_a)
+            assert created_a is True
+
+            # B attempts the hijack.
+            conflict_b = Conflict(
+                conflict_id=shared_id,
+                graph_id=_GID_B,
+                run_id=run_b.run_id,
+                topic="B hijack topic",
+                summary="B hijack summary",
+                status="resolved",
+            )
+            with pytest.raises(RuntimeError, match="different tenant"):
+                await svc.record_conflict(_GID_B, run_b.run_id, conflict_b)
+
+            # A's row is untouched.
+            verify = await neo4j_test_driver.execute_query(
+                """
+                MATCH (c:Conflict:__Platform__ {conflict_id: $cid})
+                RETURN c.topic AS topic, c.summary AS summary,
+                       c.status AS status, c.graph_id AS graph_id
+                """,
+                {"cid": shared_id},
+            )
+            assert verify.records[0]["topic"] == "A topic"
+            assert verify.records[0]["summary"] == "A summary"
+            assert verify.records[0]["status"] == "open"
+            assert verify.records[0]["graph_id"] == _GID_A
+
+        elif entity_kind == "question":
+            q_a = UnresolvedQuestion(
+                question_id=shared_id,
+                graph_id=_GID_A,
+                run_id=run_a.run_id,
+                module_run_id=mr_a,
+                text="A's question",
+                status="open",
+            )
+            await svc.record_unresolved_question(_GID_A, run_a.run_id, mr_a, q_a)
+
+            q_b = UnresolvedQuestion(
+                question_id=shared_id,
+                graph_id=_GID_B,
+                run_id=run_b.run_id,
+                module_run_id=mr_b,
+                text="B hijack text",
+                status="resolved",
+            )
+            with pytest.raises(RuntimeError, match="different tenant"):
+                await svc.record_unresolved_question(_GID_B, run_b.run_id, mr_b, q_b)
+
+            verify = await neo4j_test_driver.execute_query(
+                """
+                MATCH (q:UnresolvedQuestion:__Platform__ {question_id: $qid})
+                RETURN q.text AS text, q.status AS status, q.graph_id AS graph_id
+                """,
+                {"qid": shared_id},
+            )
+            assert verify.records[0]["text"] == "A's question"
+            assert verify.records[0]["status"] == "open"
+            assert verify.records[0]["graph_id"] == _GID_A
+
+        elif entity_kind == "deliverable":
+            d_a = Deliverable(
+                deliverable_id=shared_id,
+                graph_id=_GID_A,
+                run_id=run_a.run_id,
+                kind="final-md",
+                filename="a-legit.md",
+                ordinal=0,
+                content_inline="# A's content",
+            )
+            await svc.persist_deliverable(_GID_A, run_a.run_id, d_a)
+
+            d_b = Deliverable(
+                deliverable_id=shared_id,
+                graph_id=_GID_B,
+                run_id=run_b.run_id,
+                kind="final-html",
+                filename="b-hijack.html",
+                ordinal=0,
+                content_inline="# B hijack",
+            )
+            with pytest.raises(RuntimeError, match="different tenant"):
+                await svc.persist_deliverable(_GID_B, run_b.run_id, d_b)
+
+            verify = await neo4j_test_driver.execute_query(
+                """
+                MATCH (d:Deliverable:__Platform__ {deliverable_id: $did})
+                RETURN d.kind AS kind, d.filename AS filename,
+                       d.content_inline AS content, d.graph_id AS graph_id
+                """,
+                {"did": shared_id},
+            )
+            assert verify.records[0]["kind"] == "final-md"
+            assert verify.records[0]["filename"] == "a-legit.md"
+            assert verify.records[0]["content"] == "# A's content"
+            assert verify.records[0]["graph_id"] == _GID_A
+
+        elif entity_kind == "registry_item":
+            # Build a unique registry id so we can clean it up.
+            ri_id = f"ri-test-{_SESSION}-cross-{suffix}"
+            item_a = RegistryItem(
+                item_id=ri_id,
+                graph_id=_GID_A,
+                kind="skill",
+                slug=f"a-private-{suffix}",
+                visibility="private",
+                owner_user_id="alice",
+                name="Alice's private",
+            )
+            await svc.persist_registry_item(item_a, owner_tenant_graph_id=_GID_A)
+
+            # B (different tenant) tries to MERGE the same item_id as public.
+            # Cross-tenant collision: existing item is in tenant A; target is
+            # __registry__ — those are different graphs, so it's rejected.
+            item_b = RegistryItem(
+                item_id=ri_id,
+                graph_id=REGISTRY_CATALOG_GRAPH_ID,
+                kind="skill",
+                slug=f"b-hijack-{suffix}",
+                visibility="public",
+                owner_user_id="bob",
+                name="B hijack name",
+            )
+            with pytest.raises(RuntimeError, match="different graph"):
+                await svc.persist_registry_item(item_b)
+
+            verify = await neo4j_test_driver.execute_query(
+                """
+                MATCH (ri:RegistryItem:__Platform__ {item_id: $iid})
+                RETURN ri.name AS name, ri.visibility AS visibility,
+                       ri.owner_user_id AS owner, ri.graph_id AS graph_id
+                """,
+                {"iid": ri_id},
+            )
+            assert verify.records[0]["name"] == "Alice's private"
+            assert verify.records[0]["visibility"] == "private"
+            assert verify.records[0]["owner"] == "alice"
+            assert verify.records[0]["graph_id"] == _GID_A
+
+            # Clean up — outside the autouse fixture's cleanup scope
+            await neo4j_test_driver.execute_query(
+                "MATCH (ri:RegistryItem {item_id: $iid}) DETACH DELETE ri",
+                {"iid": ri_id},
+            )
+
+        else:
+            pytest.fail(f"unexpected entity_kind={entity_kind!r}")
+
+
+# ── TASK-073 regression — Registry public/yanked hijack (Finding 1 / TASK-069)
+
+
+class TestRegistryOwnershipEnforcement:
+    """Regression tests for TASK-073 Finding 1 (TASK-069).
+
+    Per ADR-019: public/yanked Registry items are owner-only on update.
+    A non-owner with `write` on `__registry__` cannot hijack another user's
+    item by sending a colliding `item_id`.
+    """
+
+    async def test_non_owner_cannot_overwrite_public_item(
+        self, svc: AssessmentService, neo4j_test_driver: AsyncDriver
+    ):
+        suffix = uuid.uuid4().hex[:6]
+        item_id = f"ri-test-{_SESSION}-pub-{suffix}"
+
+        # Alice publishes a public item to __registry__.
+        alice_item = RegistryItem(
+            item_id=item_id,
+            graph_id=REGISTRY_CATALOG_GRAPH_ID,
+            kind="skill",
+            slug=f"alice-eurail-{suffix}",
+            visibility="public",
+            owner_user_id="alice",
+            name="Eurail Report",
+            description="Alice's flagship skill",
+        )
+        await svc.persist_registry_item(alice_item)
+
+        # Bob (different user, same `__registry__` write permission in real
+        # deployments) attempts to yank Alice's item.
+        bob_item = RegistryItem(
+            item_id=item_id,
+            graph_id=REGISTRY_CATALOG_GRAPH_ID,
+            kind="skill",
+            slug=f"alice-eurail-{suffix}",
+            visibility="yanked",
+            owner_user_id="bob",  # NOT the existing owner
+            name="Eurail Report (deprecated, do not use)",
+        )
+        with pytest.raises(RegistryOwnershipError, match="owned by another user"):
+            await svc.persist_registry_item(bob_item)
+
+        # Alice's row is untouched.
+        verify = await neo4j_test_driver.execute_query(
+            """
+            MATCH (ri:RegistryItem:__Platform__ {item_id: $iid})
+            RETURN ri.name AS name, ri.visibility AS visibility,
+                   ri.owner_user_id AS owner, ri.description AS description
+            """,
+            {"iid": item_id},
+        )
+        assert verify.records[0]["name"] == "Eurail Report"
+        assert verify.records[0]["visibility"] == "public"
+        assert verify.records[0]["owner"] == "alice"
+        assert verify.records[0]["description"] == "Alice's flagship skill"
+
+        # Cleanup
+        await neo4j_test_driver.execute_query(
+            "MATCH (ri:RegistryItem {item_id: $iid}) DETACH DELETE ri",
+            {"iid": item_id},
+        )
+
+    async def test_owner_can_update_own_public_item(
+        self, svc: AssessmentService, neo4j_test_driver: AsyncDriver
+    ):
+        """Alice (the owner) CAN update her own public item — the fix must
+        not break the legitimate path."""
+        suffix = uuid.uuid4().hex[:6]
+        item_id = f"ri-test-{_SESSION}-pub-own-{suffix}"
+
+        alice_item = RegistryItem(
+            item_id=item_id,
+            graph_id=REGISTRY_CATALOG_GRAPH_ID,
+            kind="skill",
+            slug=f"alice-pub-{suffix}",
+            visibility="public",
+            owner_user_id="alice",
+            name="v1",
+        )
+        await svc.persist_registry_item(alice_item)
+
+        # Alice updates the name — should succeed.
+        alice_item_v2 = RegistryItem(
+            item_id=item_id,
+            graph_id=REGISTRY_CATALOG_GRAPH_ID,
+            kind="skill",
+            slug=f"alice-pub-{suffix}",
+            visibility="public",
+            owner_user_id="alice",  # same owner
+            name="v2",
+        )
+        created = await svc.persist_registry_item(alice_item_v2)
+        assert created is False  # MATCH, not CREATE
+
+        verify = await neo4j_test_driver.execute_query(
+            """
+            MATCH (ri:RegistryItem:__Platform__ {item_id: $iid})
+            RETURN ri.name AS name
+            """,
+            {"iid": item_id},
+        )
+        assert verify.records[0]["name"] == "v2"
+
+        # Cleanup
+        await neo4j_test_driver.execute_query(
+            "MATCH (ri:RegistryItem {item_id: $iid}) DETACH DELETE ri",
+            {"iid": item_id},
+        )
 
 
 # ── __Platform__ marker invariant (ADR-015) ───────────────────────────────────
