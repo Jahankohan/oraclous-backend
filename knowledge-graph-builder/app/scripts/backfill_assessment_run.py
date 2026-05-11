@@ -214,6 +214,7 @@ class BackfillStats:
     findings_replayed: int = 0
     findings_skipped_unknown_module: int = 0
     findings_skipped_malformed: int = 0
+    findings_validation_skipped: int = 0
     findings_failed: int = 0
 
     conflicts_total: int = 0
@@ -625,6 +626,47 @@ async def _fetch_module_run_id_to_slug(
 # =============================================================================
 
 
+#: Delimiter used when folding a list-shaped ``raw`` / ``searched`` value into
+#: a single string for the Finding.raw field. Two newlines preserve readability
+#: when the items are search-query lines or short prose extracts (the only
+#: shape we see in the Eurail run — see TASK-072 QA Defect 1 notes).
+RAW_LIST_JOIN_DELIMITER = "\n\n"
+
+
+def _normalize_raw_text(value: Any) -> Optional[str]:
+    """Coerce a legacy ``raw`` / ``searched`` field to ``Optional[str]``.
+
+    The new ``Finding.raw`` schema field is ``str | None``, but 14 gap-research
+    records in the Eurail 2026-05-06 run carry a *list* (typically the legacy
+    ``searched`` field — an array of search-query strings) which the script's
+    earlier ``record.get("raw") or record.get("searched")`` would pass through
+    as-is, causing Pydantic 422 at request-body validation time and dropping
+    the whole 100-record chunk (TASK-072 QA Defect 1).
+
+    Strategy:
+
+    * ``None``                       → ``None`` (preserved).
+    * ``str``                        → returned unchanged.
+    * ``list``  (all items strings)  → joined with ``"\\n\\n"``.
+    * ``list``  (mixed types)        → each item stringified, then joined.
+    * anything else                  → ``str(value)``.
+
+    The join delimiter (``"\\n\\n"``) is the readable choice: in every observed
+    case the list elements are independent prose lines (search queries or
+    source-attempt notes), so two newlines render them as separate paragraphs
+    in downstream views without altering their content. ``json.dumps`` was
+    considered but would smuggle JSON syntax into a free-text field where
+    analysis modules and the finalize_run citation gate expect prose.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return RAW_LIST_JOIN_DELIMITER.join(str(item) for item in value)
+    return str(value)
+
+
 def _evidence_to_finding(
     record: dict[str, Any],
     *,
@@ -663,13 +705,22 @@ def _evidence_to_finding(
         or ""
     )
 
+    # Normalize raw + source_quote to ``Optional[str]`` — see ``_normalize_raw_text``.
+    # 14 Eurail gap-research records carry a list-shaped ``searched`` field
+    # that flows into ``raw`` via the fallback chain below; without
+    # normalization Pydantic 422s the whole bulk chunk.
+    raw_text = _normalize_raw_text(
+        record.get("raw") if record.get("raw") is not None else record.get("searched")
+    )
+    source_quote_text = _normalize_raw_text(record.get("raw"))
+
     return {
         "finding_id": finding_id,
         "graph_id": graph_id,
         "run_id": run_id,
         "module_run_id": module_run_id,
         "claim": claim,
-        "raw": record.get("raw") or record.get("searched"),
+        "raw": raw_text,
         "label": _normalize_label(record.get("label")),
         "confidence": _normalize_confidence(record.get("confidence")),
         "dimensions": record.get("dimensions") or [],
@@ -681,9 +732,35 @@ def _evidence_to_finding(
         ),
         "superseded_by": None,
         "source_id": source_id,
-        "source_quote": record.get("raw"),
+        "source_quote": source_quote_text,
         "source_locator": None,
     }
+
+
+def _validate_finding_or_log_skip(payload: dict[str, Any]) -> bool:
+    """Pre-validate a Finding payload against the Pydantic schema.
+
+    Returns ``True`` if the payload would pass server-side validation, ``False``
+    (with a WARNING log) otherwise. Used by the bulk-send loop to drop only
+    the offending record rather than the entire chunk, addressing TASK-072 QA
+    Defect 1's coarse chunk-level try/except: previously a single 422 on any
+    record killed all ~100 siblings.
+
+    The import is local to keep this script importable without the FastAPI app
+    being on PYTHONPATH (unit tests run that way).
+    """
+    try:
+        from app.schemas.assessment_schemas import Finding
+
+        Finding.model_validate(payload)
+        return True
+    except Exception as exc:  # pydantic.ValidationError or other
+        logger.warning(
+            "skipping invalid Finding payload id=%s: %s",
+            payload.get("finding_id"),
+            exc,
+        )
+        return False
 
 
 def _conflict_to_payload(
@@ -999,23 +1076,32 @@ async def run_backfill(
             # a historic batch, not a live execution.
             await api.update_module_run(run_id, module_run_id, {"status": "running"})
 
-            # Bulk-write the findings in chunks.
+            # Bulk-write the findings in chunks. Each record is pre-validated
+            # against the Pydantic Finding schema BEFORE chunking so a single
+            # bad row no longer 422s the entire chunk (TASK-072 QA Defect 1).
             wrote = 0
             replayed = 0
             failed = 0
-            for chunk_start in range(0, len(records), BULK_FINDING_CHUNK):
-                chunk = records[chunk_start : chunk_start + BULK_FINDING_CHUNK]
-                payload = [
-                    _evidence_to_finding(
-                        rec,
-                        graph_id=cfg.graph_id,
-                        run_id=run_id,
-                        module_run_id=module_run_id,
-                    )
-                    for rec in chunk
+            validation_skipped = 0
+            valid_payloads: list[dict[str, Any]] = []
+            for rec in records:
+                payload = _evidence_to_finding(
+                    rec,
+                    graph_id=cfg.graph_id,
+                    run_id=run_id,
+                    module_run_id=module_run_id,
+                )
+                if _validate_finding_or_log_skip(payload):
+                    valid_payloads.append(payload)
+                else:
+                    validation_skipped += 1
+
+            for chunk_start in range(0, len(valid_payloads), BULK_FINDING_CHUNK):
+                chunk_payload = valid_payloads[
+                    chunk_start : chunk_start + BULK_FINDING_CHUNK
                 ]
                 try:
-                    bulk_resp = await api.record_findings_bulk(run_id, payload)
+                    bulk_resp = await api.record_findings_bulk(run_id, chunk_payload)
                 except httpx.HTTPStatusError as exc:
                     logger.error(
                         "bulk findings POST failed for module=%s (chunk %d): %s",
@@ -1023,7 +1109,7 @@ async def run_backfill(
                         chunk_start,
                         exc,
                     )
-                    failed += len(chunk)
+                    failed += len(chunk_payload)
                     continue
 
                 for res in bulk_resp.get("results", []):
@@ -1040,6 +1126,7 @@ async def run_backfill(
             stats.findings_written += wrote
             stats.findings_replayed += replayed
             stats.findings_failed += failed
+            stats.findings_validation_skipped += validation_skipped
 
             # PATCH → finished + evidence_count.
             await api.update_module_run(
@@ -1247,6 +1334,7 @@ def _format_summary(stats: BackfillStats) -> str:
         f"  replayed (already existed):        {stats.findings_replayed}\n"
         f"  skipped_unknown_module:            {stats.findings_skipped_unknown_module}\n"
         f"  skipped_malformed:                 {stats.findings_skipped_malformed}\n"
+        f"  validation_skipped:                {stats.findings_validation_skipped}\n"
         f"  failed:                            {stats.findings_failed}\n"
         f"conflicts_total:                     {stats.conflicts_total}\n"
         f"  written:                           {stats.conflicts_written}\n"
