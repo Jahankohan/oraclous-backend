@@ -59,7 +59,7 @@ from app.schemas.assessment_schemas import (
     RegistryKind,
     UpdateModuleRunRequest,
 )
-from app.services.assessment_service import AssessmentService
+from app.services.assessment_service import AssessmentService, RegistryOwnershipError
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -542,7 +542,14 @@ async def heartbeat_module_run(
     responses={
         400: {"description": "Invalid request or visibility/graph mismatch"},
         401: {"description": "Missing or invalid JWT"},
-        403: {"description": "Caller lacks write access to the target graph"},
+        403: {
+            "description": (
+                "Caller lacks write access to the target graph, OR caller is "
+                "not the owner of an existing public/yanked RegistryItem "
+                "(ADR-019: public/yanked items are owner-only on update; "
+                "curated writes require platform admin)."
+            )
+        },
         503: {"description": "Neo4j unavailable"},
     },
 )
@@ -602,6 +609,14 @@ async def persist_registry_item(
         created = await svc.persist_registry_item(
             item,
             owner_tenant_graph_id=item.graph_id if item.visibility == "private" else None,
+        )
+    except RegistryOwnershipError as exc:
+        # Per TASK-073 Finding 1 (TASK-069): non-owner attempt to overwrite a
+        # public/yanked RegistryItem is rejected with 403. The endpoint's
+        # `verify_graph_access` gates "can write to the catalog at all" but
+        # not "can write *this* item" — that's enforced in the service.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
         )
     except ValueError as exc:
         raise HTTPException(

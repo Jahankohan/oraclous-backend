@@ -69,6 +69,23 @@ logger = get_logger(__name__)
 
 
 # =============================================================================
+# Typed errors — surfaced to the REST layer with structured HTTP status codes.
+# =============================================================================
+
+
+class RegistryOwnershipError(PermissionError):
+    """Raised when a RegistryItem write fails the ownership check (ADR-019).
+
+    Per TASK-073 Finding 1 (TASK-069): public/yanked items in `__registry__`
+    are owner-writable only. A non-owner attempting to overwrite a public item
+    triggers this error. The endpoint layer translates this to HTTP 403.
+
+    Curated items (admin-gated at the endpoint) are exempt from the ownership
+    check because platform admins legitimately update items owned by others.
+    """
+
+
+# =============================================================================
 # Citation-coverage gate thresholds — STORY-026 §Acceptance Criteria.
 # Tuned for the Eurail backfill (~600 direct findings, 23 module deliverables,
 # 5 final docs). A run that fails the gate moves to `status='failed'`.
@@ -1218,9 +1235,13 @@ class AssessmentService:
 
         Returns True iff newly created.
 
-        Per TASK-073 Finding 1 (TASK-068): the MERGE is scoped by
-        `(graph_id, item_id)` semantics — a cross-tenant item_id collision
-        raises a clear error rather than silently overwriting.
+        Per TASK-073 Finding 1 (TASK-069): public/yanked items are owner-only
+        on UPDATE — a non-owner attempting to overwrite an existing item
+        raises :class:`RegistryOwnershipError`. Curated writes (admin-gated at
+        the endpoint) are exempt, since platform admins legitimately update
+        items owned by others. Per TASK-073 Finding 1 (TASK-068): the MERGE
+        is scoped by `(graph_id, item_id)` semantics — a cross-tenant item_id
+        collision raises a clear error rather than silently overwriting.
         """
         target_graph_id = self._registry_target_graph_id(item, owner_tenant_graph_id)
         # The item's `graph_id` field must match the visibility-resolved target.
@@ -1231,10 +1252,12 @@ class AssessmentService:
                 f"(visibility={item.visibility!r})"
             )
 
-        # Pre-MERGE existence + tenancy probe.
-        # Per TASK-073 Finding 1 (TASK-068): the existing row (if any) must
-        # live in the same graph we're writing to. Otherwise this is a
-        # cross-tenant id collision and we refuse to MERGE.
+        # Pre-MERGE existence + ownership + tenancy probe.
+        # Per TASK-073 Finding 1 (TASK-069): the endpoint's `verify_graph_access`
+        # gates "can write to the catalog" but not "can write *this* item".
+        # ADR-019 mandates owner-only writes for `public` and `yanked`. A
+        # non-owner attempting to update an existing item is rejected with
+        # `RegistryOwnershipError`, which the endpoint maps to HTTP 403.
         existing_probe = await self._driver.execute_query(
             """
             MATCH (ri:RegistryItem:__Platform__ {item_id: $item_id})
@@ -1246,13 +1269,37 @@ class AssessmentService:
             {"item_id": item.item_id},
         )
         if existing_probe.records:
-            existing_graph_id = existing_probe.records[0]["graph_id"]
+            rec = existing_probe.records[0]
+            existing_graph_id = rec["graph_id"]
+            existing_owner = rec["owner_user_id"]
+            existing_visibility = rec["visibility"]
+
+            # Tenant-isolation guard (TASK-073 Finding 1, TASK-068): the
+            # existing row must live in the same graph we're writing to.
+            # Otherwise this is a cross-tenant id collision attempt.
             if existing_graph_id != target_graph_id:
                 raise RuntimeError(
                     f"RegistryItem {item.item_id!r} already exists in a "
                     f"different graph (existing graph_id={existing_graph_id!r}, "
                     f"target={target_graph_id!r}); refusing to merge cross-tenant"
                 )
+
+            # Ownership guard (TASK-073 Finding 1, TASK-069): public/yanked
+            # writes are owner-only. Curated writes are admin-gated at the
+            # endpoint and may legitimately update non-owned items.
+            if item.visibility in ("public", "yanked") or existing_visibility in (
+                "public",
+                "yanked",
+            ):
+                # Only the owner of the existing item may update it.
+                if existing_owner and existing_owner != item.owner_user_id:
+                    raise RegistryOwnershipError(
+                        f"RegistryItem {item.item_id!r} is owned by another "
+                        f"user (existing owner_user_id={existing_owner!r}, "
+                        f"caller={item.owner_user_id!r}); only the owner may "
+                        f"update a public/yanked item (curated writes require "
+                        f"platform admin)"
+                    )
 
         result = await self._driver.execute_query(
             """
