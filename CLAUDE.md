@@ -115,11 +115,22 @@ No story is done without:
 
 ## Current Phase
 
-**Deepening phase** (April–July 2026):
-- Leiden hierarchical communities (replacing Louvain)
-- True bitemporal tracking
-- Federation SAME_AS semantic matching
-- Frontend MVP (4 core screens)
-- Published benchmarks
+**L1-first product shipping** (May 2026 onward).
 
-Then: FTOps agent build (Wave 1: Structural, Coverage & Gap, Community & Hierarchy analysis families).
+The Deepening phase is done. L2 Harnessing Platform (STORY-010 through
+STORY-017) and L3 FTOps are explicitly deferred. Backend work in this phase
+is small and targeted — mostly supporting:
+
+- STORY-024 — Agent Builder (the backend already exposes agent CRUD;
+  Builder is mostly a frontend feature using the existing endpoints)
+- STORY-023 — Embeddable Agent Widget (consumes the already-shipped
+  published-agent endpoints from STORY-022)
+
+If a backend task surfaces during this phase, it should fall into one of:
+- Filling small gaps in the agent or chat APIs the Builder/Widget need
+- L1 polish / hardening identified by usage
+
+Anything that looks like L2 work (BSP executor, LLM gateway service, tool
+dispatcher, coordination layer, etc.) is out of scope — see
+[/Users/reza/workspace/Oraclous/wiki/2_product/roadmap.md](../wiki/2_product/roadmap.md)
+"L1-First Shipping Plan" for the full deferral list.
