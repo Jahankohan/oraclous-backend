@@ -774,7 +774,7 @@ class TestRoundTripDump:
 # Deterministic seed so a failure in CI is reproducible — and so successive
 # runs of this test on the same data hit the same sample. Picks a 10/5/5
 # subset per the task spec.
-_RNG_SEED = 0xEU2A1L  # arbitrary mnemonic; doesn't matter as long as it's pinned
+_RNG_SEED = 0xEA12026  # arbitrary; pinned for reproducibility of the random sample
 
 
 class TestPropertyLevelSpotChecks:
