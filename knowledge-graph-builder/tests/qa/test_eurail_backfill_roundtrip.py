@@ -195,6 +195,45 @@ def _count_unique_source_urls() -> int:
     return len(urls)
 
 
+def _count_unique_sources() -> int:
+    """Count unique :Source rows the backfill should produce for this run.
+
+    The backfill derives ``source_id`` exactly two ways
+    (see ``_evidence_to_finding`` in ``backfill_assessment_run.py``):
+
+    * ``url`` (or ``url_normalized``) present → ``UUID5(NAMESPACE_URL, url)``.
+    * URL absent, ``name`` present           → ``UUID5(NAMESPACE_OID, name)``.
+
+    Records with neither URL nor name produce no source_id and cite no
+    :Source row. The graph's distinct :Source count equals the count of
+    unique (URL-keyed + name-only-keyed) source_ids in the source file.
+
+    The Eurail 2026-05-06 run has 392 unique URLs and 5 name-only sources
+    (records without `source.url_normalized` but with `source.name`). The
+    previous QA test asserted equality against just the 392 URL count,
+    which failed once Defect 1's data-loss artefact stopped masking the
+    5 name-only sources. This helper restores the contract by counting
+    both keys the same way the script does.
+    """
+    urls: set[str] = set()
+    name_only: set[str] = set()
+    path = _REAL_EURAIL_RUN_DIR / "evidence" / "evidence.jsonl"
+    for _, rec in _iter_jsonl_records(path):
+        if not isinstance(rec, dict):
+            continue
+        src = rec.get("source") or {}
+        if not isinstance(src, dict):
+            continue
+        u = src.get("url") or src.get("url_normalized")
+        if u:
+            urls.add(u)
+            continue
+        n = src.get("name")
+        if n:
+            name_only.add(n)
+    return len(urls) + len(name_only)
+
+
 # ============================================================================
 # Fixtures — Neo4j wipe + template seed + ASGI client
 # ============================================================================
@@ -517,19 +556,35 @@ class TestCountParity:
     async def test_source_catalog_deduped_against_source_urls(
         self, neo4j_test_driver: AsyncDriver, _loaded_run
     ):
-        """The catalog `:Source` count equals unique source URLs in the file.
+        """The cited `:Source` set matches the union of URL- and name-keyed
+        unique sources from the source file.
 
-        The backfill MERGEs :Source rows by `source_id` (which is
-        UUID5(NAMESPACE_URL, url) deterministically), so two findings citing
-        the same URL share a single :Source row in the catalog graph.
+        The backfill derives ``source_id`` in exactly two ways
+        (``_evidence_to_finding`` in ``backfill_assessment_run.py``):
 
-        We assert the catalog has *at least* the expected unique-URL count
-        (the catalog may have rows from other tests' previous runs; we
-        cannot assume an empty catalog). The strict ID-set assertion is
-        delegated to the property-level test below.
+        * URL present → ``UUID5(NAMESPACE_URL, url)``.
+        * URL absent, name present → ``UUID5(NAMESPACE_OID, name)``.
+
+        So two findings citing the same URL share a single :Source row, and
+        two findings citing the same name-only source likewise share a row.
+        The expected distinct :Source count for this run equals the union of
+        the two unique sets — counted by ``_count_unique_sources``. The
+        Eurail 2026-05-06 run has 392 unique URLs and 5 name-only sources
+        (records without ``source.url_normalized`` but with ``source.name``)
+        for an expected total of 397.
+
+        Going through ``:CITES`` from this run's findings excludes any
+        ambient catalog rows from other parallel tests, so this assertion
+        is safe under shared-catalog runs.
+
+        Previous version of this test used only ``_count_unique_source_urls``
+        and asserted equality against the 392 URL count — that was masked by
+        QA Defect 1's data loss (5 name-only sources never reached the
+        graph). With Defect 1 fixed, the 5 surface and the assertion now
+        holds the tighter contract.
         """
         cfg, stats = _loaded_run
-        expected_url_count = _count_unique_source_urls()
+        expected_total_sources = _count_unique_sources()
         run_id = getattr(stats, "run_id")
         rs = await neo4j_test_driver.execute_query(
             """
@@ -540,13 +595,13 @@ class TestCountParity:
         )
         n = rs.records[0]["n"]
         # The number of distinct :Source nodes cited by this run's findings
-        # should equal the number of unique URLs in the source file. Any
-        # ambient catalog rows from other tests are excluded by going
-        # through the :CITES edge from this run's findings.
-        assert n == expected_url_count, (
+        # should equal the number of unique (URL ∪ name-only) source_ids
+        # the backfill derives from the source file.
+        assert n == expected_total_sources, (
             f"Distinct cited :Source count is {n}, expected "
-            f"{expected_url_count}. Some source urls didn't dedupe, or some "
-            f"findings cited no source when they should have."
+            f"{expected_total_sources} (= unique URL-keyed sources + "
+            f"unique name-only-keyed sources). Some source ids didn't "
+            f"dedupe, or some findings cited no source when they should have."
         )
 
 
