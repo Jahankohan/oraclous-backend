@@ -64,6 +64,12 @@ async def lifespan(app: FastAPI):
 
         await ensure_code_schema(neo4j_client.async_driver)
 
+        # Apply Assessment substrate constraints + indexes + catalog anchors
+        # (STORY-026, TASK-067/TASK-069 — idempotent, safe on every boot)
+        from app.db.assessment_schema_init import ensure_assessment_schema
+
+        await ensure_assessment_schema(neo4j_client.async_driver)
+
         # Initialize AgentServiceAccount Neo4j schema (constraints + indexes)
         from app.services.service_account_service import service_account_service
 
