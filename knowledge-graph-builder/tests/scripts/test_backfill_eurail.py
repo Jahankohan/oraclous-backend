@@ -558,7 +558,12 @@ async def test_backfill_minimal_synthetic_run_round_trips(
         run_dir=tmp_path / "run",
         graph_id=_INT_GID,
         template_slug=_INT_TEMPLATE_SLUG,
-        api_base="http://test",
+        # The FastAPI app double-prefixes assessment routes (outer /api/v1 in
+        # main.py + inner /api/v1 in api/v1/router.py). The script's REST
+        # client appends "/api/v1/assessments" to api_base, so we have to thread
+        # one /api/v1 into the base for the URL to land on the live router
+        # (TASK-072 QA Defect 2).
+        api_base="http://test/api/v1",
         token=None,
     )
     stats = await run_backfill(cfg, http_client=_http_client, neo4j_driver=neo4j_test_driver)
@@ -645,7 +650,12 @@ async def test_backfill_is_idempotent(
         run_dir=tmp_path / "run",
         graph_id=_INT_GID,
         template_slug=_INT_TEMPLATE_SLUG,
-        api_base="http://test",
+        # The FastAPI app double-prefixes assessment routes (outer /api/v1 in
+        # main.py + inner /api/v1 in api/v1/router.py). The script's REST
+        # client appends "/api/v1/assessments" to api_base, so we have to thread
+        # one /api/v1 into the base for the URL to land on the live router
+        # (TASK-072 QA Defect 2).
+        api_base="http://test/api/v1",
         token=None,
     )
     # First pass.
@@ -782,7 +792,12 @@ async def test_backfill_real_eurail_run_round_trips(
             run_dir=run_copy,
             graph_id=gid,
             template_slug=template_slug,
-            api_base="http://test",
+            # The FastAPI app double-prefixes assessment routes (outer /api/v1 in
+        # main.py + inner /api/v1 in api/v1/router.py). The script's REST
+        # client appends "/api/v1/assessments" to api_base, so we have to thread
+        # one /api/v1 into the base for the URL to land on the live router
+        # (TASK-072 QA Defect 2).
+        api_base="http://test/api/v1",
             token=None,
             neo4j_uri=neo4j_uri,
             neo4j_user=neo4j_user,
