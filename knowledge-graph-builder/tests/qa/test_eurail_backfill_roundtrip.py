@@ -63,6 +63,7 @@ from app.scripts.backfill_assessment_run import (
     BackfillConfig,
     _iter_jsonl_records,
     _normalize_module_slug,
+    _normalize_raw_text,
     _resolve_record_id,
     _walk_module_md_files,
     run_backfill,
@@ -833,10 +834,19 @@ class TestPropertyLevelSpotChecks:
                 f"{rid}: claim mismatch"
             )
 
-            # raw — backfill sets to record.get('raw') or record.get('searched');
-            # for canonical evidence records it's just 'raw'; for gap-research
-            # the 'searched' folds in.
-            expected_raw = src.get("raw") if src.get("raw") is not None else src.get("searched")
+            # raw — backfill sets to record.get('raw') or record.get('searched'),
+            # then runs the result through `_normalize_raw_text` (which folds
+            # list-shaped values into a single string joined with "\n\n" —
+            # 14 gap-research records carry `searched: list[str]`). To compare
+            # like-for-like, we must apply the SAME normalization on the source
+            # side. Without this, the post-normalization graph value
+            # ("query a\n\nquery b") is compared against the pre-normalization
+            # source list (["query a", "query b"]) and the assertion fails for
+            # 14 records — for the OPPOSITE reason than QA Defect 1 (which was
+            # actual data loss; this is comparison-side stale logic).
+            expected_raw = _normalize_raw_text(
+                src.get("raw") if src.get("raw") is not None else src.get("searched")
+            )
             assert g.get("raw") == expected_raw, (
                 f"{rid}: raw mismatch — src={expected_raw!r} g={g.get('raw')!r}"
             )
