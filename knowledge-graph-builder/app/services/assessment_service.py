@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from neo4j import AsyncDriver
 
@@ -77,6 +77,14 @@ from app.schemas.assessment_schemas import (
     WaveModuleStatus,
     WaveStatusResponse,
 )
+from app.services.blob_cas_service import (
+    BlobCASService,
+    InvalidBlobURIError,
+    is_blob_uri,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -153,10 +161,20 @@ class AssessmentService:
     The constructor takes an `AsyncDriver` so unit tests can pass a mock.
     Production callers (REST endpoints in TASK-069) will inject
     `neo4j_client.async_driver` via FastAPI Depends().
+
+    Optionally takes a `BlobCASService` for deliverable content storage
+    (TASK-082). When not supplied, the service falls back to constructing
+    its own stateless instance — `BlobCASService` carries no state and the
+    Postgres `AsyncSession` is passed in per-call by the endpoint layer.
     """
 
-    def __init__(self, driver: AsyncDriver):
+    def __init__(
+        self,
+        driver: AsyncDriver,
+        blob_cas: BlobCASService | None = None,
+    ):
         self._driver = driver
+        self._blob_cas = blob_cas or BlobCASService()
 
     # =========================================================================
     # create_run
@@ -998,12 +1016,33 @@ class AssessmentService:
         graph_id: str,
         run_id: str,
         deliverable: Deliverable,
+        *,
+        content_bytes: bytes | None = None,
+        mime_type: str | None = None,
+        db: AsyncSession | None = None,
     ) -> bool:
         """MERGE a :Deliverable and its edges to the run (+ module_run if set).
 
-        SPRINT-001 stores `content_uri` as an opaque string and `content_inline`
-        as a property for small payloads. SPRINT-002 will introduce the Postgres
-        `:Blob` CAS keyed by `sha256`.
+        SPRINT-001 stored `content_uri` as an opaque string and `content_inline`
+        as a property for small payloads. SPRINT-002 (TASK-082) introduces the
+        Postgres-backed CAS: callers pass `content_bytes` + `mime_type`, the
+        service writes the bytes via `BlobCASService.put()`, and the resulting
+        canonical `blob://sha256/<hex>` URI is written to `:Deliverable.content_uri`
+        (along with the computed `sha256`). Inline content via
+        `Deliverable.content_inline` stays supported for sub-50KB markdown.
+
+        Args:
+            graph_id, run_id, deliverable: as before.
+            content_bytes: optional raw payload to store via the CAS. When
+                supplied, `db` and `mime_type` must also be supplied;
+                `deliverable.content_uri` is computed from the bytes and
+                any caller-supplied value on `deliverable` is ignored. Any
+                caller-supplied `deliverable.sha256` must match the digest
+                or it is overridden with a warning.
+            mime_type: required when `content_bytes` is supplied. Stored
+                in the `blob_cas.mime_type` column for `get_deliverable_content`.
+            db: Postgres `AsyncSession` for the CAS write. Required when
+                `content_bytes` is supplied; the caller commits the session.
 
         Returns True iff newly created.
         """
@@ -1012,6 +1051,45 @@ class AssessmentService:
         if deliverable.run_id != run_id:
             raise ValueError(
                 f"deliverable.run_id={deliverable.run_id!r} != run_id={run_id!r}"
+            )
+
+        # --- CAS write (TASK-082) ---------------------------------------------
+        # When the caller passes raw bytes, persist via the CAS first, then
+        # overwrite `content_uri` + `sha256` on the deliverable Pydantic copy
+        # we hand to Neo4j. The Pydantic model is frozen by ConfigDict(extra=
+        # 'forbid') but field reassignment is allowed; we use `model_copy` to
+        # avoid mutating the caller's object.
+        if content_bytes is not None:
+            if db is None:
+                raise ValueError(
+                    "db (AsyncSession) is required when content_bytes is supplied"
+                )
+            if not mime_type:
+                raise ValueError("mime_type is required when content_bytes is supplied")
+            cas_result = await self._blob_cas.put(
+                db, graph_id, content_bytes, mime_type
+            )
+            cas_sha256 = cas_result["sha256"]
+            cas_uri = cas_result["content_uri"]
+            # If the caller pre-computed a sha256, verify it matches.
+            if deliverable.sha256 and deliverable.sha256 != cas_sha256:
+                logger.warning(
+                    "persist_deliverable: caller-supplied sha256=%s does not "
+                    "match computed sha256=%s; using computed value",
+                    deliverable.sha256,
+                    cas_sha256,
+                )
+            deliverable = deliverable.model_copy(
+                update={
+                    "content_uri": cas_uri,
+                    "sha256": cas_sha256,
+                }
+            )
+        elif mime_type is not None or db is not None:
+            # Both halves of the CAS contract must travel together.
+            raise ValueError(
+                "mime_type / db were supplied without content_bytes — "
+                "either provide all three or none"
             )
 
         # Per TASK-073 Finding 1: pre-MERGE probe + race-safe CASE-guarded
@@ -1107,19 +1185,45 @@ class AssessmentService:
         graph_id: str,
         run_id: str,
         deliverables: list[Deliverable],
+        *,
+        contents: list[tuple[bytes, str] | None] | None = None,
+        db: AsyncSession | None = None,
     ) -> BulkResponse:
         """Bulk-persist a final 5-doc set (intro + 4 sections, typically).
 
         Same per-record success/failure shape as `record_finding_bulk`.
+
+        TASK-082: pass `contents` as a list of `(content_bytes, mime_type)`
+        tuples (or `None` for deliverables that already carry `content_uri` /
+        `content_inline`). When supplied, the list MUST be the same length as
+        `deliverables`. Each non-`None` entry triggers a CAS write before the
+        Neo4j MERGE; `db` is required in that case.
         """
         if not graph_id:
             raise ValueError("graph_id is required")
+        if contents is not None and len(contents) != len(deliverables):
+            raise ValueError(
+                f"contents length ({len(contents)}) must match deliverables "
+                f"length ({len(deliverables)})"
+            )
         results: list[BulkItemResult] = []
         succeeded = 0
         failed = 0
-        for d in deliverables:
+        for idx, d in enumerate(deliverables):
             try:
-                created = await self.persist_deliverable(graph_id, run_id, d)
+                cas_payload = contents[idx] if contents is not None else None
+                if cas_payload is not None:
+                    cb, mt = cas_payload
+                    created = await self.persist_deliverable(
+                        graph_id,
+                        run_id,
+                        d,
+                        content_bytes=cb,
+                        mime_type=mt,
+                        db=db,
+                    )
+                else:
+                    created = await self.persist_deliverable(graph_id, run_id, d)
                 results.append(
                     BulkItemResult(
                         id=d.deliverable_id,
@@ -1145,6 +1249,108 @@ class AssessmentService:
             failed=failed,
             results=results,
         )
+
+    # =========================================================================
+    # get_deliverable_content (TASK-082 — TASK-079 picks this up at the endpoint)
+    # =========================================================================
+
+    async def get_deliverable_content(
+        self,
+        db: AsyncSession,
+        graph_id: str,
+        run_id: str,
+        deliverable_id: str,
+    ) -> dict[str, Any] | None:
+        """Resolve a deliverable's payload, preferring CAS over inline.
+
+        Returns a dict with the resolved bytes/text + metadata, or `None`
+        when the deliverable does not exist in this tenant. Shape:
+
+            {
+                "deliverable_id": str,
+                "filename": str,
+                "kind": str,
+                "content_uri": str | None,
+                "sha256": str | None,
+                "content_bytes": bytes | None,  # populated for CAS-backed
+                "content_text": str | None,     # populated for inline
+                "mime_type": str | None,        # populated for CAS-backed
+                "size_bytes": int | None,
+            }
+
+        Resolution order:
+          1. If `content_uri` is a CAS URI (`blob://sha256/<hex>`), look it
+             up via `BlobCASService.get()`. Cross-tenant existence is masked
+             (returns `None`).
+          2. Else if `content_inline` is non-null, return it as text.
+          3. Else return the deliverable row with both `content_*` fields
+             `None` — caller decides what to do (likely 404).
+
+        This method is the resolution surface TASK-079 wires into the GET
+        deliverable endpoint. It lives on the service so endpoints stay thin.
+        """
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        if not run_id or not deliverable_id:
+            raise ValueError("run_id and deliverable_id are required")
+
+        # 1. Fetch the deliverable metadata from Neo4j, scoped by tenant.
+        meta_result = await self._driver.execute_query(
+            """
+            MATCH (d:Deliverable:__Platform__ {
+                graph_id: $graph_id,
+                run_id: $run_id,
+                deliverable_id: $deliverable_id
+            })
+            RETURN d.deliverable_id  AS deliverable_id,
+                   d.filename        AS filename,
+                   d.kind            AS kind,
+                   d.content_uri     AS content_uri,
+                   d.content_inline  AS content_inline,
+                   d.sha256          AS sha256
+            LIMIT 1
+            """,
+            {
+                "graph_id": graph_id,
+                "run_id": run_id,
+                "deliverable_id": deliverable_id,
+            },
+        )
+        if not meta_result.records:
+            return None
+        rec = meta_result.records[0]
+        out: dict[str, Any] = {
+            "deliverable_id": rec["deliverable_id"],
+            "filename": rec["filename"],
+            "kind": rec["kind"],
+            "content_uri": rec["content_uri"],
+            "sha256": rec["sha256"],
+            "content_bytes": None,
+            "content_text": None,
+            "mime_type": None,
+            "size_bytes": None,
+        }
+
+        # 2. Prefer CAS resolution when the URI is shaped right.
+        content_uri = rec["content_uri"]
+        if is_blob_uri(content_uri):
+            try:
+                cas = await self._blob_cas.get(db, graph_id, content_uri)
+            except InvalidBlobURIError:
+                cas = None
+            if cas is not None:
+                out["content_bytes"] = cas["content_bytes"]
+                out["mime_type"] = cas["mime_type"]
+                out["size_bytes"] = cas["size_bytes"]
+                return out
+            # CAS row missing or cross-tenant — fall through to inline.
+
+        # 3. Inline fallback.
+        inline = rec["content_inline"]
+        if inline is not None:
+            out["content_text"] = inline
+            out["size_bytes"] = len(inline.encode("utf-8"))
+        return out
 
     # =========================================================================
     # finalize_run

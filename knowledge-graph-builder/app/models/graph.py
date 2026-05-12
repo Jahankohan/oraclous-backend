@@ -1,12 +1,15 @@
 import uuid
 
 from sqlalchemy import (
+    CHAR,
     JSON,
+    BigInteger,
     Boolean,
     Column,
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -210,4 +213,39 @@ class FallbackJobQueue(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class BlobCAS(Base):
+    """Content-addressable store for large deliverable payloads (TASK-082).
+
+    :Deliverable nodes carry a `content_uri` of the form `blob://sha256/<hex>`
+    that points into this table. The Neo4j node keeps only metadata; the
+    bytes live here so the 5 final HTML+PDF docs from `/docify` (each
+    routinely >50 KB and up to multi-MB) do not bloat Neo4j properties.
+
+    Tenant isolation: every row carries a `graph_id`. The `BlobCASService`
+    filters every read/write by `graph_id`. Cross-tenant reads return as
+    if the row did not exist (existence is masked, per the fail-closed
+    security model in `oraclous-data-studio/CLAUDE.md`).
+
+    The same content uploaded by two tenants creates two rows — `sha256`
+    is the dedup key *within* a tenant, not across the platform. This
+    respects the Data Ownership founding principle.
+    """
+
+    __tablename__ = "blob_cas"
+
+    # Composite primary key — `(graph_id, sha256)`. Cross-tenant collisions on
+    # the content hash do NOT dedup at the platform level (per Data Ownership);
+    # each tenant gets its own row.
+    graph_id = Column(Text, primary_key=True, nullable=False, index=True)
+    sha256 = Column(CHAR(64), primary_key=True, nullable=False)
+    mime_type = Column(Text, nullable=False)
+    size_bytes = Column(BigInteger, nullable=False)
+    content = Column(LargeBinary, nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
     )
