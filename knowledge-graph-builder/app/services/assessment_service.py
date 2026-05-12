@@ -50,16 +50,32 @@ from app.schemas.assessment_schemas import (
     BulkItemResult,
     BulkResponse,
     Conflict,
+    ConflictRow,
     CreateRunRequest,
     CreateRunResponse,
     Deliverable,
+    DeliverableRow,
     FinalizeRunResponse,
     Finding,
+    FindingRow,
+    FindingSearchRow,
+    ModuleDefinition,
+    ModuleRunRow,
     RegistryItem,
+    RegistryItemContent,
+    RegistryItemRow,
+    RegistryKind,
+    RegistryVisibility,
+    RunDetail,
     RunStatus,
+    RunSummary,
+    Source,
     Subject,
     UnresolvedQuestion,
+    UnresolvedQuestionRow,
     UpdateModuleRunRequest,
+    WaveModuleStatus,
+    WaveStatusResponse,
 )
 
 logger = get_logger(__name__)
@@ -1401,3 +1417,1331 @@ class AssessmentService:
                 f"cross-tenant collision (target graph_id={target_graph_id!r})"
             )
         return bool(result.records[0]["created"])
+
+    # =========================================================================
+    # READ PATH (TASK-079, SPRINT-002)
+    # =========================================================================
+    #
+    # Read methods follow the same `graph_id`-first rule as the write methods.
+    # Every Cypher statement is scoped to `graph_id` (the JWT-derived tenant)
+    # so cross-tenant queries are impossible — even with a malformed cursor
+    # carrying a foreign `run_id`, the tenant filter rules out the foreign row.
+    #
+    # Catalog hydration (`:Source`, `:Module`) is performed at the application
+    # layer per ADR-018 §Tenancy: the per-tenant Cypher returns ids, then a
+    # second Cypher fetches the catalog rows by id and we zip them in Python.
+    # This keeps each query single-tenant from Neo4j's perspective.
+    #
+    # Pagination uses opaque offsets at the service boundary; the endpoint
+    # layer is responsible for encoding/decoding the opaque cursor string.
+
+    @staticmethod
+    def _neo_datetime(value: Any) -> datetime | None:
+        """Coerce a Neo4j datetime / ISO string to a tz-aware Python datetime."""
+        if value is None:
+            return None
+        to_native = getattr(value, "to_native", None)
+        if callable(to_native):
+            native = to_native()
+            if native.tzinfo is None:
+                native = native.replace(tzinfo=UTC)
+            return native
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=UTC)
+            return value
+        if isinstance(value, str):
+            try:
+                normalized = (
+                    value.replace("Z", "+00:00") if value.endswith("Z") else value
+                )
+                parsed = datetime.fromisoformat(normalized)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=UTC)
+                return parsed
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _cli_flags(value: Any) -> dict[str, Any] | None:
+        """Decode `cli_flags` from whatever shape the write path landed it in."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                import json as _json
+
+                return _json.loads(value)
+            except (ValueError, TypeError):
+                return {"_raw": value}
+        return None
+
+    # ─── list_runs ─────────────────────────────────────────────────────────
+
+    async def list_runs(
+        self,
+        graph_id: str,
+        *,
+        status: RunStatus | None = None,
+        subject_slug: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[RunSummary], bool]:
+        """Paginated runs list for the tenant.
+
+        Returns `(rows, has_more)`. `has_more` is computed by fetching
+        `limit + 1` rows and trimming; the endpoint layer translates this
+        into an opaque cursor.
+        """
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        params: dict[str, Any] = {
+            "graph_id": graph_id,
+            "limit": limit + 1,
+            "offset": offset,
+        }
+        filters = ["r.graph_id = $graph_id"]
+        if status is not None:
+            filters.append("r.status = $status")
+            params["status"] = status
+
+        subject_join = ""
+        if subject_slug is not None:
+            subject_join = (
+                "MATCH (s:Subject:__Platform__ {graph_id: $graph_id, slug: $subject_slug})"
+                " WHERE r.subject_id = s.subject_id\n"
+            )
+            params["subject_slug"] = subject_slug
+
+        cypher = (
+            "MATCH (r:AssessmentRun:__Platform__)\n"
+            f"WHERE {' AND '.join(filters)}\n"
+            f"{subject_join}"
+            "OPTIONAL MATCH (r)-[:HAS_MODULE_RUN]->(mr:ModuleRun:__Platform__)\n"
+            "WITH r,\n"
+            "     count(mr) AS module_run_total,\n"
+            "     sum(CASE WHEN mr.status = 'finished' THEN 1 ELSE 0 END) AS module_run_done,\n"
+            "     sum(CASE WHEN mr.status = 'failed'   THEN 1 ELSE 0 END) AS module_run_failed\n"
+            "OPTIONAL MATCH (subj:Subject:__Platform__ {graph_id: $graph_id, subject_id: r.subject_id})\n"
+            "RETURN\n"
+            "    r.run_id                AS run_id,\n"
+            "    r.template_id           AS template_id,\n"
+            "    r.subject_id            AS subject_id,\n"
+            "    r.status                AS status,\n"
+            "    r.started_at            AS started_at,\n"
+            "    r.finished_at           AS finished_at,\n"
+            "    r.orchestrator_last_seen AS orchestrator_last_seen,\n"
+            "    subj.slug               AS subject_slug,\n"
+            "    subj.name               AS subject_name,\n"
+            "    module_run_total        AS module_run_total,\n"
+            "    module_run_done         AS module_run_done,\n"
+            "    module_run_failed       AS module_run_failed\n"
+            "ORDER BY r.started_at DESC, r.run_id ASC\n"
+            "SKIP $offset LIMIT $limit\n"
+        )
+        result = await self._driver.execute_query(cypher, params)
+        recs = result.records
+        has_more = len(recs) > limit
+        page_recs = recs[:limit]
+
+        template_ids = list(
+            {rec["template_id"] for rec in page_recs if rec["template_id"]}
+        )
+        template_slugs = await self._fetch_template_slugs(template_ids)
+
+        rows: list[RunSummary] = []
+        for rec in page_recs:
+            rows.append(
+                RunSummary(
+                    run_id=rec["run_id"],
+                    template_id=rec["template_id"],
+                    template_slug=template_slugs.get(rec["template_id"]),
+                    subject_id=rec["subject_id"],
+                    subject_slug=rec["subject_slug"],
+                    subject_name=rec["subject_name"],
+                    status=rec["status"],
+                    started_at=self._neo_datetime(rec["started_at"]),
+                    finished_at=self._neo_datetime(rec["finished_at"]),
+                    orchestrator_last_seen=self._neo_datetime(
+                        rec["orchestrator_last_seen"]
+                    ),
+                    module_run_total=int(rec["module_run_total"] or 0),
+                    module_run_done=int(rec["module_run_done"] or 0),
+                    module_run_failed=int(rec["module_run_failed"] or 0),
+                )
+            )
+        return rows, has_more
+
+    async def _fetch_template_slugs(self, template_ids: list[str]) -> dict[str, str]:
+        """Batch-fetch `template_id → slug` from the catalog graph."""
+        if not template_ids:
+            return {}
+        result = await self._driver.execute_query(
+            """
+            MATCH (t:AssessmentTemplate:__Platform__)
+            WHERE t.template_id IN $ids
+            RETURN t.template_id AS template_id, t.slug AS slug
+            """,
+            {"ids": template_ids},
+        )
+        return {
+            rec["template_id"]: rec["slug"] for rec in result.records if rec["slug"]
+        }
+
+    # ─── get_run_detail ────────────────────────────────────────────────────
+
+    async def get_run_detail(self, graph_id: str, run_id: str) -> RunDetail | None:
+        """Single-run rollup for the run-detail page.
+
+        Returns `None` when the run does not exist in this tenant. Does NOT
+        distinguish "not in this tenant" from "does not exist" — endpoint
+        translates both to 404 so we cannot leak cross-tenant existence.
+        """
+        if not graph_id or not run_id:
+            raise ValueError("graph_id and run_id are required")
+        result = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            OPTIONAL MATCH (r)-[:HAS_MODULE_RUN]->(mr:ModuleRun:__Platform__)
+            WITH r,
+                 count(mr) AS module_run_total,
+                 sum(CASE WHEN mr.status = 'finished' THEN 1 ELSE 0 END) AS module_run_done,
+                 sum(CASE WHEN mr.status = 'failed'   THEN 1 ELSE 0 END) AS module_run_failed
+            OPTIONAL MATCH (r)-[:HAS_MODULE_RUN]->(mr2:ModuleRun:__Platform__)
+                  -[:PRODUCED]->(f:Finding:__Platform__)
+                  WHERE mr2.status <> 'failed'
+            WITH r, module_run_total, module_run_done, module_run_failed,
+                 count(f) AS finding_count
+            OPTIONAL MATCH (c:Conflict:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            WITH r, module_run_total, module_run_done, module_run_failed,
+                 finding_count, count(c) AS conflict_count
+            OPTIONAL MATCH (q:UnresolvedQuestion:__Platform__ {
+                graph_id: $graph_id, run_id: $run_id, status: 'open'
+            })
+            WITH r, module_run_total, module_run_done, module_run_failed,
+                 finding_count, conflict_count, count(q) AS open_question_count
+            OPTIONAL MATCH (r)-[:HAS_DELIVERABLE]->(d:Deliverable:__Platform__)
+            WITH r, module_run_total, module_run_done, module_run_failed,
+                 finding_count, conflict_count, open_question_count,
+                 count(d) AS deliverable_count
+            OPTIONAL MATCH (subj:Subject:__Platform__ {
+                graph_id: $graph_id, subject_id: r.subject_id
+            })
+            RETURN
+                r.run_id                AS run_id,
+                r.graph_id              AS graph_id,
+                r.template_id           AS template_id,
+                r.subject_id            AS subject_id,
+                r.status                AS status,
+                r.started_at            AS started_at,
+                r.finished_at           AS finished_at,
+                r.orchestrator_last_seen AS orchestrator_last_seen,
+                r.cli_flags             AS cli_flags,
+                r.failure_reason        AS failure_reason,
+                subj.slug               AS subject_slug,
+                subj.name               AS subject_name,
+                module_run_total        AS module_run_total,
+                module_run_done         AS module_run_done,
+                module_run_failed       AS module_run_failed,
+                finding_count           AS finding_count,
+                conflict_count          AS conflict_count,
+                open_question_count     AS open_question_count,
+                deliverable_count       AS deliverable_count
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        if not result.records:
+            return None
+        rec = result.records[0]
+        template_slugs = await self._fetch_template_slugs([rec["template_id"]])
+        return RunDetail(
+            run_id=rec["run_id"],
+            graph_id=rec["graph_id"],
+            template_id=rec["template_id"],
+            template_slug=template_slugs.get(rec["template_id"]),
+            subject_id=rec["subject_id"],
+            subject_slug=rec["subject_slug"],
+            subject_name=rec["subject_name"],
+            status=rec["status"],
+            started_at=self._neo_datetime(rec["started_at"]),
+            finished_at=self._neo_datetime(rec["finished_at"]),
+            orchestrator_last_seen=self._neo_datetime(rec["orchestrator_last_seen"]),
+            cli_flags=self._cli_flags(rec["cli_flags"]),
+            failure_reason=rec["failure_reason"],
+            module_run_total=int(rec["module_run_total"] or 0),
+            module_run_done=int(rec["module_run_done"] or 0),
+            module_run_failed=int(rec["module_run_failed"] or 0),
+            finding_count=int(rec["finding_count"] or 0),
+            conflict_count=int(rec["conflict_count"] or 0),
+            open_question_count=int(rec["open_question_count"] or 0),
+            deliverable_count=int(rec["deliverable_count"] or 0),
+        )
+
+    # ─── get_wave_status ───────────────────────────────────────────────────
+
+    async def get_wave_status(
+        self, graph_id: str, run_id: str, wave: int
+    ) -> WaveStatusResponse | None:
+        """Per-wave done/failed/total + per-module status list."""
+        if not graph_id or not run_id:
+            raise ValueError("graph_id and run_id are required")
+        if wave < 1:
+            raise ValueError("wave must be >= 1")
+
+        run_check = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            RETURN r.run_id AS id
+            LIMIT 1
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        if not run_check.records:
+            return None
+
+        rows_result = await self._driver.execute_query(
+            """
+            MATCH (mr:ModuleRun:__Platform__ {graph_id: $graph_id, run_id: $run_id, wave: $wave})
+            RETURN
+                mr.module_run_id      AS module_run_id,
+                mr.module_id          AS module_id,
+                mr.status             AS status,
+                mr.started_at         AS started_at,
+                mr.finished_at        AS finished_at,
+                mr.last_heartbeat_at  AS last_heartbeat_at,
+                mr.evidence_count     AS evidence_count,
+                mr.failure_reason     AS failure_reason
+            ORDER BY mr.module_run_id ASC
+            """,
+            {"graph_id": graph_id, "run_id": run_id, "wave": wave},
+        )
+        recs = rows_result.records
+
+        module_ids = list({rec["module_id"] for rec in recs if rec["module_id"]})
+        module_info = await self._fetch_modules_by_ids(module_ids)
+
+        modules: list[WaveModuleStatus] = []
+        counters: dict[str, int] = {
+            "planned": 0,
+            "running": 0,
+            "finished": 0,
+            "failed": 0,
+            "cancelled": 0,
+        }
+        for rec in recs:
+            status = rec["status"]
+            if status in counters:
+                counters[status] += 1
+            info = module_info.get(rec["module_id"], {})
+            modules.append(
+                WaveModuleStatus(
+                    module_run_id=rec["module_run_id"],
+                    module_id=rec["module_id"],
+                    module_slug=info.get("slug"),
+                    module_name=info.get("name"),
+                    module_kind=info.get("kind"),
+                    status=status,
+                    started_at=self._neo_datetime(rec["started_at"]),
+                    finished_at=self._neo_datetime(rec["finished_at"]),
+                    last_heartbeat_at=self._neo_datetime(rec["last_heartbeat_at"]),
+                    evidence_count=int(rec["evidence_count"] or 0),
+                    failure_reason=rec["failure_reason"],
+                )
+            )
+
+        return WaveStatusResponse(
+            run_id=run_id,
+            wave=wave,
+            total=len(modules),
+            done=counters["finished"],
+            failed=counters["failed"],
+            running=counters["running"],
+            planned=counters["planned"],
+            cancelled=counters["cancelled"],
+            modules=modules,
+        )
+
+    async def _fetch_modules_by_ids(
+        self, module_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Catalog-graph lookup of `:Module` rows by id (ADR-018 §Tenancy)."""
+        if not module_ids:
+            return {}
+        result = await self._driver.execute_query(
+            """
+            MATCH (m:Module:__Platform__)
+            WHERE m.module_id IN $ids
+            RETURN
+                m.module_id   AS module_id,
+                m.slug        AS slug,
+                m.name        AS name,
+                m.wave        AS wave,
+                m.kind        AS kind,
+                m.ordinal     AS ordinal,
+                m.agent_id    AS agent_id,
+                m.description AS description,
+                m.template_id AS template_id
+            """,
+            {"ids": module_ids},
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for rec in result.records:
+            mid = rec["module_id"]
+            if not mid:
+                continue
+            out[mid] = {
+                "slug": rec["slug"],
+                "name": rec["name"],
+                "wave": rec["wave"],
+                "kind": rec["kind"],
+                "ordinal": rec["ordinal"],
+                "agent_id": rec["agent_id"],
+                "description": rec["description"],
+                "template_id": rec["template_id"],
+            }
+        return out
+
+    # ─── list_module_runs ──────────────────────────────────────────────────
+
+    async def list_module_runs(
+        self,
+        graph_id: str,
+        run_id: str,
+        *,
+        status: RunStatus | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ModuleRunRow], bool] | None:
+        """All `:ModuleRun` rows for a run, joined to `:Module` (catalog-hydrated)."""
+        if not graph_id or not run_id:
+            raise ValueError("graph_id and run_id are required")
+
+        run_check = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            RETURN r.run_id AS id LIMIT 1
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        if not run_check.records:
+            return None
+
+        filters = ["mr.graph_id = $graph_id", "mr.run_id = $run_id"]
+        params: dict[str, Any] = {
+            "graph_id": graph_id,
+            "run_id": run_id,
+            "offset": offset,
+            "limit": limit + 1,
+        }
+        if status is not None:
+            filters.append("mr.status = $status")
+            params["status"] = status
+
+        cypher = (
+            "MATCH (mr:ModuleRun:__Platform__)\n"
+            f"WHERE {' AND '.join(filters)}\n"
+            "RETURN\n"
+            "    mr.module_run_id      AS module_run_id,\n"
+            "    mr.run_id             AS run_id,\n"
+            "    mr.module_id          AS module_id,\n"
+            "    mr.wave               AS wave,\n"
+            "    mr.status             AS status,\n"
+            "    mr.started_at         AS started_at,\n"
+            "    mr.finished_at        AS finished_at,\n"
+            "    mr.last_heartbeat_at  AS last_heartbeat_at,\n"
+            "    mr.evidence_count     AS evidence_count,\n"
+            "    mr.deliverable_path   AS deliverable_path,\n"
+            "    mr.failure_reason     AS failure_reason\n"
+            "ORDER BY mr.wave ASC, mr.module_run_id ASC\n"
+            "SKIP $offset LIMIT $limit\n"
+        )
+        result = await self._driver.execute_query(cypher, params)
+        recs = result.records
+        has_more = len(recs) > limit
+        page = recs[:limit]
+
+        module_ids = list({rec["module_id"] for rec in page if rec["module_id"]})
+        module_info = await self._fetch_modules_by_ids(module_ids)
+
+        rows: list[ModuleRunRow] = []
+        for rec in page:
+            info = module_info.get(rec["module_id"], {})
+            rows.append(
+                ModuleRunRow(
+                    module_run_id=rec["module_run_id"],
+                    run_id=rec["run_id"],
+                    module_id=rec["module_id"],
+                    module_slug=info.get("slug"),
+                    module_name=info.get("name"),
+                    module_kind=info.get("kind"),
+                    module_wave=info.get("wave"),
+                    module_agent_id=info.get("agent_id"),
+                    wave=int(rec["wave"]),
+                    status=rec["status"],
+                    started_at=self._neo_datetime(rec["started_at"]),
+                    finished_at=self._neo_datetime(rec["finished_at"]),
+                    last_heartbeat_at=self._neo_datetime(rec["last_heartbeat_at"]),
+                    evidence_count=int(rec["evidence_count"] or 0),
+                    deliverable_path=rec["deliverable_path"],
+                    failure_reason=rec["failure_reason"],
+                )
+            )
+        return rows, has_more
+
+    # ─── list_findings ─────────────────────────────────────────────────────
+
+    async def list_findings(
+        self,
+        graph_id: str,
+        run_id: str,
+        *,
+        module_slug: str | None = None,
+        dimension: str | None = None,
+        label: str | None = None,
+        min_confidence: float | None = None,
+        source_type: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[FindingRow], bool] | None:
+        """Findings table with optional filters + `:Source` hydration.
+
+        ADR-018 §Tenancy: per-tenant Cypher pulls findings + denormalized
+        `source_id`; a second Cypher fetches catalog `:Source` rows by id.
+        Each query stays single-tenant.
+
+        The `source_type` filter is applied AFTER catalog hydration; it
+        cannot push down because :Source lives in a separate graph partition.
+        """
+        if not graph_id or not run_id:
+            raise ValueError("graph_id and run_id are required")
+
+        run_check = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            RETURN r.run_id AS id LIMIT 1
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        if not run_check.records:
+            return None
+
+        filters = ["f.graph_id = $graph_id", "f.run_id = $run_id"]
+        params: dict[str, Any] = {
+            "graph_id": graph_id,
+            "run_id": run_id,
+            "offset": offset,
+            "limit": limit + 1,
+        }
+        if label is not None:
+            filters.append("f.label = $label")
+            params["label"] = label
+        if min_confidence is not None:
+            filters.append("f.confidence >= $min_confidence")
+            params["min_confidence"] = float(min_confidence)
+        if dimension is not None:
+            filters.append("$dimension IN f.dimensions")
+            params["dimension"] = dimension
+
+        module_slug_join = ""
+        if module_slug is not None:
+            module_id_lookup = await self._driver.execute_query(
+                """
+                MATCH (m:Module:__Platform__ {slug: $slug})
+                RETURN m.module_id AS module_id
+                """,
+                {"slug": module_slug},
+            )
+            module_ids = [r["module_id"] for r in module_id_lookup.records]
+            if not module_ids:
+                return [], False
+            params["module_ids"] = module_ids
+            module_slug_join = (
+                "MATCH (mr:ModuleRun:__Platform__ {graph_id: $graph_id})"
+                " WHERE mr.module_run_id = f.module_run_id"
+                " AND mr.module_id IN $module_ids\n"
+            )
+
+        cypher = (
+            "MATCH (f:Finding:__Platform__)\n"
+            f"WHERE {' AND '.join(filters)}\n"
+            f"{module_slug_join}"
+            "OPTIONAL MATCH (f)-[c:CITES]->(:Source)\n"
+            "RETURN\n"
+            "    f.finding_id           AS finding_id,\n"
+            "    f.run_id               AS run_id,\n"
+            "    f.module_run_id        AS module_run_id,\n"
+            "    f.claim                AS claim,\n"
+            "    f.raw                  AS raw,\n"
+            "    f.label                AS label,\n"
+            "    f.confidence           AS confidence,\n"
+            "    f.dimensions           AS dimensions,\n"
+            "    f.ai_adoption_relevance AS ai_adoption_relevance,\n"
+            "    f.notes                AS notes,\n"
+            "    f.superseded_by        AS superseded_by,\n"
+            "    f.source_id            AS source_id,\n"
+            "    c.quote                AS source_quote,\n"
+            "    c.locator              AS source_locator\n"
+            "ORDER BY f.confidence DESC, f.finding_id ASC\n"
+            "SKIP $offset LIMIT $limit\n"
+        )
+        result = await self._driver.execute_query(cypher, params)
+        recs = result.records
+        has_more = len(recs) > limit
+        page = recs[:limit]
+
+        module_run_ids = list(
+            {rec["module_run_id"] for rec in page if rec["module_run_id"]}
+        )
+        module_run_to_module = await self._fetch_module_run_to_module_map(
+            graph_id, module_run_ids
+        )
+        module_lookup = await self._fetch_modules_by_ids(
+            list(set(module_run_to_module.values()))
+        )
+
+        source_ids = list({rec["source_id"] for rec in page if rec["source_id"]})
+        sources = await self._fetch_sources_by_ids(source_ids)
+
+        rows: list[FindingRow] = []
+        for rec in page:
+            module_id = module_run_to_module.get(rec["module_run_id"])
+            module_meta = module_lookup.get(module_id, {}) if module_id else {}
+            src = sources.get(rec["source_id"]) if rec["source_id"] else None
+            if source_type is not None:
+                if src is None or src.type != source_type:
+                    continue
+            rows.append(
+                FindingRow(
+                    finding_id=rec["finding_id"],
+                    run_id=rec["run_id"],
+                    module_run_id=rec["module_run_id"],
+                    module_slug=module_meta.get("slug"),
+                    module_name=module_meta.get("name"),
+                    claim=rec["claim"],
+                    raw=rec["raw"],
+                    label=rec["label"],
+                    confidence=float(rec["confidence"] or 0.0),
+                    dimensions=list(rec["dimensions"] or []),
+                    ai_adoption_relevance=(
+                        float(rec["ai_adoption_relevance"])
+                        if rec["ai_adoption_relevance"] is not None
+                        else None
+                    ),
+                    notes=rec["notes"],
+                    superseded_by=rec["superseded_by"],
+                    source_id=rec["source_id"],
+                    source_quote=rec["source_quote"],
+                    source_locator=rec["source_locator"],
+                    source=src,
+                )
+            )
+        return rows, has_more
+
+    async def _fetch_module_run_to_module_map(
+        self, graph_id: str, module_run_ids: list[str]
+    ) -> dict[str, str]:
+        """`module_run_id → module_id` lookup, single-tenant."""
+        if not module_run_ids:
+            return {}
+        result = await self._driver.execute_query(
+            """
+            MATCH (mr:ModuleRun:__Platform__)
+            WHERE mr.graph_id = $graph_id AND mr.module_run_id IN $ids
+            RETURN mr.module_run_id AS module_run_id, mr.module_id AS module_id
+            """,
+            {"graph_id": graph_id, "ids": module_run_ids},
+        )
+        return {
+            rec["module_run_id"]: rec["module_id"]
+            for rec in result.records
+            if rec["module_id"]
+        }
+
+    async def _fetch_sources_by_ids(self, source_ids: list[str]) -> dict[str, Source]:
+        """Catalog-graph lookup of `:Source` rows by id (ADR-018 §Tenancy)."""
+        if not source_ids:
+            return {}
+        result = await self._driver.execute_query(
+            """
+            MATCH (s:Source:__Platform__)
+            WHERE s.source_id IN $ids
+            RETURN
+                s.source_id        AS source_id,
+                s.type             AS type,
+                s.url_normalized   AS url_normalized,
+                s.name             AS name,
+                s.publication_date AS publication_date,
+                s.fetch_date       AS fetch_date,
+                s.language         AS language
+            """,
+            {"ids": source_ids},
+        )
+        out: dict[str, Source] = {}
+        for rec in result.records:
+            out[rec["source_id"]] = Source(
+                source_id=rec["source_id"],
+                type=rec["type"],
+                url_normalized=rec["url_normalized"],
+                name=rec["name"],
+                publication_date=rec["publication_date"],
+                fetch_date=rec["fetch_date"],
+                language=rec["language"],
+            )
+        return out
+
+    # ─── list_conflicts ────────────────────────────────────────────────────
+
+    async def list_conflicts(
+        self,
+        graph_id: str,
+        run_id: str,
+        *,
+        status: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[ConflictRow], bool] | None:
+        if not graph_id or not run_id:
+            raise ValueError("graph_id and run_id are required")
+
+        run_check = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            RETURN r.run_id AS id LIMIT 1
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        if not run_check.records:
+            return None
+
+        filters = ["c.graph_id = $graph_id", "c.run_id = $run_id"]
+        params: dict[str, Any] = {
+            "graph_id": graph_id,
+            "run_id": run_id,
+            "offset": offset,
+            "limit": limit + 1,
+        }
+        if status is not None:
+            filters.append("c.status = $status")
+            params["status"] = status
+
+        cypher = (
+            "MATCH (c:Conflict:__Platform__)\n"
+            f"WHERE {' AND '.join(filters)}\n"
+            "OPTIONAL MATCH (c)-[:INVOLVES]->(f:Finding:__Platform__)\n"
+            "WITH c, collect(f.finding_id) AS involved_finding_ids\n"
+            "RETURN\n"
+            "    c.conflict_id     AS conflict_id,\n"
+            "    c.run_id          AS run_id,\n"
+            "    c.topic           AS topic,\n"
+            "    c.summary         AS summary,\n"
+            "    c.status          AS status,\n"
+            "    c.resolution      AS resolution,\n"
+            "    c.synthesis_note  AS synthesis_note,\n"
+            "    involved_finding_ids AS involved_finding_ids\n"
+            "ORDER BY c.conflict_id ASC\n"
+            "SKIP $offset LIMIT $limit\n"
+        )
+        result = await self._driver.execute_query(cypher, params)
+        recs = result.records
+        has_more = len(recs) > limit
+        page = recs[:limit]
+
+        rows: list[ConflictRow] = []
+        for rec in page:
+            rows.append(
+                ConflictRow(
+                    conflict_id=rec["conflict_id"],
+                    run_id=rec["run_id"],
+                    topic=rec["topic"],
+                    summary=rec["summary"],
+                    status=rec["status"],
+                    resolution=rec["resolution"],
+                    synthesis_note=rec["synthesis_note"],
+                    involved_finding_ids=[
+                        fid for fid in (rec["involved_finding_ids"] or []) if fid
+                    ],
+                )
+            )
+        return rows, has_more
+
+    # ─── list_unresolved_questions ─────────────────────────────────────────
+
+    async def list_unresolved_questions(
+        self,
+        graph_id: str,
+        run_id: str,
+        *,
+        status: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[UnresolvedQuestionRow], bool] | None:
+        if not graph_id or not run_id:
+            raise ValueError("graph_id and run_id are required")
+
+        run_check = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            RETURN r.run_id AS id LIMIT 1
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        if not run_check.records:
+            return None
+
+        filters = ["q.graph_id = $graph_id", "q.run_id = $run_id"]
+        params: dict[str, Any] = {
+            "graph_id": graph_id,
+            "run_id": run_id,
+            "offset": offset,
+            "limit": limit + 1,
+        }
+        if status is not None:
+            filters.append("q.status = $status")
+            params["status"] = status
+
+        cypher = (
+            "MATCH (q:UnresolvedQuestion:__Platform__)\n"
+            f"WHERE {' AND '.join(filters)}\n"
+            "RETURN\n"
+            "    q.question_id      AS question_id,\n"
+            "    q.run_id           AS run_id,\n"
+            "    q.module_run_id    AS module_run_id,\n"
+            "    q.text             AS text,\n"
+            "    q.suggested_module AS suggested_module,\n"
+            "    q.status           AS status\n"
+            "ORDER BY q.question_id ASC\n"
+            "SKIP $offset LIMIT $limit\n"
+        )
+        result = await self._driver.execute_query(cypher, params)
+        recs = result.records
+        has_more = len(recs) > limit
+        page = recs[:limit]
+
+        module_run_ids = list(
+            {rec["module_run_id"] for rec in page if rec["module_run_id"]}
+        )
+        module_run_to_module = await self._fetch_module_run_to_module_map(
+            graph_id, module_run_ids
+        )
+        module_lookup = await self._fetch_modules_by_ids(
+            list(set(module_run_to_module.values()))
+        )
+
+        rows: list[UnresolvedQuestionRow] = []
+        for rec in page:
+            module_id = module_run_to_module.get(rec["module_run_id"])
+            module_meta = module_lookup.get(module_id, {}) if module_id else {}
+            rows.append(
+                UnresolvedQuestionRow(
+                    question_id=rec["question_id"],
+                    run_id=rec["run_id"],
+                    module_run_id=rec["module_run_id"],
+                    module_slug=module_meta.get("slug"),
+                    text=rec["text"],
+                    suggested_module=rec["suggested_module"],
+                    status=rec["status"],
+                )
+            )
+        return rows, has_more
+
+    # ─── list_deliverables ─────────────────────────────────────────────────
+
+    async def list_deliverables(
+        self,
+        graph_id: str,
+        run_id: str,
+        *,
+        kind: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[DeliverableRow], bool] | None:
+        """Deliverable metadata for a run; content fetched via a separate endpoint."""
+        if not graph_id or not run_id:
+            raise ValueError("graph_id and run_id are required")
+
+        run_check = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            RETURN r.run_id AS id LIMIT 1
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        if not run_check.records:
+            return None
+
+        filters = ["d.graph_id = $graph_id", "d.run_id = $run_id"]
+        params: dict[str, Any] = {
+            "graph_id": graph_id,
+            "run_id": run_id,
+            "offset": offset,
+            "limit": limit + 1,
+        }
+        if kind is not None:
+            filters.append("d.kind = $kind")
+            params["kind"] = kind
+
+        cypher = (
+            "MATCH (d:Deliverable:__Platform__)\n"
+            f"WHERE {' AND '.join(filters)}\n"
+            "RETURN\n"
+            "    d.deliverable_id  AS deliverable_id,\n"
+            "    d.run_id          AS run_id,\n"
+            "    d.module_run_id   AS module_run_id,\n"
+            "    d.kind            AS kind,\n"
+            "    d.filename        AS filename,\n"
+            "    d.ordinal         AS ordinal,\n"
+            "    d.content_uri     AS content_uri,\n"
+            "    d.sha256          AS sha256,\n"
+            "    d.word_count      AS word_count,\n"
+            "    (d.content_inline IS NOT NULL AND d.content_inline <> '') AS has_inline\n"
+            "ORDER BY d.ordinal ASC, d.deliverable_id ASC\n"
+            "SKIP $offset LIMIT $limit\n"
+        )
+        result = await self._driver.execute_query(cypher, params)
+        recs = result.records
+        has_more = len(recs) > limit
+        page = recs[:limit]
+
+        rows: list[DeliverableRow] = []
+        for rec in page:
+            rows.append(
+                DeliverableRow(
+                    deliverable_id=rec["deliverable_id"],
+                    run_id=rec["run_id"],
+                    module_run_id=rec["module_run_id"],
+                    kind=rec["kind"],
+                    filename=rec["filename"],
+                    ordinal=int(rec["ordinal"] or 0),
+                    content_uri=rec["content_uri"],
+                    sha256=rec["sha256"],
+                    word_count=(
+                        int(rec["word_count"])
+                        if rec["word_count"] is not None
+                        else None
+                    ),
+                    has_inline_content=bool(rec["has_inline"]),
+                )
+            )
+        return rows, has_more
+
+    # ─── get_deliverable_content ───────────────────────────────────────────
+
+    async def get_deliverable_content(
+        self,
+        graph_id: str,
+        run_id: str,
+        deliverable_id: str,
+    ) -> dict[str, Any] | None:
+        """Fetch a deliverable's content payload.
+
+        Returns a dict with `kind`, `filename`, `content_uri`,
+        `content_inline`, `sha256`. The endpoint layer picks the right
+        Content-Type based on the `Accept` header.
+
+        Returns `None` when the deliverable does not exist in this tenant.
+        """
+        if not graph_id or not run_id or not deliverable_id:
+            raise ValueError("graph_id, run_id, deliverable_id are required")
+
+        result = await self._driver.execute_query(
+            """
+            MATCH (d:Deliverable:__Platform__ {
+                graph_id: $graph_id, run_id: $run_id, deliverable_id: $deliverable_id
+            })
+            RETURN
+                d.kind            AS kind,
+                d.filename        AS filename,
+                d.content_uri     AS content_uri,
+                d.content_inline  AS content_inline,
+                d.sha256          AS sha256,
+                d.word_count      AS word_count
+            LIMIT 1
+            """,
+            {
+                "graph_id": graph_id,
+                "run_id": run_id,
+                "deliverable_id": deliverable_id,
+            },
+        )
+        if not result.records:
+            return None
+        rec = result.records[0]
+        return {
+            "kind": rec["kind"],
+            "filename": rec["filename"],
+            "content_uri": rec["content_uri"],
+            "content_inline": rec["content_inline"],
+            "sha256": rec["sha256"],
+            "word_count": rec["word_count"],
+        }
+
+    # ─── list_template_modules ─────────────────────────────────────────────
+
+    async def list_template_modules(
+        self, template_slug: str
+    ) -> tuple[dict[str, Any], list[ModuleDefinition]] | None:
+        """Template introspection for the UI's pre-run rendering."""
+        if not template_slug:
+            raise ValueError("template_slug is required")
+
+        result = await self._driver.execute_query(
+            """
+            MATCH (t:AssessmentTemplate:__Platform__ {slug: $slug})
+            OPTIONAL MATCH (t)-[:HAS_MODULE]->(m:Module:__Platform__)
+            WITH t, m
+            ORDER BY m.wave ASC, m.ordinal ASC
+            RETURN
+                t.template_id   AS template_id,
+                t.slug          AS template_slug,
+                t.name          AS template_name,
+                t.version       AS template_version,
+                m.module_id     AS module_id,
+                m.slug          AS module_slug,
+                m.name          AS module_name,
+                m.wave          AS wave,
+                m.ordinal       AS ordinal,
+                m.kind          AS kind,
+                m.agent_id      AS agent_id,
+                m.description   AS description
+            """,
+            {"slug": template_slug},
+        )
+        if not result.records:
+            return None
+
+        first = result.records[0]
+        meta = {
+            "template_id": first["template_id"],
+            "template_slug": first["template_slug"],
+            "template_name": first["template_name"],
+            "template_version": first["template_version"],
+        }
+        modules: list[ModuleDefinition] = []
+        for rec in result.records:
+            if rec["module_id"] is None:
+                continue
+            modules.append(
+                ModuleDefinition(
+                    module_id=rec["module_id"],
+                    template_id=first["template_id"],
+                    slug=rec["module_slug"],
+                    name=rec["module_name"],
+                    wave=int(rec["wave"] or 1),
+                    ordinal=int(rec["ordinal"] or 0),
+                    kind=rec["kind"],
+                    agent_id=rec["agent_id"],
+                    description=rec["description"],
+                )
+            )
+        return meta, modules
+
+    # ─── Registry reads (ADR-019) ──────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_visibility_targets(
+        visibility: RegistryVisibility | None,
+    ) -> set[str]:
+        """ADR-019: default listing → curated+public+caller-owned-private."""
+        if visibility is None:
+            return {"curated", "public", "private"}
+        return {visibility}
+
+    async def list_registry_items(
+        self,
+        *,
+        caller_user_id: str,
+        caller_graph_id: str,
+        kind: RegistryKind,
+        owner_user_id: str | None = None,
+        visibility: RegistryVisibility | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[RegistryItemRow], bool]:
+        """List registry items per ADR-019 visibility rules.
+
+        - `curated`/`public`/`yanked`: from `__registry__`.
+        - `private`: from caller's tenant graph, caller-owned only.
+        - default (None): curated + public + caller-owned private.
+        """
+        if not caller_user_id:
+            raise ValueError("caller_user_id is required")
+        if not caller_graph_id:
+            raise ValueError("caller_graph_id is required")
+
+        targets = self._resolve_visibility_targets(visibility)
+        all_rows: list[dict[str, Any]] = []
+
+        if {"curated", "public", "yanked"} & targets:
+            catalog_visibilities = [
+                v for v in ("curated", "public", "yanked") if v in targets
+            ]
+            cat_filters = [
+                "ri.graph_id = $catalog",
+                "ri.kind = $kind",
+                "ri.visibility IN $visibilities",
+            ]
+            cat_params: dict[str, Any] = {
+                "catalog": REGISTRY_CATALOG_GRAPH_ID,
+                "kind": kind,
+                "visibilities": catalog_visibilities,
+            }
+            if owner_user_id is not None:
+                cat_filters.append("ri.owner_user_id = $owner")
+                cat_params["owner"] = owner_user_id
+            cat_cypher = (
+                "MATCH (ri:RegistryItem:__Platform__)\n"
+                f"WHERE {' AND '.join(cat_filters)}\n"
+                "RETURN ri AS ri\n"
+            )
+            cat_result = await self._driver.execute_query(cat_cypher, cat_params)
+            for rec in cat_result.records:
+                all_rows.append(dict(rec["ri"].items()))
+
+        if "private" in targets:
+            if owner_user_id is not None and owner_user_id != caller_user_id:
+                pass  # cannot see someone else's private
+            else:
+                priv_cypher = (
+                    "MATCH (ri:RegistryItem:__Platform__)\n"
+                    "WHERE ri.graph_id = $graph_id"
+                    " AND ri.kind = $kind"
+                    " AND ri.visibility = 'private'"
+                    " AND ri.owner_user_id = $owner\n"
+                    "RETURN ri AS ri\n"
+                )
+                priv_result = await self._driver.execute_query(
+                    priv_cypher,
+                    {
+                        "graph_id": caller_graph_id,
+                        "kind": kind,
+                        "owner": caller_user_id,
+                    },
+                )
+                for rec in priv_result.records:
+                    all_rows.append(dict(rec["ri"].items()))
+
+        all_rows.sort(
+            key=lambda r: (
+                r.get("kind") or "",
+                r.get("slug") or "",
+                r.get("version") or "",
+                r.get("item_id") or "",
+            )
+        )
+        page = all_rows[offset : offset + limit + 1]
+        has_more = len(page) > limit
+        page = page[:limit]
+
+        rows = [self._registry_item_row_from_dict(r) for r in page]
+        return rows, has_more
+
+    def _registry_item_row_from_dict(self, r: dict[str, Any]) -> RegistryItemRow:
+        return RegistryItemRow(
+            item_id=r["item_id"],
+            graph_id=r["graph_id"],
+            kind=r["kind"],
+            slug=r["slug"],
+            version=r.get("version") or "0.1.0",
+            visibility=r["visibility"],
+            owner_user_id=r["owner_user_id"],
+            name=r["name"],
+            description=r.get("description"),
+            content_uri=r.get("content_uri"),
+            sha256=r.get("sha256"),
+            created_at=self._neo_datetime(r.get("created_at")),
+            yanked_at=self._neo_datetime(r.get("yanked_at")),
+        )
+
+    async def get_registry_item(
+        self,
+        *,
+        caller_user_id: str,
+        caller_graph_id: str,
+        kind: RegistryKind,
+        slug: str,
+        version: str | None = None,
+    ) -> RegistryItemRow | None:
+        """Resolve `<kind>/<slug>[@version]` to a single RegistryItem.
+
+        Returns `None` for "not found OR private-owned-by-someone-else".
+        The 404/403 collapse is deliberate per ADR-019 — a non-owner must
+        not distinguish "your private slug exists" from "no such slug".
+        """
+        if not slug:
+            raise ValueError("slug is required")
+
+        # Catalog first (curated/public/yanked).
+        cypher_cat = (
+            "MATCH (ri:RegistryItem:__Platform__ {graph_id: $catalog, kind: $kind, slug: $slug})\n"
+            + ("WHERE ri.version = $version\n" if version else "")
+            + "RETURN ri AS ri\n"
+            "ORDER BY ri.version DESC\n"
+            "LIMIT 1\n"
+        )
+        params_cat: dict[str, Any] = {
+            "catalog": REGISTRY_CATALOG_GRAPH_ID,
+            "kind": kind,
+            "slug": slug,
+        }
+        if version:
+            params_cat["version"] = version
+        cat_result = await self._driver.execute_query(cypher_cat, params_cat)
+        if cat_result.records:
+            return self._registry_item_row_from_dict(
+                dict(cat_result.records[0]["ri"].items())
+            )
+
+        # Then private (caller's tenant, caller-owned).
+        cypher_priv = (
+            "MATCH (ri:RegistryItem:__Platform__ {graph_id: $graph_id, kind: $kind, slug: $slug, visibility: 'private'})\n"
+            "WHERE ri.owner_user_id = $owner\n"
+            + ("AND ri.version = $version\n" if version else "")
+            + "RETURN ri AS ri\n"
+            "ORDER BY ri.version DESC\n"
+            "LIMIT 1\n"
+        )
+        params_priv: dict[str, Any] = {
+            "graph_id": caller_graph_id,
+            "kind": kind,
+            "slug": slug,
+            "owner": caller_user_id,
+        }
+        if version:
+            params_priv["version"] = version
+        priv_result = await self._driver.execute_query(cypher_priv, params_priv)
+        if priv_result.records:
+            return self._registry_item_row_from_dict(
+                dict(priv_result.records[0]["ri"].items())
+            )
+        return None
+
+    async def get_registry_item_content(
+        self,
+        *,
+        caller_user_id: str,
+        caller_graph_id: str,
+        kind: RegistryKind,
+        slug: str,
+        version: str,
+    ) -> RegistryItemContent | None:
+        """Content payload for a specific RegistryItem version (ADR-019 gated)."""
+        item_row = await self.get_registry_item(
+            caller_user_id=caller_user_id,
+            caller_graph_id=caller_graph_id,
+            kind=kind,
+            slug=slug,
+            version=version,
+        )
+        if item_row is None:
+            return None
+        content_result = await self._driver.execute_query(
+            """
+            MATCH (ri:RegistryItem:__Platform__ {item_id: $item_id})
+            RETURN ri.content_inline AS content_inline, ri.sha256 AS sha256
+            LIMIT 1
+            """,
+            {"item_id": item_row.item_id},
+        )
+        content_inline: str | None = None
+        if content_result.records:
+            content_inline = content_result.records[0]["content_inline"]
+        content_type = (
+            "text/markdown" if kind in ("skill", "agent") else "application/json"
+        )
+        return RegistryItemContent(
+            item_id=item_row.item_id,
+            kind=item_row.kind,
+            slug=item_row.slug,
+            version=item_row.version,
+            content_type=content_type,
+            content_inline=content_inline,
+            content_uri=item_row.content_uri,
+            sha256=item_row.sha256,
+        )
+
+    # ─── Admin: cross-run findings:search ──────────────────────────────────
+
+    async def search_findings_admin(
+        self,
+        *,
+        source_url: str | None = None,
+        dimension: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[FindingSearchRow], bool]:
+        """Admin-only cross-run findings search.
+
+        Endpoint gates this behind
+        `verify_graph_access('__assessments_catalog__', 'admin', user_id)`.
+        The query crosses graph_id by design; each row carries `graph_id`
+        so admins can trace origin.
+        """
+        source_id_filter: list[str] | None = None
+        if source_url:
+            src_result = await self._driver.execute_query(
+                """
+                MATCH (s:Source:__Platform__ {url_normalized: $url})
+                RETURN s.source_id AS source_id
+                """,
+                {"url": source_url},
+            )
+            source_id_filter = [r["source_id"] for r in src_result.records]
+            if not source_id_filter:
+                return [], False
+
+        filters: list[str] = []
+        params: dict[str, Any] = {"offset": offset, "limit": limit + 1}
+        if source_id_filter is not None:
+            filters.append("f.source_id IN $source_ids")
+            params["source_ids"] = source_id_filter
+        if dimension is not None:
+            filters.append("$dimension IN f.dimensions")
+            params["dimension"] = dimension
+        if not filters:
+            # Force at least one filter so unfiltered admin queries don't
+            # `LIMIT-only` the entire :Finding graph.
+            filters.append("f.source_id IS NOT NULL")
+
+        cypher = (
+            "MATCH (f:Finding:__Platform__)\n"
+            f"WHERE {' AND '.join(filters)}\n"
+            "RETURN\n"
+            "    f.finding_id     AS finding_id,\n"
+            "    f.graph_id       AS graph_id,\n"
+            "    f.run_id         AS run_id,\n"
+            "    f.module_run_id  AS module_run_id,\n"
+            "    f.claim          AS claim,\n"
+            "    f.label          AS label,\n"
+            "    f.confidence     AS confidence,\n"
+            "    f.dimensions     AS dimensions,\n"
+            "    f.source_id      AS source_id\n"
+            "ORDER BY f.confidence DESC, f.finding_id ASC\n"
+            "SKIP $offset LIMIT $limit\n"
+        )
+        result = await self._driver.execute_query(cypher, params)
+        recs = result.records
+        has_more = len(recs) > limit
+        page = recs[:limit]
+
+        source_ids = list({rec["source_id"] for rec in page if rec["source_id"]})
+        sources = await self._fetch_sources_by_ids(source_ids)
+
+        rows: list[FindingSearchRow] = [
+            FindingSearchRow(
+                finding_id=rec["finding_id"],
+                graph_id=rec["graph_id"],
+                run_id=rec["run_id"],
+                module_run_id=rec["module_run_id"],
+                claim=rec["claim"],
+                label=rec["label"],
+                confidence=float(rec["confidence"] or 0.0),
+                dimensions=list(rec["dimensions"] or []),
+                source_id=rec["source_id"],
+                source=sources.get(rec["source_id"]) if rec["source_id"] else None,
+            )
+            for rec in page
+        ]
+        return rows, has_more

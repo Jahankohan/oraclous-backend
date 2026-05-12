@@ -668,3 +668,359 @@ class FinalizeRunResponse(BaseModel):
     unresolved_conflict_count: int
     open_question_count: int
     failure_reasons: list[str] = Field(default_factory=list, max_length=LIST_MAX_TAGS)
+
+
+# =============================================================================
+# Read-side responses (TASK-079, SPRINT-002 §Frontend Monitoring Surface)
+#
+# The read endpoints all use opaque-cursor pagination — callers receive a
+# `next_cursor` string and must echo it back to fetch the next page. The
+# encoding is intentionally opaque so we can change the internal scheme
+# (offset → keyset → seek) without breaking clients. See
+# `app/api/v1/endpoints/_pagination.py` for the cursor codec.
+# =============================================================================
+
+
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
+
+
+class PageMeta(BaseModel):
+    """Cursor-pagination envelope shared by every list endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    next_cursor: str | None = Field(
+        default=None,
+        max_length=SIZE_URL,
+        description="Opaque cursor to fetch the next page; `None` when exhausted.",
+    )
+    page_size: int = Field(..., ge=0, le=MAX_PAGE_SIZE)
+
+
+class RunSummary(BaseModel):
+    """One row in the `GET /assessments/runs` list view."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(..., max_length=SIZE_ID)
+    template_id: str = Field(..., max_length=SIZE_ID)
+    template_slug: str | None = Field(default=None, max_length=SIZE_SLUG)
+    subject_id: str = Field(..., max_length=SIZE_ID)
+    subject_slug: str | None = Field(default=None, max_length=SIZE_SLUG)
+    subject_name: str | None = Field(default=None, max_length=SIZE_NAME)
+    status: RunStatus
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    orchestrator_last_seen: datetime | None = None
+    module_run_total: int = Field(default=0, ge=0)
+    module_run_done: int = Field(default=0, ge=0)
+    module_run_failed: int = Field(default=0, ge=0)
+
+
+class ListRunsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[RunSummary] = Field(default_factory=list, max_length=MAX_PAGE_SIZE)
+    page: PageMeta
+
+
+class RunDetail(BaseModel):
+    """Full run summary returned by `GET /assessments/runs/{run_id}`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    template_id: str = Field(..., max_length=SIZE_ID)
+    template_slug: str | None = Field(default=None, max_length=SIZE_SLUG)
+    subject_id: str = Field(..., max_length=SIZE_ID)
+    subject_slug: str | None = Field(default=None, max_length=SIZE_SLUG)
+    subject_name: str | None = Field(default=None, max_length=SIZE_NAME)
+    status: RunStatus
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    orchestrator_last_seen: datetime | None = None
+    cli_flags: dict[str, Any] | None = None
+    failure_reason: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
+    module_run_total: int = Field(default=0, ge=0)
+    module_run_done: int = Field(default=0, ge=0)
+    module_run_failed: int = Field(default=0, ge=0)
+    finding_count: int = Field(default=0, ge=0)
+    conflict_count: int = Field(default=0, ge=0)
+    open_question_count: int = Field(default=0, ge=0)
+    deliverable_count: int = Field(default=0, ge=0)
+
+
+class WaveModuleStatus(BaseModel):
+    """One row in `GET /runs/{run_id}/waves/{wave}` — per-module status."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    module_run_id: str = Field(..., max_length=SIZE_ID)
+    module_id: str = Field(..., max_length=SIZE_ID)
+    module_slug: str | None = Field(default=None, max_length=SIZE_SLUG)
+    module_name: str | None = Field(default=None, max_length=SIZE_NAME)
+    module_kind: str | None = Field(default=None, max_length=SIZE_ENUM)
+    status: RunStatus
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    evidence_count: int = Field(default=0, ge=0)
+    failure_reason: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
+
+
+class WaveStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(..., max_length=SIZE_ID)
+    wave: int = Field(..., ge=1)
+    total: int = Field(default=0, ge=0)
+    done: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    running: int = Field(default=0, ge=0)
+    planned: int = Field(default=0, ge=0)
+    cancelled: int = Field(default=0, ge=0)
+    modules: list[WaveModuleStatus] = Field(
+        default_factory=list, max_length=LIST_MAX_ITEMS
+    )
+
+
+class ModuleRunRow(BaseModel):
+    """`:ModuleRun` joined to `:Module` (catalog-hydrated) for the table view."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    module_run_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    module_id: str = Field(..., max_length=SIZE_ID)
+    module_slug: str | None = Field(default=None, max_length=SIZE_SLUG)
+    module_name: str | None = Field(default=None, max_length=SIZE_NAME)
+    module_kind: str | None = Field(default=None, max_length=SIZE_ENUM)
+    module_wave: int | None = Field(default=None, ge=1)
+    module_agent_id: str | None = Field(default=None, max_length=SIZE_ID)
+    wave: int = Field(..., ge=1)
+    status: RunStatus
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    evidence_count: int = Field(default=0, ge=0)
+    deliverable_path: str | None = Field(default=None, max_length=SIZE_URL)
+    failure_reason: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
+
+
+class ListModuleRunsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ModuleRunRow] = Field(default_factory=list, max_length=MAX_PAGE_SIZE)
+    page: PageMeta
+
+
+class FindingRow(BaseModel):
+    """`:Finding` joined to its `:Source` (catalog-hydrated) for the table view.
+
+    The `source` payload is populated at the application layer after the
+    per-tenant Finding query returns (ADR-018 §Tenancy concession — no
+    cross-graph Cypher MATCH). When the Finding has no `source_id`, the
+    nested `source` is `None`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    finding_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    module_run_id: str = Field(..., max_length=SIZE_ID)
+    module_slug: str | None = Field(default=None, max_length=SIZE_SLUG)
+    module_name: str | None = Field(default=None, max_length=SIZE_NAME)
+    claim: str = Field(..., max_length=SIZE_CLAIM)
+    raw: str | None = Field(default=None, max_length=SIZE_BLOB_TEXT)
+    label: FindingLabel
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    dimensions: list[str] = Field(default_factory=list, max_length=LIST_MAX_TAGS)
+    ai_adoption_relevance: float | None = Field(default=None, ge=0.0, le=1.0)
+    notes: str | None = Field(default=None, max_length=SIZE_LONG_TEXT)
+    superseded_by: str | None = Field(default=None, max_length=SIZE_ID)
+    source_id: str | None = Field(default=None, max_length=SIZE_ID)
+    source_quote: str | None = Field(default=None, max_length=SIZE_CLAIM)
+    source_locator: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
+    source: Source | None = None
+
+
+class ListFindingsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[FindingRow] = Field(default_factory=list, max_length=MAX_PAGE_SIZE)
+    page: PageMeta
+
+
+class ConflictRow(BaseModel):
+    """`:Conflict` joined to its involved findings for the conflicts panel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    conflict_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    topic: str = Field(..., max_length=SIZE_SHORT_TEXT)
+    summary: str = Field(..., max_length=SIZE_LONG_TEXT)
+    status: ConflictStatus
+    resolution: str | None = Field(default=None, max_length=SIZE_LONG_TEXT)
+    synthesis_note: str | None = Field(default=None, max_length=SIZE_LONG_TEXT)
+    involved_finding_ids: list[str] = Field(
+        default_factory=list, max_length=LIST_MAX_IDS
+    )
+
+
+class ListConflictsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ConflictRow] = Field(default_factory=list, max_length=MAX_PAGE_SIZE)
+    page: PageMeta
+
+
+class UnresolvedQuestionRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    module_run_id: str = Field(..., max_length=SIZE_ID)
+    module_slug: str | None = Field(default=None, max_length=SIZE_SLUG)
+    text: str = Field(..., max_length=SIZE_LONG_TEXT)
+    suggested_module: str | None = Field(default=None, max_length=SIZE_SLUG)
+    status: QuestionStatus
+
+
+class ListUnresolvedQuestionsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[UnresolvedQuestionRow] = Field(
+        default_factory=list, max_length=MAX_PAGE_SIZE
+    )
+    page: PageMeta
+
+
+class DeliverableRow(BaseModel):
+    """`:Deliverable` metadata (content is fetched separately)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deliverable_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    module_run_id: str | None = Field(default=None, max_length=SIZE_ID)
+    kind: DeliverableKind
+    filename: str = Field(..., max_length=SIZE_FILENAME)
+    ordinal: int = Field(default=0, ge=0)
+    content_uri: str | None = Field(default=None, max_length=SIZE_URL)
+    sha256: str | None = Field(default=None, max_length=SIZE_HASH)
+    word_count: int | None = Field(default=None, ge=0)
+    has_inline_content: bool = Field(
+        default=False,
+        description="True iff the row carries an inline payload (SPRINT-001 storage).",
+    )
+
+
+class ListDeliverablesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[DeliverableRow] = Field(default_factory=list, max_length=MAX_PAGE_SIZE)
+    page: PageMeta
+
+
+class ModuleDefinition(BaseModel):
+    """Template-introspection row from `GET /templates/{slug}/modules`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    module_id: str = Field(..., max_length=SIZE_ID)
+    template_id: str = Field(..., max_length=SIZE_ID)
+    slug: str = Field(..., max_length=SIZE_SLUG)
+    name: str = Field(..., max_length=SIZE_NAME)
+    wave: int = Field(..., ge=1)
+    ordinal: int = Field(..., ge=0)
+    kind: ModuleKind
+    agent_id: str | None = Field(default=None, max_length=SIZE_ID)
+    description: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
+
+
+class ListTemplateModulesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: str = Field(..., max_length=SIZE_ID)
+    template_slug: str = Field(..., max_length=SIZE_SLUG)
+    template_name: str | None = Field(default=None, max_length=SIZE_NAME)
+    template_version: str | None = Field(default=None, max_length=SIZE_VERSION)
+    modules: list[ModuleDefinition] = Field(
+        default_factory=list, max_length=LIST_MAX_ITEMS
+    )
+
+
+class RegistryItemRow(BaseModel):
+    """Registry-list view row. Mirrors `:RegistryItem` columns minus content."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    kind: RegistryKind
+    slug: str = Field(..., max_length=SIZE_SLUG)
+    version: str = Field(..., max_length=SIZE_VERSION)
+    visibility: RegistryVisibility
+    owner_user_id: str = Field(..., max_length=SIZE_ID)
+    name: str = Field(..., max_length=SIZE_NAME)
+    description: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
+    content_uri: str | None = Field(default=None, max_length=SIZE_URL)
+    sha256: str | None = Field(default=None, max_length=SIZE_HASH)
+    created_at: datetime | None = None
+    yanked_at: datetime | None = None
+
+
+class ListRegistryItemsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[RegistryItemRow] = Field(default_factory=list, max_length=MAX_PAGE_SIZE)
+    page: PageMeta
+
+
+class RegistryItemContent(BaseModel):
+    """Content payload for a registry item version."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str = Field(..., max_length=SIZE_ID)
+    kind: RegistryKind
+    slug: str = Field(..., max_length=SIZE_SLUG)
+    version: str = Field(..., max_length=SIZE_VERSION)
+    content_type: str = Field(..., max_length=SIZE_ENUM)
+    content_inline: str | None = Field(default=None, max_length=SIZE_BLOB_TEXT)
+    content_uri: str | None = Field(default=None, max_length=SIZE_URL)
+    sha256: str | None = Field(default=None, max_length=SIZE_HASH)
+
+
+class FindingSearchRow(BaseModel):
+    """Cross-run admin-search row (`GET /findings:search`).
+
+    Mirrors `FindingRow` but adds `graph_id` so admins can trace which tenant
+    the finding originated from. Restricted to platform admins via
+    `verify_graph_access(__assessments_catalog__, 'admin', user_id)`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    finding_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    module_run_id: str = Field(..., max_length=SIZE_ID)
+    claim: str = Field(..., max_length=SIZE_CLAIM)
+    label: FindingLabel
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    dimensions: list[str] = Field(default_factory=list, max_length=LIST_MAX_TAGS)
+    source_id: str | None = Field(default=None, max_length=SIZE_ID)
+    source: Source | None = None
+
+
+class FindingSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[FindingSearchRow] = Field(
+        default_factory=list, max_length=MAX_PAGE_SIZE
+    )
+    page: PageMeta
