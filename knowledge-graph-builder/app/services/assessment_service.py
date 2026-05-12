@@ -673,7 +673,32 @@ class AssessmentService:
         # 2. If the finding cites a source, MERGE the :Source in the catalog
         # graph and create the [:CITES] edge in the tenant graph.
         if finding.source_id:
-            await self._merge_source_catalog(finding.source_id)
+            # TASK-077: thread the full Source payload through when present.
+            # When the caller supplies a nested `finding.source`, we write the
+            # rich fields (url_normalized / name / type / publication_date /
+            # fetch_date / language) into the catalog row on first observation
+            # so cross-run search by URL works. When only `source_id` is
+            # supplied (legacy callers), the catalog row keeps id-only fields.
+            if finding.source is not None:
+                if (
+                    finding.source.source_id
+                    and finding.source.source_id != finding.source_id
+                ):
+                    raise ValueError(
+                        f"finding.source.source_id={finding.source.source_id!r} "
+                        f"does not match finding.source_id={finding.source_id!r}"
+                    )
+                await self._merge_source_catalog(
+                    finding.source_id,
+                    type=finding.source.type,
+                    url_normalized=finding.source.url_normalized,
+                    name=finding.source.name,
+                    publication_date=finding.source.publication_date,
+                    fetch_date=finding.source.fetch_date,
+                    language=finding.source.language,
+                )
+            else:
+                await self._merge_source_catalog(finding.source_id)
             await self._driver.execute_query(
                 """
                 MATCH (f:Finding:__Platform__ {finding_id: $finding_id})
@@ -698,18 +723,39 @@ class AssessmentService:
         return already_existed
 
     async def _merge_source_catalog(self, source_id: str, **props: Any) -> None:
-        """MERGE a :Source in the catalog graph (`__assessments_catalog__`)."""
+        """MERGE a :Source in the catalog graph (`__assessments_catalog__`).
+
+        ON CREATE SET — writes every Source field on first observation.
+        ON MATCH SET — preserves identity-bearing fields (url/name/type/lang)
+        once populated; refreshes `fetch_date` (most-recent wins) and
+        `publication_date` (newer-wins by ISO-8601 lex compare).
+        """
         await self._driver.execute_query(
             """
             MERGE (s:Source:__Platform__ {source_id: $source_id})
             ON CREATE SET
-                s.graph_id        = $catalog_graph_id,
-                s.type            = $type,
-                s.url_normalized  = $url_normalized,
-                s.name            = $name,
+                s.graph_id         = $catalog_graph_id,
+                s.type             = $type,
+                s.url_normalized   = $url_normalized,
+                s.name             = $name,
                 s.publication_date = $publication_date,
-                s.fetch_date      = $fetch_date,
-                s.language        = $language
+                s.fetch_date       = $fetch_date,
+                s.language         = $language
+            ON MATCH SET
+                s.url_normalized   = coalesce(s.url_normalized, $url_normalized),
+                s.name             = coalesce(s.name, $name),
+                s.type             = coalesce(s.type, $type),
+                s.language         = coalesce(s.language, $language),
+                s.fetch_date       = CASE
+                    WHEN $fetch_date IS NULL THEN s.fetch_date
+                    ELSE $fetch_date
+                END,
+                s.publication_date = CASE
+                    WHEN $publication_date IS NULL THEN s.publication_date
+                    WHEN s.publication_date IS NULL THEN $publication_date
+                    WHEN $publication_date > s.publication_date THEN $publication_date
+                    ELSE s.publication_date
+                END
             """,
             {
                 "source_id": source_id,

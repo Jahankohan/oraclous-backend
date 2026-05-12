@@ -308,7 +308,7 @@ def _normalize_confidence(raw: Any) -> float:
     """
     if raw is None:
         return 0.0
-    if isinstance(raw, (int, float)):
+    if isinstance(raw, int | float):
         v = float(raw)
         return max(0.0, min(1.0, v))
     if isinstance(raw, str):
@@ -677,6 +677,7 @@ def _evidence_to_finding(
     # source URL (or name fallback). The service MERGEs :Source in the
     # catalog graph by source_id so this is the dedup key.
     source_id = None
+    source_payload: dict[str, Any] | None = None
     if isinstance(source_block, dict):
         url = source_block.get("url") or source_block.get("url_normalized")
         name = source_block.get("name")
@@ -686,6 +687,27 @@ def _evidence_to_finding(
             source_id = f"src-{uuid.uuid5(uuid.NAMESPACE_URL, str(url)).hex}"
         elif name:
             source_id = f"src-{uuid.uuid5(uuid.NAMESPACE_OID, str(name)).hex}"
+
+        # TASK-077: thread the full Source payload through so the catalog row
+        # has URL / name / type / dates / language populated on first
+        # observation (not just `source_id`). The endpoint accepts an optional
+        # nested `source` block on Finding; the service writes it into the
+        # catalog `:Source` MERGE on `ON CREATE SET` and refreshes
+        # `fetch_date` / (newer-wins) `publication_date` on `ON MATCH SET`.
+        if source_id is not None:
+            source_payload = {
+                "source_id": source_id,
+                "type": source_block.get("type"),
+                "url_normalized": url,
+                "name": name,
+                "publication_date": source_block.get("publication_date")
+                or source_block.get("published_date")
+                or source_block.get("date"),
+                "fetch_date": source_block.get("fetch_date")
+                or source_block.get("fetched_at")
+                or source_block.get("retrieved_at"),
+                "language": source_block.get("language") or source_block.get("lang"),
+            }
 
     finding_id = _resolve_record_id(record)
     if not finding_id:
@@ -726,6 +748,7 @@ def _evidence_to_finding(
         "source_id": source_id,
         "source_quote": source_quote_text,
         "source_locator": None,
+        "source": source_payload,
     }
 
 
