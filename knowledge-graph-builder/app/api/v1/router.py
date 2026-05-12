@@ -4,6 +4,7 @@ from app.api import schema
 from app.api.v1.endpoints import (
     agents,
     assessments,
+    assessments_reads,
     chat,
     code_graphs,
     communities,
@@ -48,3 +49,6 @@ api_router.include_router(
     service_accounts.router, prefix="/api/v1", tags=["service-accounts"]
 )
 api_router.include_router(assessments.router, prefix="/api/v1", tags=["assessments"])
+api_router.include_router(
+    assessments_reads.router, prefix="/api/v1", tags=["assessments"]
+)
