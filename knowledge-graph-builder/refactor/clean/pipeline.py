@@ -544,10 +544,7 @@ async def main():
         neo4j_uri="bolt://localhost:7687",
         neo4j_user="neo4j",
         neo4j_password="password",
-        openai_api_key=os.getenv(
-            "OPENAI_API_KEY",
-            "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",
-        ),
+        openai_api_key=os.environ["OPENAI_API_KEY"],
         # Advanced processing configuration
         chunk_size=1500,
         chunk_overlap=300,

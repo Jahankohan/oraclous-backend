@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Test script to ensure API key is properly passed to OpenAI components"""
+"""Test script to ensure API key is properly passed to OpenAI components.
+
+Reads OPENAI_API_KEY from the environment and verifies both the OpenAI client
+and the neo4j-graphrag OpenAIEmbeddings component can authenticate with it.
+
+Fail-closed: raises KeyError at boot if OPENAI_API_KEY is not set.
+"""
 
 import os
 
 from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
 from openai import OpenAI
 
-# Clear any existing environment variable
-if "OPENAI_API_KEY" in os.environ:
-    del os.environ["OPENAI_API_KEY"]
-
-# Set our proper API key
-api_key = "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"
+api_key = os.environ["OPENAI_API_KEY"]
 
 print(f"Testing with API key ending: ...{api_key[-10:]}")
 
