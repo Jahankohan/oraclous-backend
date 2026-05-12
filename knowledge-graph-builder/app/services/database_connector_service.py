@@ -185,7 +185,7 @@ class DatabaseConnector(ABC):
     async def fetch_rows(
         self,
         table_name: str,
-        schema_snapshot: "SchemaSnapshot",
+        schema_snapshot: SchemaSnapshot,
         limit: int = 1000,
         offset: int = 0,
     ) -> list[dict[str, Any]]:

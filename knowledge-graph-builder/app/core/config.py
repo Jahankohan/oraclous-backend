@@ -30,11 +30,15 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "your-jwt-secret"
 
     # Integration layer
-    PUBLIC_BASE_URL: str = "http://localhost:8003"   # used to build endpoint_url in PublishAgentResponse
+    PUBLIC_BASE_URL: str = (
+        "http://localhost:8003"  # used to build endpoint_url in PublishAgentResponse
+    )
 
     # LLM Configuration
     OPENAI_API_KEY: str | None = None
-    LLM_API_KEY: str | None = None  # generic env-var fallback (aliases OPENAI_API_KEY when set)
+    LLM_API_KEY: str | None = (
+        None  # generic env-var fallback (aliases OPENAI_API_KEY when set)
+    )
     LLM_MODEL: str = "gpt-4o"
     # Cap completion length. Critical for LM Studio: prompt+max_tokens must
     # fit in the per-slot budget (n_ctx / n_parallel when kv_unified).

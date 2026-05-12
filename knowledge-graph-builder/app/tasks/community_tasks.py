@@ -808,7 +808,9 @@ async def _generate_summaries_async(
 ) -> dict[str, Any]:
     """Async implementation: delegates to analytics_service._generate_level_summaries."""
     if not graph_id:
-        logger.warning("generate_community_summaries_task called without graph_id — skipping")
+        logger.warning(
+            "generate_community_summaries_task called without graph_id — skipping"
+        )
         return {"status": "skipped", "reason": "no graph_id provided"}
 
     logger.info(f"Starting per-level LLM summary generation for graph {graph_id}")

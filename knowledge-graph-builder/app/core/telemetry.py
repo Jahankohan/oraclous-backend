@@ -26,7 +26,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExport
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -201,8 +201,8 @@ def _register_custom_metrics() -> None:
             active = getattr(pool, "_created_connections", 0) - len(
                 getattr(pool, "_available_connections", [])
             )
-            from opentelemetry.sdk.metrics.export import NumberDataPoint  # noqa: F401
             from opentelemetry.metrics import Observation
+            from opentelemetry.sdk.metrics.export import NumberDataPoint  # noqa: F401
 
             return [Observation(active)]
         except Exception:
@@ -244,8 +244,9 @@ def _register_custom_metrics() -> None:
 
     def _celery_queue_depth_callback(options):  # noqa: ANN001
         try:
-            from app.services.background_jobs import celery_app  # type: ignore[import]
             from opentelemetry.metrics import Observation
+
+            from app.services.background_jobs import celery_app  # type: ignore[import]
 
             inspect = celery_app.control.inspect(timeout=1)
             active = inspect.active() or {}

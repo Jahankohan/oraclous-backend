@@ -529,17 +529,17 @@ class MultiTenantGraphRAGPipeline:
         for i, doc in enumerate(documents):
             try:
                 logger.info(
-                    f"Processing document {i+1}/{len(documents)} for graph {self.graph_id} (mode={mode.value})"
+                    f"Processing document {i + 1}/{len(documents)} for graph {self.graph_id} (mode={mode.value})"
                 )
 
                 text_content = doc.get("text", "") or doc.get("content", "")
                 if not text_content:
-                    logger.warning(f"Document {i+1} has no text content, skipping")
+                    logger.warning(f"Document {i + 1} has no text content, skipping")
                     continue
 
                 result = await self._process_single_document(
                     text_content,
-                    doc.get("source", f"document_{i+1}"),
+                    doc.get("source", f"document_{i + 1}"),
                     kg_writer,
                     resolved=resolved,
                     temporal_context=temporal_context,
@@ -563,7 +563,7 @@ class MultiTenantGraphRAGPipeline:
                 )
 
             except Exception as e:
-                logger.error(f"Failed to process document {i+1}: {e}")
+                logger.error(f"Failed to process document {i + 1}: {e}")
                 continue
 
         return {
@@ -787,9 +787,7 @@ class MultiTenantGraphRAGPipeline:
                     return {
                         "entities_created": 0,
                         "relationships_created": 0,
-                        "chunks_created": len(
-                            getattr(embedded_chunks, "chunks", [])
-                        ),
+                        "chunks_created": len(getattr(embedded_chunks, "chunks", [])),
                         "property_violations_detected": 0,
                         "property_violations_migrated": 0,
                         "ontology_violations": 0,
@@ -1000,7 +998,9 @@ class MultiTenantGraphRAGPipeline:
         # 6.5. Set provenance on entity nodes and FROM_CHUNK relationships
         if job_id and graph and graph.nodes:
             entity_ids = [n.id for n in graph.nodes if n.id]
-            await self._set_entity_provenance(entity_ids, job_id, ingestion_source=source)
+            await self._set_entity_provenance(
+                entity_ids, job_id, ingestion_source=source
+            )
 
         # Return statistics
         return {
@@ -1091,7 +1091,7 @@ class MultiTenantGraphRAGPipeline:
                 )
                 for i, variation in enumerate(entity_variations):
                     logger.info(
-                        f"    {i+1}. ID: {variation['id']}, Label: {variation['label']}"
+                        f"    {i + 1}. ID: {variation['id']}, Label: {variation['label']}"
                     )
         else:
             logger.info("✅ No duplicate entity names found - no merging needed")
@@ -1629,8 +1629,7 @@ class MultiTenantGraphRAGPipeline:
             or (hasattr(n, "labels") and "__Entity__" in getattr(n, "labels", []))
             or (
                 # neo4j_graphrag uses `label` as a single string
-                getattr(n, "label", None)
-                == "__Entity__"
+                getattr(n, "label", None) == "__Entity__"
             )
         ]
 
@@ -1877,9 +1876,9 @@ class PipelineService:
 
     def __init__(self):
         """Initialize pipeline service."""
-        self._pipeline_cache: dict[str, MultiTenantGraphRAGPipeline] = (
-            {}
-        )  # Cache pipelines per graph_id
+        self._pipeline_cache: dict[
+            str, MultiTenantGraphRAGPipeline
+        ] = {}  # Cache pipelines per graph_id
         logger.info("PipelineService initialized")
 
     def get_pipeline(

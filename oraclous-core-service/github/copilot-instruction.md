@@ -52,7 +52,7 @@ Workflows (1) → (many) Workflow Shares
 
 ### **Core Tables:**
 - `workflows` - Workflow definitions
-- `workflow_executions` - Execution tracking  
+- `workflow_executions` - Execution tracking
 - `tool_instances` - Tool configurations (existing)
 - `executions` - Individual tool runs (existing)
 
@@ -109,7 +109,7 @@ class PipelineGenerator:
 ```python
 # /api/v1/workflows/
 POST   /                     # Create workflow
-GET    /                     # List workflows  
+GET    /                     # List workflows
 GET    /{id}                 # Get workflow
 PUT    /{id}                 # Update workflow
 POST   /generate             # Generate from prompt
@@ -123,7 +123,7 @@ POST   /{id}/resume          # Resume execution
 
 ### **With Existing Systems:**
 1. **Tool Registry** → Workflow validation
-2. **Instance Manager** → Node configuration  
+2. **Instance Manager** → Node configuration
 3. **Credential Client** → Execution context
 4. **Job Processor** → Background execution
 
@@ -145,7 +145,7 @@ POST   /{id}/resume          # Resume execution
 The database foundation is complete! You can now:
 
 1. **Run the migration** to create all tables
-2. **Start building the WorkflowRepository** 
+2. **Start building the WorkflowRepository**
 3. **Implement the WorkflowService**
 4. **Add the API routes**
 5. **Integrate with LangGraph** for generation

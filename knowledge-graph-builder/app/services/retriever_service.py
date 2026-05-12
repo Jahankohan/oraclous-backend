@@ -289,7 +289,7 @@ class RetrievalService:
             WITH node AS chunk, score
             MATCH (chunk)<-[:FROM_CHUNK]-(entity:__Entity__)-[r]->(related_entity:__Entity__)
             WHERE r.confidence > 0.5
-            RETURN 
+            RETURN
                 chunk.text AS context,
                 chunk.chunk_index AS chunk_index,
                 collect(DISTINCT {

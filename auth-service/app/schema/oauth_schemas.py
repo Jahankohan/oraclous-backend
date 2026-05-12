@@ -2,10 +2,12 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
+
 class TokenRefreshRequest(BaseModel):
     user_id: str
     provider: str
     state: Optional[str] = "/"
+
 
 class TokenRefreshResponse(BaseModel):
     success: bool
@@ -13,6 +15,7 @@ class TokenRefreshResponse(BaseModel):
     login_url: Optional[str] = None
     expires_at: Optional[datetime] = None
     error: Optional[str] = None
+
 
 class ScopeValidationRequest(BaseModel):
     user_id: str
@@ -29,9 +32,13 @@ class ScopeValidationResponse(BaseModel):
     login_url: Optional[str] = None
     error: Optional[str] = None
 
+
 class UserTokensResponse(BaseModel):
     user_id: str
-    providers: List[dict]  # List of {provider: str, scopes: List[str], expires_at: datetime, has_refresh_token: bool}
+    providers: List[
+        dict
+    ]  # List of {provider: str, scopes: List[str], expires_at: datetime, has_refresh_token: bool}
+
 
 class RuntimeTokenResponse(BaseModel):
     user_id: str

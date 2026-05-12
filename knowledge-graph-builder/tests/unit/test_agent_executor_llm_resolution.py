@@ -42,13 +42,19 @@ class TestFromNeo4jResolution:
         agent = _make_agent()
         mock_llm = MagicMock()
 
-        with patch("app.services.agent_executor.AgentService") as MockSvc, \
-             patch("app.services.agent_executor.LLMConfigService") as MockCfg, \
-             patch("app.services.agent_executor.CredentialBrokerClient") as MockBroker, \
-             patch("app.services.agent_executor.LLMClientFactory") as MockFactory:
+        with (
+            patch("app.services.agent_executor.AgentService") as MockSvc,
+            patch("app.services.agent_executor.LLMConfigService") as MockCfg,
+            patch("app.services.agent_executor.CredentialBrokerClient") as MockBroker,
+            patch("app.services.agent_executor.LLMClientFactory") as MockFactory,
+        ):
             MockSvc.return_value.get_agent = AsyncMock(return_value=agent)
-            MockCfg.return_value.resolve_for_agent = AsyncMock(return_value=_resolved_config())
-            MockBroker.return_value.retrieve_api_key = AsyncMock(return_value="sk-or-live")
+            MockCfg.return_value.resolve_for_agent = AsyncMock(
+                return_value=_resolved_config()
+            )
+            MockBroker.return_value.retrieve_api_key = AsyncMock(
+                return_value="sk-or-live"
+            )
             MockFactory.build = MagicMock(return_value=mock_llm)
 
             executor = await AgentExecutor.from_neo4j(driver, "g1", "a1")
@@ -61,12 +67,15 @@ class TestFromNeo4jResolution:
 
     async def test_falls_back_to_env_var_when_no_config(self):
         from openai import AsyncOpenAI
+
         driver = MagicMock()
         agent = _make_agent()
 
-        with patch("app.services.agent_executor.AgentService") as MockSvc, \
-             patch("app.services.agent_executor.LLMConfigService") as MockCfg, \
-             patch("app.services.agent_executor.settings") as mock_settings:
+        with (
+            patch("app.services.agent_executor.AgentService") as MockSvc,
+            patch("app.services.agent_executor.LLMConfigService") as MockCfg,
+            patch("app.services.agent_executor.settings") as mock_settings,
+        ):
             MockSvc.return_value.get_agent = AsyncMock(return_value=agent)
             MockCfg.return_value.resolve_for_agent = AsyncMock(return_value=None)
             mock_settings.LLM_API_KEY = "sk-fallback"
@@ -81,12 +90,15 @@ class TestFromNeo4jResolution:
 
     async def test_openai_api_key_used_as_fallback_when_llm_api_key_unset(self):
         from openai import AsyncOpenAI
+
         driver = MagicMock()
         agent = _make_agent()
 
-        with patch("app.services.agent_executor.AgentService") as MockSvc, \
-             patch("app.services.agent_executor.LLMConfigService") as MockCfg, \
-             patch("app.services.agent_executor.settings") as mock_settings:
+        with (
+            patch("app.services.agent_executor.AgentService") as MockSvc,
+            patch("app.services.agent_executor.LLMConfigService") as MockCfg,
+            patch("app.services.agent_executor.settings") as mock_settings,
+        ):
             MockSvc.return_value.get_agent = AsyncMock(return_value=agent)
             MockCfg.return_value.resolve_for_agent = AsyncMock(return_value=None)
             mock_settings.LLM_API_KEY = None
@@ -102,9 +114,11 @@ class TestFromNeo4jResolution:
         driver = MagicMock()
         agent = _make_agent()
 
-        with patch("app.services.agent_executor.AgentService") as MockSvc, \
-             patch("app.services.agent_executor.LLMConfigService") as MockCfg, \
-             patch("app.services.agent_executor.settings") as mock_settings:
+        with (
+            patch("app.services.agent_executor.AgentService") as MockSvc,
+            patch("app.services.agent_executor.LLMConfigService") as MockCfg,
+            patch("app.services.agent_executor.settings") as mock_settings,
+        ):
             MockSvc.return_value.get_agent = AsyncMock(return_value=agent)
             MockCfg.return_value.resolve_for_agent = AsyncMock(return_value=None)
             mock_settings.LLM_API_KEY = None
@@ -117,15 +131,20 @@ class TestFromNeo4jResolution:
 
     async def test_broker_error_surfaces_as_runtime_error(self):
         from app.services.credential_broker_client import CredentialBrokerError
+
         driver = MagicMock()
         agent = _make_agent()
 
-        with patch("app.services.agent_executor.AgentService") as MockSvc, \
-             patch("app.services.agent_executor.LLMConfigService") as MockCfg, \
-             patch("app.services.agent_executor.CredentialBrokerClient") as MockBroker, \
-             patch("app.services.agent_executor.settings") as mock_settings:
+        with (
+            patch("app.services.agent_executor.AgentService") as MockSvc,
+            patch("app.services.agent_executor.LLMConfigService") as MockCfg,
+            patch("app.services.agent_executor.CredentialBrokerClient") as MockBroker,
+            patch("app.services.agent_executor.settings") as mock_settings,
+        ):
             MockSvc.return_value.get_agent = AsyncMock(return_value=agent)
-            MockCfg.return_value.resolve_for_agent = AsyncMock(return_value=_resolved_config())
+            MockCfg.return_value.resolve_for_agent = AsyncMock(
+                return_value=_resolved_config()
+            )
             MockBroker.return_value.retrieve_api_key = AsyncMock(
                 side_effect=CredentialBrokerError("not found")
             )
@@ -138,13 +157,17 @@ class TestFromNeo4jResolution:
 class TestCallLlmDispatch:
     def _executor(self, llm, model="gpt-4o"):
         agent = {
-            "graph_id": "g1", "system_prompt": "You help.",
-            "reasoning_mode": "direct", "tools": [], "llm_config_id": None,
+            "graph_id": "g1",
+            "system_prompt": "You help.",
+            "reasoning_mode": "direct",
+            "tools": [],
+            "llm_config_id": None,
         }
         return AgentExecutor(agent_def=agent, toolkit=MagicMock(), llm=llm, model=model)
 
     async def test_openai_uses_chat_completions_create(self):
         from openai import AsyncOpenAI
+
         llm = MagicMock(spec=AsyncOpenAI)
         resp = MagicMock()
         resp.choices[0].message.content = "hello"

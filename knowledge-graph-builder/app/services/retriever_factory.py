@@ -388,7 +388,11 @@ class RetrieverFactory:
             return retrieval_query
 
         # Vector-only retrievers have no relationship traversal — filter is a no-op.
-        _vector_only = {RetrieverType.VECTOR, RetrieverType.HYBRID, RetrieverType.TEXT2CYPHER}
+        _vector_only = {
+            RetrieverType.VECTOR,
+            RetrieverType.HYBRID,
+            RetrieverType.TEXT2CYPHER,
+        }
         if retriever_type in _vector_only:
             logger.warning(
                 "Temporal filter not supported for %s retriever; ignoring",
@@ -431,23 +435,23 @@ class RetrieverFactory:
             # Fallback to basic schema
             return f"""
             // Multi-tenant Knowledge Graph Schema for graph_id: {graph_id}
-            
+
             // Core entity types
             (:Entity {{name: string, type: string, graph_id: string}})
             (:Chunk {{text: string, graph_id: string, embedding: vector}})
             (:Document {{path: string, title: string, graph_id: string}})
-            
+
             // Entity relationships
             (:Entity)-[:FOUNDED_BY]->(:Entity)
             (:Entity)-[:CEO_OF]->(:Entity)
             (:Entity)-[:LOCATED_IN]->(:Entity)
             (:Entity)-[:PARTNER_WITH]->(:Entity)
             (:Entity)-[:DEVELOPS]->(:Entity)
-            
+
             // Document relationships
             (:Entity)-[:FROM_CHUNK]->(:Chunk)
             (:Chunk)-[:FROM_DOCUMENT]->(:Document)
-            
+
             // All nodes have graph_id property for multi-tenant isolation
             """
 

@@ -36,31 +36,33 @@ logger = get_logger(__name__)
 # via runtime rel_type values passed to apoc.cypher.doIt() or string concatenation.
 # Must cover all types produced by the LLM extractor prompt in pipeline_service.py
 # (RELATIONSHIP_PROPERTY_PROMPT_TEMPLATE) plus any structural types used elsewhere.
-_ALLOWED_REL_TYPES: frozenset[str] = frozenset({
-    # ── LLM extractor types (pipeline_service.py RELATIONSHIP_PROPERTY_PROMPT_TEMPLATE) ──
-    "WORKS_FOR",
-    "REPORTS_TO",
-    "HAS_SKILL",
-    "MEMBER_OF",
-    "INVESTED_IN",
-    "CITES",
-    "AUTHORED",
-    "WORKS_ON",
-    "DEPENDS_ON",
-    "ACQUIRED_BY",
-    "PARTNER_OF",
-    # ── Additional types used elsewhere in the codebase ──
-    "FOUNDED",
-    "LEADS",
-    "MANAGES",
-    "DEVELOPED",
-    "RELATED_TO",
-    "PART_OF",
-    "OWNS",
-    "LOCATED_IN",
-    "SAME_AS",
-    "SIMILAR_TO",
-})
+_ALLOWED_REL_TYPES: frozenset[str] = frozenset(
+    {
+        # ── LLM extractor types (pipeline_service.py RELATIONSHIP_PROPERTY_PROMPT_TEMPLATE) ──
+        "WORKS_FOR",
+        "REPORTS_TO",
+        "HAS_SKILL",
+        "MEMBER_OF",
+        "INVESTED_IN",
+        "CITES",
+        "AUTHORED",
+        "WORKS_ON",
+        "DEPENDS_ON",
+        "ACQUIRED_BY",
+        "PARTNER_OF",
+        # ── Additional types used elsewhere in the codebase ──
+        "FOUNDED",
+        "LEADS",
+        "MANAGES",
+        "DEVELOPED",
+        "RELATED_TO",
+        "PART_OF",
+        "OWNS",
+        "LOCATED_IN",
+        "SAME_AS",
+        "SIMILAR_TO",
+    }
+)
 
 # ── EntityResolver — four-signal SAME_AS scorer ───────────────────────────────
 
@@ -71,8 +73,8 @@ TYPE_WEIGHT = 0.2
 CONTEXT_WEIGHT = 0.1
 
 # Decision thresholds
-STORE_THRESHOLD = 0.85        # create SAME_AS link immediately
-AMBIGUOUS_LOWER = 0.60        # pass to LLM disambiguation (TASK-011)
+STORE_THRESHOLD = 0.85  # create SAME_AS link immediately
+AMBIGUOUS_LOWER = 0.60  # pass to LLM disambiguation (TASK-011)
 
 # Name length cap — prevents CPU DoS via extremely long names before regex/Jaro-Winkler
 _MAX_NAME_LEN = 1000
@@ -354,6 +356,7 @@ class EntityResolver:
         MERGE (b)-[:SAME_AS {confidence: $score, method: $method, created_at: datetime()}]->(a)
         """
         try:
+
             async def _write(tx) -> None:
                 await tx.run(
                     query,
@@ -370,7 +373,10 @@ class EntityResolver:
             await session.execute_write(_write)
             logger.info(
                 "created SAME_AS link: %s <-> %s confidence=%.3f method=%s",
-                id_a, id_b, score, method,
+                id_a,
+                id_b,
+                score,
+                method,
             )
         except Exception as exc:
             logger.warning(
@@ -410,7 +416,8 @@ class EntityResolver:
         except Exception as exc:
             logger.warning(
                 "_fetch_neighbor_names_for_context failed for entity %s: %s",
-                entity_id, exc,
+                entity_id,
+                exc,
             )
             return []
 
@@ -753,7 +760,9 @@ class MultiTenantEntityDeduplicator(Component):
                 rel_type,
             )
             return
-        self._create_known_relationship(session, source_id, target_id, rel_type, rel_props)
+        self._create_known_relationship(
+            session, source_id, target_id, rel_type, rel_props
+        )
 
     def _create_known_relationship(
         self,
@@ -943,22 +952,22 @@ class MultiTenantEntityDeduplicator(Component):
         query = """
         MATCH (e1:__Entity__)-[:FROM_CHUNK]->(c1:Chunk)
         MATCH (e2:__Entity__)-[:FROM_CHUNK]->(c2:Chunk)
-        WHERE e1.graph_id = $graph_id 
+        WHERE e1.graph_id = $graph_id
         AND e2.graph_id = $graph_id
         AND c1.index <> c2.index
         AND elementId(e1) < elementId(e2)
         AND NOT e1.name = e2.name  // Exclude exact matches
         // Simple fuzzy matching using CONTAINS or APOC similarity
         AND (
-            e1.name CONTAINS e2.name OR 
+            e1.name CONTAINS e2.name OR
             e2.name CONTAINS e1.name OR
             (EXISTS {
                 CALL apoc.text.levenshteinSimilarity(e1.name, e2.name) YIELD value
                 WHERE value > $threshold
             })
         )
-        WITH e1, e2, 
-             CASE 
+        WITH e1, e2,
+             CASE
                 WHEN EXISTS { CALL apoc.text.levenshteinSimilarity(e1.name, e2.name) YIELD value }
                 THEN apoc.text.levenshteinSimilarity(e1.name, e2.name)
                 ELSE 0.9

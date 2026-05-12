@@ -172,7 +172,6 @@ def _patch_graph_service(graph: dict | None = None):
 
 
 class TestCreateSnapshot:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_create_snapshot_returns_201(self, async_client):
@@ -244,7 +243,6 @@ class TestCreateSnapshot:
 
 
 class TestListSnapshots:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_list_snapshots_returns_200(self, async_client):
@@ -292,7 +290,6 @@ class TestListSnapshots:
 
 
 class TestGetSnapshot:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_get_existing_snapshot_returns_200(self, async_client):
@@ -337,7 +334,6 @@ class TestGetSnapshot:
 
 
 class TestDeleteSnapshot:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_delete_existing_snapshot_returns_204(self, async_client):
@@ -397,7 +393,6 @@ class TestDeleteSnapshot:
 
 
 class TestDiffSnapshots:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_diff_returns_200_with_changes(self, async_client):
@@ -462,7 +457,6 @@ class TestDiffSnapshots:
 
 
 class TestRollbackSnapshot:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_rollback_requires_confirm_true(self, async_client):
@@ -603,7 +597,6 @@ class TestRollbackSnapshot:
 
 
 class TestRollbackJobStatus:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_get_job_returns_200_with_status(self, async_client):
@@ -669,7 +662,6 @@ class TestRollbackJobStatus:
 
 
 class TestSnapshotMultiTenancyIsolation:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_cannot_access_snapshots_of_other_users_graph(self, async_client):

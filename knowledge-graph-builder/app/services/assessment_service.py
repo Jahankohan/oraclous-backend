@@ -38,8 +38,8 @@ Registry tenancy (ADR-019):
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from neo4j import AsyncDriver
 
@@ -47,7 +47,6 @@ from app.core.logging import get_logger
 from app.schemas.assessment_schemas import (
     ASSESSMENTS_CATALOG_GRAPH_ID,
     REGISTRY_CATALOG_GRAPH_ID,
-    AssessmentRun,
     BulkItemResult,
     BulkResponse,
     Conflict,
@@ -56,9 +55,7 @@ from app.schemas.assessment_schemas import (
     Deliverable,
     FinalizeRunResponse,
     Finding,
-    ModuleRun,
     RegistryItem,
-    RegistryVisibility,
     RunStatus,
     Subject,
     UnresolvedQuestion,
@@ -101,7 +98,7 @@ MIN_DELIVERABLES_FOR_PASS = 1
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _new_id(prefix: str) -> str:
@@ -120,7 +117,7 @@ def _to_neo_primitive(value: Any) -> Any:
     if isinstance(value, datetime):
         # Strip tz to UTC ISO; Neo4j datetime() accepts the string.
         if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
+            value = value.replace(tzinfo=UTC)
         return value.isoformat()
     if isinstance(value, dict):
         import json
@@ -153,7 +150,7 @@ class AssessmentService:
         self,
         graph_id: str,
         request: CreateRunRequest,
-        created_by: Optional[str] = None,
+        created_by: str | None = None,
     ) -> CreateRunResponse:
         """Bootstrap an `:AssessmentRun` + all `:ModuleRun` rows in `planned`.
 
@@ -305,7 +302,7 @@ class AssessmentService:
             already_existed=False,
         )
 
-    async def _fetch_template_by_slug(self, slug: str) -> Optional[dict[str, Any]]:
+    async def _fetch_template_by_slug(self, slug: str) -> dict[str, Any] | None:
         result = await self._driver.execute_query(
             """
             MATCH (t:AssessmentTemplate:__Platform__ {slug: $slug})
@@ -319,7 +316,9 @@ class AssessmentService:
         rec = result.records[0]
         return {"template_id": rec["template_id"], "slug": rec["slug"]}
 
-    async def _fetch_modules_for_template(self, template_id: str) -> list[dict[str, Any]]:
+    async def _fetch_modules_for_template(
+        self, template_id: str
+    ) -> list[dict[str, Any]]:
         result = await self._driver.execute_query(
             """
             MATCH (t:AssessmentTemplate:__Platform__ {template_id: $template_id})
@@ -343,7 +342,7 @@ class AssessmentService:
 
     async def _fetch_existing_run(
         self, graph_id: str, run_id: str
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         result = await self._driver.execute_query(
             """
             MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
@@ -486,7 +485,7 @@ class AssessmentService:
             MATCH (mr:ModuleRun:__Platform__ {{
                 graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
             }})
-            SET {', '.join(set_clauses)}
+            SET {", ".join(set_clauses)}
             RETURN mr.module_run_id AS id
             """
         result = await self._driver.execute_query(cypher, params)
@@ -1173,7 +1172,9 @@ class AssessmentService:
                 "run_id": run_id,
                 "status": final_status,
                 "finished_at": finished_at.isoformat(),
-                "failure_reason": "; ".join(failure_reasons) if failure_reasons else None,
+                "failure_reason": "; ".join(failure_reasons)
+                if failure_reasons
+                else None,
             },
         )
 
@@ -1209,7 +1210,7 @@ class AssessmentService:
 
     @staticmethod
     def _registry_target_graph_id(
-        item: RegistryItem, owner_tenant_graph_id: Optional[str]
+        item: RegistryItem, owner_tenant_graph_id: str | None
     ) -> str:
         """Decide which graph the RegistryItem write lands in (ADR-019).
 
@@ -1229,7 +1230,7 @@ class AssessmentService:
     async def persist_registry_item(
         self,
         item: RegistryItem,
-        owner_tenant_graph_id: Optional[str] = None,
+        owner_tenant_graph_id: str | None = None,
     ) -> bool:
         """Write a RegistryItem to its visibility-appropriate graph (ADR-019).
 

@@ -6,7 +6,6 @@ Includes graceful degradation: when the Celery broker (Redis) is unreachable, jo
 are written to the PostgreSQL `job_queue` fallback table with status 'pending'.
 """
 
-import json
 from typing import Any
 
 from app.core.errors import KGBError
@@ -29,7 +28,9 @@ except ImportError:  # pragma: no cover
     _BROKER_DOWN_EXCEPTIONS = (OSError,)
 
 
-async def _write_fallback_job(task_name: str, args: list, kwargs: dict, error: str) -> None:
+async def _write_fallback_job(
+    task_name: str, args: list, kwargs: dict, error: str
+) -> None:
     """
     Persist a job to the PostgreSQL fallback queue when the Celery broker is down.
 

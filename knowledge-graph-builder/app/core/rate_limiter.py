@@ -58,13 +58,13 @@ limiter = Limiter(key_func=get_remote_address)
 # ---------------------------------------------------------------------------
 
 _DEFAULTS: dict[str, dict[str, float]] = {
-    "read": {"rate": 1.0, "burst": 20.0},    # 60/min, burst 20
-    "write": {"rate": 0.5, "burst": 10.0},   # 30/min, burst 10
+    "read": {"rate": 1.0, "burst": 20.0},  # 60/min, burst 20
+    "write": {"rate": 0.5, "burst": 10.0},  # 30/min, burst 10
     "admin": {"rate": 0.167, "burst": 3.0},  # ~10/min, burst 3
 }
 
-_CONFIG_CACHE_TTL = 60      # seconds to cache per-tenant config in Redis
-_BUCKET_TTL = 3600          # seconds before an idle bucket expires in Redis
+_CONFIG_CACHE_TTL = 60  # seconds to cache per-tenant config in Redis
+_BUCKET_TTL = 3600  # seconds before an idle bucket expires in Redis
 
 # ---------------------------------------------------------------------------
 # Atomic Lua script
@@ -235,7 +235,9 @@ class TokenBucketRateLimiter:
         try:
             cached = await self._redis.get(self._config_key)
         except Exception as exc:
-            logger.warning("Redis config cache read error (tenant=%s): %s", self._tenant_id, exc)
+            logger.warning(
+                "Redis config cache read error (tenant=%s): %s", self._tenant_id, exc
+            )
             return defaults["rate"], defaults["burst"]
 
         if cached:
@@ -246,16 +248,26 @@ class TokenBucketRateLimiter:
                 burst = float(ep_cfg.get("burst", defaults["burst"]))
                 return rate, burst
             except (json.JSONDecodeError, ValueError) as exc:
-                logger.warning("Malformed rate limit config cache (tenant=%s): %s", self._tenant_id, exc)
+                logger.warning(
+                    "Malformed rate limit config cache (tenant=%s): %s",
+                    self._tenant_id,
+                    exc,
+                )
 
         # Cache miss — try Neo4j.
         if self._neo4j_driver is not None:
             config = await self._load_config_from_neo4j()
             if config:
                 try:
-                    await self._redis.set(self._config_key, json.dumps(config), ex=_CONFIG_CACHE_TTL)
+                    await self._redis.set(
+                        self._config_key, json.dumps(config), ex=_CONFIG_CACHE_TTL
+                    )
                 except Exception as exc:
-                    logger.warning("Redis config cache write error (tenant=%s): %s", self._tenant_id, exc)
+                    logger.warning(
+                        "Redis config cache write error (tenant=%s): %s",
+                        self._tenant_id,
+                        exc,
+                    )
                 ep_cfg = config.get(self._endpoint_type, {})
                 rate = float(ep_cfg.get("rate", defaults["rate"]))
                 burst = float(ep_cfg.get("burst", defaults["burst"]))

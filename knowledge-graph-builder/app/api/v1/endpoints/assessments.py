@@ -33,6 +33,7 @@ Out of scope (per TASK-069):
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -174,9 +175,7 @@ async def create_run(
     try:
         return await svc.create_run(graph_id, body, created_by=user_id)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 # ── /api/v1/assessments/runs/{run_id}/module-runs/{module_run_id} ────────────
@@ -206,9 +205,7 @@ async def update_module_run(
     try:
         updated = await svc.update_module_run(graph_id, run_id, module_run_id, body)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     if not updated:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="ModuleRun not found"
@@ -275,9 +272,7 @@ async def record_finding_bulk(
             graph_id, run_id, module_run_id, body.findings
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 # ── /api/v1/assessments/runs/{run_id}/conflicts ──────────────────────────────
@@ -310,9 +305,7 @@ async def record_conflict(
     try:
         created = await svc.record_conflict(graph_id, run_id, body.conflict)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return {"conflict_id": body.conflict.conflict_id, "created": created}
 
 
@@ -347,9 +340,7 @@ async def record_unresolved_question(
             graph_id, run_id, body.question.module_run_id, body.question
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return {"question_id": body.question.question_id, "created": created}
 
 
@@ -382,9 +373,7 @@ async def persist_deliverable(
     try:
         created = await svc.persist_deliverable(graph_id, run_id, body.deliverable)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return {
         "deliverable_id": body.deliverable.deliverable_id,
         "created": created,
@@ -422,9 +411,7 @@ async def persist_final_docs(
     try:
         return await svc.persist_final_docs(graph_id, run_id, body.deliverables)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 # ── /api/v1/assessments/runs/{run_id}:finalize ───────────────────────────────
@@ -452,9 +439,7 @@ async def finalize_run(
     try:
         return await svc.finalize_run(graph_id, run_id)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 # ── Heartbeats (resumability, per STORY-026 §Acceptance Criteria) ───────────
@@ -517,13 +502,13 @@ async def heartbeat_module_run(
     and the Celery reset agent watches this field.
     """
     await verify_graph_access(graph_id, "write", user_id)
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     updated = await svc.update_module_run(
         graph_id,
         run_id,
         module_run_id,
-        UpdateModuleRunRequest(last_heartbeat_at=datetime.now(timezone.utc)),
+        UpdateModuleRunRequest(last_heartbeat_at=datetime.now(UTC)),
     )
     if not updated:
         raise HTTPException(
@@ -608,20 +593,18 @@ async def persist_registry_item(
     try:
         created = await svc.persist_registry_item(
             item,
-            owner_tenant_graph_id=item.graph_id if item.visibility == "private" else None,
+            owner_tenant_graph_id=item.graph_id
+            if item.visibility == "private"
+            else None,
         )
     except RegistryOwnershipError as exc:
         # Per TASK-073 Finding 1 (TASK-069): non-owner attempt to overwrite a
         # public/yanked RegistryItem is rejected with 403. The endpoint's
         # `verify_graph_access` gates "can write to the catalog at all" but
         # not "can write *this* item" — that's enforced in the service.
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return {
         "item_id": item.item_id,
         "kind": kind,

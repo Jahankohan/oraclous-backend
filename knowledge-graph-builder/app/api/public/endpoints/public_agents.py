@@ -6,7 +6,6 @@ Rate limiting is per-integration-key, in-memory token bucket.
 """
 
 import json
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -126,8 +125,12 @@ async def public_chat(
     return await _sync_response(published, body, driver)
 
 
-async def _sync_response(published: dict, body: PublicChatRequest, driver) -> JSONResponse:
-    executor = await AgentExecutor.from_neo4j(driver, published["graph_id"], published["agent_id"])
+async def _sync_response(
+    published: dict, body: PublicChatRequest, driver
+) -> JSONResponse:
+    executor = await AgentExecutor.from_neo4j(
+        driver, published["graph_id"], published["agent_id"]
+    )
     result = await executor.run(body.message, body.session_id)
 
     await log_public_call(
@@ -138,14 +141,18 @@ async def _sync_response(published: dict, body: PublicChatRequest, driver) -> JS
         input_text=body.message,
         response_text=result.response,
     )
-    return JSONResponse({
-        "response": result.response,
-        "session_id": result.session_id,
-        "provenance": result.provenance.model_dump() if result.provenance else None,
-    })
+    return JSONResponse(
+        {
+            "response": result.response,
+            "session_id": result.session_id,
+            "provenance": result.provenance.model_dump() if result.provenance else None,
+        }
+    )
 
 
-async def _sse_response(published: dict, body: PublicChatRequest, driver) -> StreamingResponse:
+async def _sse_response(
+    published: dict, body: PublicChatRequest, driver
+) -> StreamingResponse:
     async def _stream():
         executor = await AgentExecutor.from_neo4j(
             driver, published["graph_id"], published["agent_id"]
@@ -169,7 +176,9 @@ async def _sse_response(published: dict, body: PublicChatRequest, driver) -> Str
             response_text=full_response,
         )
 
-        prov_dict = provenance.model_dump() if hasattr(provenance, "model_dump") else provenance
+        prov_dict = (
+            provenance.model_dump() if hasattr(provenance, "model_dump") else provenance
+        )
         yield f"data: {json.dumps({'done': True, 'provenance': prov_dict, 'session_id': body.session_id})}\n\n"
 
     return StreamingResponse(_stream(), media_type="text/event-stream")

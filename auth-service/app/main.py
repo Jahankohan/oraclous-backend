@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
@@ -30,6 +29,7 @@ app.add_middleware(
 # but only when the direct connection comes from a trusted proxy IP.
 # This prevents X-Forwarded-For spoofing by untrusted callers.
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=settings.TRUSTED_PROXY_IPS)
+
 
 @app.get("/", response_model=dict[str, str])
 async def read_root() -> dict[str, str]:

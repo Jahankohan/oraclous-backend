@@ -6,10 +6,13 @@ Tests the auth-service side of the ORA-81 implementation:
 - bcrypt hash verification
 - Prefix-based lookup
 """
-import pytest
-from unittest.mock import AsyncMock, MagicMock
 
-from app.repositories.service_account_repository import _generate_api_key, _bcrypt_context
+import pytest
+
+from app.repositories.service_account_repository import (
+    _generate_api_key,
+    _bcrypt_context,
+)
 
 
 @pytest.mark.unit
@@ -57,7 +60,6 @@ def test_invalid_key_prefix_rejected():
 
     # We don't have a DB here; test the guard condition
     repo = ServiceAccountRepository.__new__(ServiceAccountRepository)
-    import asyncio
 
     async def run():
         return await repo.validate_key("sk_notavalidkey123")
@@ -65,6 +67,7 @@ def test_invalid_key_prefix_rejected():
     # The validate_key method returns None for non-osk_ keys without DB access
     # We verify this by inspecting the source for the guard
     import inspect
+
     source = inspect.getsource(ServiceAccountRepository.validate_key)
     assert "osk_" in source
     assert "return None" in source
@@ -83,7 +86,9 @@ def test_create_service_account_token_structure():
         home_graph_id="graph-test-uuid",
     )
 
-    payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    payload = jwt.decode(
+        token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
+    )
 
     assert payload["sub"] == "sa-test-uuid"
     assert payload["principal_type"] == "service_account"

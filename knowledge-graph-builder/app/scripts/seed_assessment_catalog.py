@@ -88,7 +88,9 @@ SEED_CREATED_BY = "system:assessment-catalog-seed"
 DEFAULT_SKILLS_ROOT = Path.home() / ".claude" / "skills"
 
 
-ModuleKind = Literal["research", "gap-research", "analysis", "synthesis", "quality-gate"]
+ModuleKind = Literal[
+    "research", "gap-research", "analysis", "synthesis", "quality-gate"
+]
 ReasoningMode = Literal["direct", "research", "analytical", "conversational"]
 
 
@@ -151,7 +153,9 @@ def _required_outputs_for_kind(kind: ModuleKind) -> tuple[str, ...]:
     return ("deliverable_md",)
 
 
-def _r(template: str, slug: str, name: str, ordinal: int, deliverable: str) -> ModuleSpec:
+def _r(
+    template: str, slug: str, name: str, ordinal: int, deliverable: str
+) -> ModuleSpec:
     """Build a research-wave spec (wave=1, kind=research)."""
     skill_root = "assess" if template == "assess-v1" else "eurail-report"
     return ModuleSpec(
@@ -167,7 +171,9 @@ def _r(template: str, slug: str, name: str, ordinal: int, deliverable: str) -> M
     )
 
 
-def _a(template: str, slug: str, name: str, ordinal: int, deliverable: str) -> ModuleSpec:
+def _a(
+    template: str, slug: str, name: str, ordinal: int, deliverable: str
+) -> ModuleSpec:
     """Build an analysis-wave spec (wave=3, kind=analysis)."""
     skill_root = "assess" if template == "assess-v1" else "eurail-report"
     return ModuleSpec(
@@ -183,7 +189,9 @@ def _a(template: str, slug: str, name: str, ordinal: int, deliverable: str) -> M
     )
 
 
-def _s(template: str, slug: str, name: str, ordinal: int, deliverable: str) -> ModuleSpec:
+def _s(
+    template: str, slug: str, name: str, ordinal: int, deliverable: str
+) -> ModuleSpec:
     """Build a synthesis-wave spec (wave=4, kind=synthesis)."""
     skill_root = "assess" if template == "assess-v1" else "eurail-report"
     return ModuleSpec(
@@ -199,7 +207,9 @@ def _s(template: str, slug: str, name: str, ordinal: int, deliverable: str) -> M
     )
 
 
-def _g(template: str, slug: str, name: str, ordinal: int, deliverable: str) -> ModuleSpec:
+def _g(
+    template: str, slug: str, name: str, ordinal: int, deliverable: str
+) -> ModuleSpec:
     """Build a quality-gate-wave spec (wave=5, kind=quality-gate)."""
     skill_root = "assess" if template == "assess-v1" else "eurail-report"
     return ModuleSpec(
@@ -222,28 +232,118 @@ def _g(template: str, slug: str, name: str, ordinal: int, deliverable: str) -> M
 ASSESS_V1_MODULES: tuple[ModuleSpec, ...] = (
     # Wave 1 — Research (11 modules, ordinals 01-11)
     _r("assess-v1", "company-intel", "Company Intel", 1, "01_company_intel.md"),
-    _r("assess-v1", "tech-stack-forensics", "Tech Stack Forensics", 2, "02_tech_stack_forensics.md"),
+    _r(
+        "assess-v1",
+        "tech-stack-forensics",
+        "Tech Stack Forensics",
+        2,
+        "02_tech_stack_forensics.md",
+    ),
     _r("assess-v1", "industry-market", "Industry & Market", 3, "03_industry_market.md"),
-    _r("assess-v1", "competitor-ai-benchmark", "Competitor AI Benchmark", 4, "04_competitor_ai_benchmark.md"),
-    _r("assess-v1", "mcp-agent-surface", "MCP Agent Surface", 5, "05_mcp_agent_surface.md"),
-    _r("assess-v1", "third-party-surrogates", "Third-Party Surrogates", 6, "06_third_party_surrogates.md"),
+    _r(
+        "assess-v1",
+        "competitor-ai-benchmark",
+        "Competitor AI Benchmark",
+        4,
+        "04_competitor_ai_benchmark.md",
+    ),
+    _r(
+        "assess-v1",
+        "mcp-agent-surface",
+        "MCP Agent Surface",
+        5,
+        "05_mcp_agent_surface.md",
+    ),
+    _r(
+        "assess-v1",
+        "third-party-surrogates",
+        "Third-Party Surrogates",
+        6,
+        "06_third_party_surrogates.md",
+    ),
     _r("assess-v1", "customer-voice", "Customer Voice", 7, "07_customer_voice.md"),
-    _r("assess-v1", "distribution-disruption", "Distribution Disruption", 8, "08_distribution_disruption.md"),
-    _r("assess-v1", "regulatory-landscape", "Regulatory Landscape", 9, "09_regulatory_landscape.md"),
+    _r(
+        "assess-v1",
+        "distribution-disruption",
+        "Distribution Disruption",
+        8,
+        "08_distribution_disruption.md",
+    ),
+    _r(
+        "assess-v1",
+        "regulatory-landscape",
+        "Regulatory Landscape",
+        9,
+        "09_regulatory_landscape.md",
+    ),
     _r("assess-v1", "geo-aeo-state", "GEO/AEO State", 10, "10_geo_aeo_state.md"),
-    _r("assess-v1", "breach-incident-history", "Breach & Incident History", 11, "11_breach_incident_history.md"),
+    _r(
+        "assess-v1",
+        "breach-incident-history",
+        "Breach & Incident History",
+        11,
+        "11_breach_incident_history.md",
+    ),
     # Wave 3 — Analysis (3 modules, ordinals 12-14)
-    _a("assess-v1", "customer-journey", "Customer Journey", 12, "12_customer_journey.md"),
-    _a("assess-v1", "ai-maturity-scorecard", "AI Maturity Scorecard", 13, "13_ai_maturity_scorecard.md"),
-    _a("assess-v1", "structural-advantage", "Structural Advantage", 14, "14_structural_advantage.md"),
+    _a(
+        "assess-v1",
+        "customer-journey",
+        "Customer Journey",
+        12,
+        "12_customer_journey.md",
+    ),
+    _a(
+        "assess-v1",
+        "ai-maturity-scorecard",
+        "AI Maturity Scorecard",
+        13,
+        "13_ai_maturity_scorecard.md",
+    ),
+    _a(
+        "assess-v1",
+        "structural-advantage",
+        "Structural Advantage",
+        14,
+        "14_structural_advantage.md",
+    ),
     # Wave 4 — Synthesis (5 modules, ordinals 15-19)
-    _s("assess-v1", "adoption-scenario", "Adoption Scenario", 15, "15_adoption_scenario.md"),
-    _s("assess-v1", "inaction-scenario", "Inaction Scenario", 16, "16_inaction_scenario.md"),
-    _s("assess-v1", "opportunities", "Opportunities (Four-Pass Scorer)", 17, "17_opportunities.md"),
-    _s("assess-v1", "vendor-fit-roadmap", "Vendor Fit Roadmap", 18, "18_vendor_fit_roadmap.md"),
+    _s(
+        "assess-v1",
+        "adoption-scenario",
+        "Adoption Scenario",
+        15,
+        "15_adoption_scenario.md",
+    ),
+    _s(
+        "assess-v1",
+        "inaction-scenario",
+        "Inaction Scenario",
+        16,
+        "16_inaction_scenario.md",
+    ),
+    _s(
+        "assess-v1",
+        "opportunities",
+        "Opportunities (Four-Pass Scorer)",
+        17,
+        "17_opportunities.md",
+    ),
+    _s(
+        "assess-v1",
+        "vendor-fit-roadmap",
+        "Vendor Fit Roadmap",
+        18,
+        "18_vendor_fit_roadmap.md",
+    ),
     _s("assess-v1", "three-asks", "Three Asks", 19, "19_three_asks.md"),
     # Wave 5 — Quality Gates (2 modules, ordinals 20-21)
-    _g("assess-v1", "adversarial-redline", "Adversarial Redline", 20, "20_adversarial_redline.md"),
+    _g(
+        "assess-v1",
+        "adversarial-redline",
+        "Adversarial Redline",
+        20,
+        "20_adversarial_redline.md",
+    ),
     _g("assess-v1", "report-editor", "Report Editor", 21, "00_executive_summary.md"),
 )
 
@@ -255,31 +355,145 @@ ASSESS_V1_MODULES: tuple[ModuleSpec, ...] = (
 EURAIL_REPORT_V1_MODULES: tuple[ModuleSpec, ...] = (
     # Wave 1 — Research (14 modules, ordinals 01-14)
     _r("eurail-report-v1", "company-intel", "Company Intel", 1, "01_eurail_today.md"),
-    _r("eurail-report-v1", "cooperative-governance", "Cooperative Governance", 2, "02_cooperative_governance.md"),
-    _r("eurail-report-v1", "tech-stack-forensics", "Tech Stack Forensics", 3, "01_tech_stack_appendix.md"),
-    _r("eurail-report-v1", "industry-market", "Industry & Market", 4, "03_industry_position.md"),
-    _r("eurail-report-v1", "competitor-ai-benchmark", "Competitor AI Benchmark", 5, "04_competitor_ai_benchmark.md"),
+    _r(
+        "eurail-report-v1",
+        "cooperative-governance",
+        "Cooperative Governance",
+        2,
+        "02_cooperative_governance.md",
+    ),
+    _r(
+        "eurail-report-v1",
+        "tech-stack-forensics",
+        "Tech Stack Forensics",
+        3,
+        "01_tech_stack_appendix.md",
+    ),
+    _r(
+        "eurail-report-v1",
+        "industry-market",
+        "Industry & Market",
+        4,
+        "03_industry_position.md",
+    ),
+    _r(
+        "eurail-report-v1",
+        "competitor-ai-benchmark",
+        "Competitor AI Benchmark",
+        5,
+        "04_competitor_ai_benchmark.md",
+    ),
     _r("eurail-report-v1", "mcp-ecosystem", "MCP Ecosystem", 6, "05_mcp_ecosystem.md"),
-    _r("eurail-report-v1", "third-party-surrogates", "Third-Party Surrogates", 7, "06_third_party_surrogates.md"),
-    _r("eurail-report-v1", "customer-voice", "Customer Voice", 8, "07_customer_voice.md"),
-    _r("eurail-report-v1", "disruption-resilience", "Disruption Resilience", 9, "08_disruption_resilience.md"),
-    _r("eurail-report-v1", "breach-aftermath", "Breach Aftermath", 10, "09_breach_aftermath.md"),
-    _r("eurail-report-v1", "trip-planner-sunset", "Trip Planner Sunset", 11, "10_trip_planner_sunset.md"),
-    _r("eurail-report-v1", "distribution-disruption", "Distribution Disruption", 12, "11_distribution_disruption.md"),
-    _r("eurail-report-v1", "regulatory-landscape", "Regulatory Landscape", 13, "12_regulatory_landscape.md"),
+    _r(
+        "eurail-report-v1",
+        "third-party-surrogates",
+        "Third-Party Surrogates",
+        7,
+        "06_third_party_surrogates.md",
+    ),
+    _r(
+        "eurail-report-v1",
+        "customer-voice",
+        "Customer Voice",
+        8,
+        "07_customer_voice.md",
+    ),
+    _r(
+        "eurail-report-v1",
+        "disruption-resilience",
+        "Disruption Resilience",
+        9,
+        "08_disruption_resilience.md",
+    ),
+    _r(
+        "eurail-report-v1",
+        "breach-aftermath",
+        "Breach Aftermath",
+        10,
+        "09_breach_aftermath.md",
+    ),
+    _r(
+        "eurail-report-v1",
+        "trip-planner-sunset",
+        "Trip Planner Sunset",
+        11,
+        "10_trip_planner_sunset.md",
+    ),
+    _r(
+        "eurail-report-v1",
+        "distribution-disruption",
+        "Distribution Disruption",
+        12,
+        "11_distribution_disruption.md",
+    ),
+    _r(
+        "eurail-report-v1",
+        "regulatory-landscape",
+        "Regulatory Landscape",
+        13,
+        "12_regulatory_landscape.md",
+    ),
     _r("eurail-report-v1", "geo-aeo-state", "GEO/AEO State", 14, "13_geo_aeo_state.md"),
     # Wave 3 — Analysis (3 modules, ordinals 15-17)
-    _a("eurail-report-v1", "customer-journey", "Customer Journey", 15, "14_customer_journey_map.md"),
-    _a("eurail-report-v1", "ai-maturity-scorer", "AI Maturity Scorer", 16, "15_ai_maturity_scorecard.md"),
-    _a("eurail-report-v1", "federation-moat", "Federation Moat", 17, "16_federation_moat.md"),
+    _a(
+        "eurail-report-v1",
+        "customer-journey",
+        "Customer Journey",
+        15,
+        "14_customer_journey_map.md",
+    ),
+    _a(
+        "eurail-report-v1",
+        "ai-maturity-scorer",
+        "AI Maturity Scorer",
+        16,
+        "15_ai_maturity_scorecard.md",
+    ),
+    _a(
+        "eurail-report-v1",
+        "federation-moat",
+        "Federation Moat",
+        17,
+        "16_federation_moat.md",
+    ),
     # Wave 4 — Synthesis (4 modules, ordinals 18-21)
-    _s("eurail-report-v1", "adoption-scenario", "Adoption Scenario", 18, "17_adoption_scenario.md"),
-    _s("eurail-report-v1", "inaction-scenario", "Inaction Scenario", 19, "18_inaction_scenario.md"),
-    _s("eurail-report-v1", "oraclous-fit-roadmap", "Oraclous Fit Roadmap", 20, "19_oraclous_fit_roadmap.md"),
+    _s(
+        "eurail-report-v1",
+        "adoption-scenario",
+        "Adoption Scenario",
+        18,
+        "17_adoption_scenario.md",
+    ),
+    _s(
+        "eurail-report-v1",
+        "inaction-scenario",
+        "Inaction Scenario",
+        19,
+        "18_inaction_scenario.md",
+    ),
+    _s(
+        "eurail-report-v1",
+        "oraclous-fit-roadmap",
+        "Oraclous Fit Roadmap",
+        20,
+        "19_oraclous_fit_roadmap.md",
+    ),
     _s("eurail-report-v1", "three-asks", "Three Asks", 21, "20_three_asks.md"),
     # Wave 5 — Quality Gates (2 modules, ordinals 22-23)
-    _g("eurail-report-v1", "adversarial-redline", "Adversarial Redline", 22, "21_adversarial_redline.md"),
-    _g("eurail-report-v1", "report-editor", "Report Editor", 23, "00_executive_summary.md"),
+    _g(
+        "eurail-report-v1",
+        "adversarial-redline",
+        "Adversarial Redline",
+        22,
+        "21_adversarial_redline.md",
+    ),
+    _g(
+        "eurail-report-v1",
+        "report-editor",
+        "Report Editor",
+        23,
+        "00_executive_summary.md",
+    ),
 )
 
 

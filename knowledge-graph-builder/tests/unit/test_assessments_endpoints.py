@@ -18,6 +18,7 @@ Covers (per TASK-069 DoD):
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,7 +30,6 @@ from app.api.dependencies import get_current_user, get_current_user_id
 from app.api.v1.endpoints import assessments as assessments_mod
 from app.api.v1.endpoints.assessments import (
     _assessment_service,
-    _principal_graph_id,
 )
 from app.main import app
 from app.schemas.assessment_schemas import (
@@ -39,7 +39,6 @@ from app.schemas.assessment_schemas import (
     CreateRunResponse,
     FinalizeRunResponse,
 )
-
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -101,14 +100,14 @@ def mock_svc() -> AsyncMock:
             results=[BulkItemResult(id="d-1", success=True)],
         )
     )
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     svc.finalize_run = AsyncMock(
         return_value=FinalizeRunResponse(
             run_id="run-xyz",
             passed=True,
             status="finished",
-            finished_at=datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc),
+            finished_at=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
             direct_finding_count=10,
             inferred_finding_count=2,
             deliverable_count=5,
@@ -439,12 +438,8 @@ class TestHeartbeatEndpoints:
         resp = await client.post(f"{_BASE}/runs/unknown:heartbeat")
         assert resp.status_code == 404
 
-    async def test_module_run_heartbeat_uses_update_module_run(
-        self, client, mock_svc
-    ):
-        resp = await client.post(
-            f"{_BASE}/runs/run-xyz/module-runs/mr-1:heartbeat"
-        )
+    async def test_module_run_heartbeat_uses_update_module_run(self, client, mock_svc):
+        resp = await client.post(f"{_BASE}/runs/run-xyz/module-runs/mr-1:heartbeat")
         assert resp.status_code == 200, resp.text
         # Implementation reuses update_module_run with last_heartbeat_at set.
         mock_svc.update_module_run.assert_awaited()
@@ -495,9 +490,7 @@ class TestPersistRegistryItemEndpoint:
         item_arg = mock_svc.persist_registry_item.await_args.args[0]
         assert item_arg.graph_id == REGISTRY_CATALOG_GRAPH_ID
 
-    async def test_curated_calls_admin_verify(
-        self, client, mock_svc, monkeypatch
-    ):
+    async def test_curated_calls_admin_verify(self, client, mock_svc, monkeypatch):
         called = {}
 
         async def _spy_admin(user_id: str) -> None:

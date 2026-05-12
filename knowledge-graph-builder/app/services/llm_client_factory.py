@@ -10,6 +10,7 @@ from typing import Any, Union
 
 try:
     from anthropic import AsyncAnthropic
+
     _ANTHROPIC_AVAILABLE = True
 except ImportError:
     AsyncAnthropic = None  # type: ignore[misc,assignment]

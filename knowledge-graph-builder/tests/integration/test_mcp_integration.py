@@ -77,9 +77,9 @@ def test_all_expected_tools_registered():
     if not registered:
         # Fallback: check that the expected functions exist and are decorated
         for tool_name in EXPECTED_TOOLS:
-            assert hasattr(
-                srv, tool_name
-            ), f"Tool function `{tool_name}` not found in mcp.server module"
+            assert hasattr(srv, tool_name), (
+                f"Tool function `{tool_name}` not found in mcp.server module"
+            )
         return  # structural check passed
 
     missing = EXPECTED_TOOLS - registered
@@ -109,15 +109,15 @@ def test_all_expected_resources_registered():
             "resource_graph_nodes",
         }
         for fn_name in resource_fn_names:
-            assert hasattr(
-                srv, fn_name
-            ), f"Resource handler `{fn_name}` not found in mcp.server module"
+            assert hasattr(srv, fn_name), (
+                f"Resource handler `{fn_name}` not found in mcp.server module"
+            )
         return  # structural check passed
 
     for uri in EXPECTED_RESOURCES:
-        assert (
-            uri in registered
-        ), f"MCP resource {uri!r} not registered. Found: {registered}"
+        assert uri in registered, (
+            f"MCP resource {uri!r} not registered. Found: {registered}"
+        )
 
 
 def test_main_function_exists():

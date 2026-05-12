@@ -5,6 +5,7 @@ from app.repositories.credential_repository import CredentialRepository
 
 logger = logging.getLogger(__name__)
 
+
 async def get_credential_repository(request: Request) -> CredentialRepository:
     try:
         return request.app.state.credential_repository

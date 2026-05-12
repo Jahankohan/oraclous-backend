@@ -4,7 +4,9 @@ from pydantic import BaseModel, Field
 
 
 class PublishAgentRequest(BaseModel):
-    slug: str = Field(pattern=r"^[a-z0-9-]{3,64}$", description="URL-safe unique identifier")
+    slug: str = Field(
+        pattern=r"^[a-z0-9-]{3,64}$", description="URL-safe unique identifier"
+    )
     cors_origins: list[str] = Field(default_factory=list)
     rate_limit_rpm: int = Field(default=60, ge=1, le=1000)
     egress_url: str | None = None

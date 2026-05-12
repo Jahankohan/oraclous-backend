@@ -20,7 +20,7 @@ from app.core.logging import get_logger
 
 if TYPE_CHECKING:
     from app.services.background_jobs import WorkerNeo4jManager
-    from app.services.schema_mapper import GraphMappingRules, TableMapping
+    from app.services.schema_mapper import TableMapping
 
 logger = get_logger(__name__)
 
@@ -37,7 +37,7 @@ class RowTransformer:
         Must be used inside a context manager so the driver is available.
     """
 
-    def __init__(self, neo4j_manager: "WorkerNeo4jManager") -> None:
+    def __init__(self, neo4j_manager: WorkerNeo4jManager) -> None:
         self._manager = neo4j_manager
 
     # ------------------------------------------------------------------
@@ -46,7 +46,7 @@ class RowTransformer:
 
     def transform_table(
         self,
-        table_mapping: "TableMapping",
+        table_mapping: TableMapping,
         rows: list[dict[str, Any]],
         graph_id: str,
         connector_id: str,
@@ -103,7 +103,7 @@ class RowTransformer:
 
     def transform_junctions(
         self,
-        junction_mappings: list["TableMapping"],
+        junction_mappings: list[TableMapping],
         rows_by_table: dict[str, list[dict[str, Any]]],
         graph_id: str,
         connector_id: str,
@@ -192,7 +192,7 @@ def _entity_id(connector_id: str, table_name: str, pk_value: Any) -> str:
 
 def _build_entity_row_param(
     row: dict[str, Any],
-    table_mapping: "TableMapping",
+    table_mapping: TableMapping,
     graph_id: str,
     connector_id: str,
 ) -> dict[str, Any] | None:
@@ -219,8 +219,8 @@ def _build_entity_row_param(
 
 def _build_junction_row_param(
     row: dict[str, Any],
-    table_mapping: "TableMapping",
-    rel_mapping: "RelationshipMapping",  # type: ignore[name-defined]
+    table_mapping: TableMapping,
+    rel_mapping: RelationshipMapping,  # type: ignore[name-defined]
     graph_id: str,
     connector_id: str,
 ) -> dict[str, Any] | None:
@@ -243,8 +243,8 @@ def _build_junction_row_param(
 
 def _build_self_ref_row_param(
     row: dict[str, Any],
-    table_mapping: "TableMapping",
-    rel_mapping: "RelationshipMapping",  # type: ignore[name-defined]
+    table_mapping: TableMapping,
+    rel_mapping: RelationshipMapping,  # type: ignore[name-defined]
     graph_id: str,
     connector_id: str,
 ) -> dict[str, Any] | None:

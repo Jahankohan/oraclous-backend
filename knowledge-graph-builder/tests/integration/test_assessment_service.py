@@ -18,7 +18,6 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -312,15 +311,11 @@ class TestRecordFindingBulkIntegration:
             )
             for i in range(3)
         ]
-        first = await svc.record_finding_bulk(
-            _GID_A, run_id, module_run_id, findings
-        )
+        first = await svc.record_finding_bulk(_GID_A, run_id, module_run_id, findings)
         assert all(r.success and not r.already_existed for r in first.results)
 
         # Replay
-        second = await svc.record_finding_bulk(
-            _GID_A, run_id, module_run_id, findings
-        )
+        second = await svc.record_finding_bulk(_GID_A, run_id, module_run_id, findings)
         assert all(r.success and r.already_existed for r in second.results)
 
         # Verify only 3 :Finding rows exist, not 6
@@ -710,9 +705,7 @@ class TestSourceCatalogMerge:
             source_quote="Article 6",
             source_locator="https://...#art6",
         )
-        bulk = await svc.record_finding_bulk(
-            _GID_A, run.run_id, mr_id, [finding]
-        )
+        bulk = await svc.record_finding_bulk(_GID_A, run.run_id, mr_id, [finding])
         assert bulk.succeeded == 1
 
         # The CITES edge exists in the tenant graph; the :Source lives in the

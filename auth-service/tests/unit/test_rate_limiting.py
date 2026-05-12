@@ -32,7 +32,7 @@ def _make_pipeline_request(
     request.body = AsyncMock(return_value=body)
 
     pipe_mock = AsyncMock()
-    pipe_mock.incr = AsyncMock(return_value=None)   # queued — no direct result
+    pipe_mock.incr = AsyncMock(return_value=None)  # queued — no direct result
     pipe_mock.expire = AsyncMock(return_value=None)  # queued — no direct result
     if pipeline_error:
         pipe_mock.execute = AsyncMock(side_effect=pipeline_error)
@@ -135,9 +135,7 @@ async def test_skips_check_for_empty_api_key():
     """If api_key is missing or empty, the prefix check is skipped entirely."""
     from app.core.rate_limiter import enforce_key_prefix_rate_limit
 
-    request, pipe_mock, redis_mock = _make_pipeline_request(
-        incr_result=1, api_key=""
-    )
+    request, pipe_mock, redis_mock = _make_pipeline_request(incr_result=1, api_key="")
     await enforce_key_prefix_rate_limit(request)
 
     # Pipeline should not have been touched
@@ -151,9 +149,7 @@ async def test_key_prefix_is_first_12_chars():
     from app.core.rate_limiter import enforce_key_prefix_rate_limit
 
     api_key = "osk_AbCdEfGh1234_extra_suffix"
-    request, pipe_mock, _ = _make_pipeline_request(
-        incr_result=1, api_key=api_key
-    )
+    request, pipe_mock, _ = _make_pipeline_request(incr_result=1, api_key=api_key)
     await enforce_key_prefix_rate_limit(request)
 
     expected_prefix = api_key[:12]  # "osk_AbCdEfGh"

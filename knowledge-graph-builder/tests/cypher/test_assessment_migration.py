@@ -23,12 +23,9 @@ Run full suite against a live Neo4j:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 # --- Pure unit-tests: migration file structure -------------------------------
-
 from app.db.assessment_schema_init import (
     _split_statements,
     load_migration_statements,
@@ -129,7 +126,7 @@ def test_migration_bootstraps_catalog_anchors():
         assert ":__Rebac__" in stmt, (
             f"catalog anchor missing __Rebac__ marker per ADR-015: {stmt[:80]!r}"
         )
-        assert 'namespace: \'__system__\'' in stmt or 'namespace: "__system__"' in stmt, (
+        assert "namespace: '__system__'" in stmt or 'namespace: "__system__"' in stmt, (
             f"catalog anchor missing namespace='__system__' per ADR-015: {stmt[:80]!r}"
         )
 
@@ -408,7 +405,9 @@ class TestIndexUsedByPlanner:
             "indexseek" in plan_str
             or "nodeindexseek" in plan_str
             or "nodeindex" in plan_str
-        ), f"AssessmentRun (graph_id, status) query did not use an index: {plan_str[:400]}"
+        ), (
+            f"AssessmentRun (graph_id, status) query did not use an index: {plan_str[:400]}"
+        )
 
     async def test_module_run_wave_query_uses_index(self, neo4j_test_driver):
         async with neo4j_test_driver.session() as session:
@@ -466,4 +465,6 @@ class TestIndexUsedByPlanner:
             "indexseek" in plan_str
             or "nodeindexseek" in plan_str
             or "nodeindex" in plan_str
-        ), f"RegistryItem (kind, slug, version) lookup did not use an index: {plan_str[:400]}"
+        ), (
+            f"RegistryItem (kind, slug, version) lookup did not use an index: {plan_str[:400]}"
+        )

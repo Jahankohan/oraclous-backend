@@ -105,7 +105,7 @@ Environment variables (see `.env.example`):
 
 ## 🛠️ Development Rules & Refactoring
 
-**Golden Rule:** Enhance existing services in place—never duplicate functionality.  
+**Golden Rule:** Enhance existing services in place—never duplicate functionality.
 See [development-architecture-guide.md](design-docs/development-architecture-guide.md) for strict rules, enhancement patterns, and refactoring checklists.
 
 - One service file per major functionality
@@ -161,5 +161,5 @@ See [ultimate-graph-plans.md](design-docs/ultimate-graph-plans.md) for prioritiz
 
 ## 👥 Contribution & Contact
 
-Open issues or pull requests for questions, improvements, or bug reports.  
+Open issues or pull requests for questions, improvements, or bug reports.
 Follow the architecture and enhancement guidelines for all

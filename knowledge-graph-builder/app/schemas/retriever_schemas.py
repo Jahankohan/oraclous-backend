@@ -237,14 +237,14 @@ class DefaultRetrieverConfigs:
             retrieval_query=f"""
             // Multi-tenant filter for graph_id
             WHERE node.graph_id = '{graph_id}'
-            
+
             // Get entities that are connected to this chunk
             MATCH (entity {{graph_id: '{graph_id}'}})-[:FROM_CHUNK]->(node)
             OPTIONAL MATCH (node)-[:FROM_DOCUMENT]->(document {{graph_id: '{graph_id}'}})
-            
+
             // Traverse entity relationships for context
             OPTIONAL MATCH (entity)-[r]-(related_entity {{graph_id: '{graph_id}'}})
-            
+
             RETURN node.text as text,
                    document.path as document_path,
                    collect(DISTINCT entity.name) as entities,
@@ -278,14 +278,14 @@ class DefaultRetrieverConfigs:
             retrieval_query=f"""
             // Multi-tenant filter for graph_id
             WHERE node.graph_id = '{graph_id}'
-            
+
             // Get entities that are connected to this chunk
             MATCH (entity {{graph_id: '{graph_id}'}})-[:FROM_CHUNK]->(node)
             OPTIONAL MATCH (node)-[:FROM_DOCUMENT]->(document {{graph_id: '{graph_id}'}})
-            
+
             // Traverse entity relationships for context
             OPTIONAL MATCH (entity)-[r]-(related_entity {{graph_id: '{graph_id}'}})
-            
+
             RETURN node.text as text,
                    document.path as document_path,
                    collect(DISTINCT entity.name) as entities,
@@ -306,23 +306,23 @@ class DefaultRetrieverConfigs:
         return Text2CypherRetrieverConfig(
             neo4j_schema=f"""
             // Multi-tenant Knowledge Graph Schema for graph_id: {graph_id}
-            
+
             // Core entity types
             (:Entity {{name: string, type: string, graph_id: string}})
             (:Chunk {{text: string, graph_id: string, embedding: vector}})
             (:Document {{path: string, title: string, graph_id: string}})
-            
+
             // Entity relationships
             (:Entity)-[:FOUNDED_BY]->(:Entity)
             (:Entity)-[:CEO_OF]->(:Entity)
             (:Entity)-[:LOCATED_IN]->(:Entity)
             (:Entity)-[:PARTNER_WITH]->(:Entity)
             (:Entity)-[:DEVELOPS]->(:Entity)
-            
+
             // Document relationships
             (:Entity)-[:FROM_CHUNK]->(:Chunk)
             (:Chunk)-[:FROM_DOCUMENT]->(:Document)
-            
+
             // All nodes have graph_id property for multi-tenant isolation
             """,
             examples=[

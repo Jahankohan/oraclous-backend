@@ -16,7 +16,7 @@ Integration tests against a real Neo4j live in
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -34,7 +34,6 @@ from app.schemas.assessment_schemas import (
     UpdateModuleRunRequest,
 )
 from app.services.assessment_service import AssessmentService
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -111,7 +110,7 @@ class TestSchemas:
                 visibility="private",
                 owner_user_id="u1",
                 name="x",
-                yanked_at=datetime.now(timezone.utc),
+                yanked_at=datetime.now(UTC),
             )
 
 
@@ -160,12 +159,14 @@ class TestCreateRun:
         # 6,7,8) ModuleRun MERGE × 3
         driver = _make_driver(
             record_sequences=[
-                template_recs,             # template lookup
-                module_recs,               # modules
-                [],                        # no existing run
+                template_recs,  # template lookup
+                module_recs,  # modules
+                [],  # no existing run
                 [_rec(subject_id="subj-1")],  # subject merge
                 [_rec(id="run-id-stub")],  # run MERGE: returns the new run's id
-                [], [], [],                # 3 module-run MERGEs
+                [],
+                [],
+                [],  # 3 module-run MERGEs
             ]
         )
         svc = AssessmentService(driver)
@@ -275,7 +276,7 @@ class TestUpdateModuleRun:
     async def test_update_status_to_running(self):
         driver = _make_driver(record_sequences=[[_rec(id="mr-1")]])
         svc = AssessmentService(driver)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ok = await svc.update_module_run(
             "tenant-A",
             "run-1",
@@ -406,9 +407,7 @@ class TestRecordFindingBulk:
             )
         ]
         with pytest.raises(ValueError, match="ModuleRun not found"):
-            await svc.record_finding_bulk(
-                "tenant-A", "run-1", "mr-missing", findings
-            )
+            await svc.record_finding_bulk("tenant-A", "run-1", "mr-missing", findings)
 
 
 # ── record_conflict ───────────────────────────────────────────────────────────
@@ -421,9 +420,7 @@ class TestRecordConflict:
         # 1) cross-tenant probe → empty (no existing :Conflict)
         # 2) Conflict MERGE → created=True
         # 3 + 4) one [:INVOLVES] edge per involved_finding_id
-        driver = _make_driver(
-            record_sequences=[[], [_rec(created=True)], [], []]
-        )
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)], [], []])
         svc = AssessmentService(driver)
         conflict = Conflict(
             conflict_id="cf-1",
@@ -444,9 +441,7 @@ class TestRecordConflict:
     async def test_record_conflict_cross_tenant_collision_rejected(self):
         """Pre-MERGE probe detects a foreign-tenant :Conflict with the same id."""
         # 1) probe returns a foreign-tenant row
-        driver = _make_driver(
-            record_sequences=[[_rec(graph_id="OTHER-tenant")]]
-        )
+        driver = _make_driver(record_sequences=[[_rec(graph_id="OTHER-tenant")]])
         svc = AssessmentService(driver)
         conflict = Conflict(
             conflict_id="cf-x",
@@ -480,9 +475,7 @@ class TestRecordUnresolvedQuestion:
     async def test_question_writes_raised_edge(self):
         # 1) cross-tenant probe → empty
         # 2) Question MERGE + RAISED edge
-        driver = _make_driver(
-            record_sequences=[[], [_rec(created=True)]]
-        )
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]])
         svc = AssessmentService(driver)
         q = UnresolvedQuestion(
             question_id="q-1",
@@ -491,9 +484,7 @@ class TestRecordUnresolvedQuestion:
             module_run_id="mr-1",
             text="What is X?",
         )
-        created = await svc.record_unresolved_question(
-            "tenant-A", "run-1", "mr-1", q
-        )
+        created = await svc.record_unresolved_question("tenant-A", "run-1", "mr-1", q)
         assert created is True
         cypher, params = driver.execute_query.call_args[0]
         assert "MERGE (q:UnresolvedQuestion:__Platform__" in cypher
@@ -502,9 +493,7 @@ class TestRecordUnresolvedQuestion:
 
     async def test_question_cross_tenant_collision_rejected(self):
         """Pre-MERGE probe detects foreign-tenant :UnresolvedQuestion."""
-        driver = _make_driver(
-            record_sequences=[[_rec(graph_id="OTHER-tenant")]]
-        )
+        driver = _make_driver(record_sequences=[[_rec(graph_id="OTHER-tenant")]])
         svc = AssessmentService(driver)
         q = UnresolvedQuestion(
             question_id="q-x",
@@ -527,9 +516,7 @@ class TestPersistDeliverable:
         # 1) cross-tenant probe → empty
         # 2) Deliverable MERGE
         # 3) [:PRODUCED_DELIVERABLE] wiring (because module_run_id is set)
-        driver = _make_driver(
-            record_sequences=[[], [_rec(created=True)], []]
-        )
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)], []])
         svc = AssessmentService(driver)
         d = Deliverable(
             deliverable_id="d-1",
@@ -545,9 +532,7 @@ class TestPersistDeliverable:
 
     async def test_deliverable_without_module_run_writes_two_calls(self):
         # 1) probe → empty; 2) Deliverable MERGE
-        driver = _make_driver(
-            record_sequences=[[], [_rec(created=True)]]
-        )
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]])
         svc = AssessmentService(driver)
         d = Deliverable(
             deliverable_id="d-final",
@@ -562,9 +547,7 @@ class TestPersistDeliverable:
 
     async def test_deliverable_cross_tenant_collision_rejected(self):
         """Pre-MERGE probe detects foreign-tenant :Deliverable."""
-        driver = _make_driver(
-            record_sequences=[[_rec(graph_id="OTHER-tenant")]]
-        )
+        driver = _make_driver(record_sequences=[[_rec(graph_id="OTHER-tenant")]])
         svc = AssessmentService(driver)
         d = Deliverable(
             deliverable_id="d-x",
@@ -579,9 +562,7 @@ class TestPersistDeliverable:
 
     async def test_persist_final_docs_returns_bulk_response(self):
         # 5 final docs: each gets a probe + a MERGE call (no module_run_id).
-        driver = _make_driver(
-            record_sequences=[[], [_rec(created=True)]] * 5
-        )
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]] * 5)
         svc = AssessmentService(driver)
         deliverables = [
             Deliverable(
@@ -637,7 +618,7 @@ class TestFinalizeRun:
             record_sequences=[
                 [
                     _rec(
-                        direct_count=0,    # zero direct findings — fails gate
+                        direct_count=0,  # zero direct findings — fails gate
                         inferred_count=2,
                         deliverable_count=0,  # zero deliverables — fails gate
                         unresolved_conflict_count=1,
@@ -669,9 +650,7 @@ class TestRegistryRouting:
     async def test_private_routes_to_owner_tenant_graph(self):
         # Per TASK-073 Finding 1 fix: ownership/tenancy probe runs first.
         # 1) probe → empty; 2) RegistryItem MERGE
-        driver = _make_driver(
-            record_sequences=[[], [_rec(created=True)]]
-        )
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]])
         svc = AssessmentService(driver)
         item = RegistryItem(
             item_id="ri-1",
@@ -682,16 +661,16 @@ class TestRegistryRouting:
             owner_user_id="u1",
             name="my skill",
         )
-        created = await svc.persist_registry_item(item, owner_tenant_graph_id="tenant-owner")
+        created = await svc.persist_registry_item(
+            item, owner_tenant_graph_id="tenant-owner"
+        )
         assert created is True
         params = driver.execute_query.call_args[0][1]
         assert params["graph_id"] == "tenant-owner"
         assert params["visibility"] == "private"
 
     async def test_public_routes_to_registry_catalog(self):
-        driver = _make_driver(
-            record_sequences=[[], [_rec(created=True)]]
-        )
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]])
         svc = AssessmentService(driver)
         item = RegistryItem(
             item_id="ri-2",
@@ -707,9 +686,7 @@ class TestRegistryRouting:
         assert params["graph_id"] == REGISTRY_CATALOG_GRAPH_ID
 
     async def test_curated_routes_to_registry_catalog(self):
-        driver = _make_driver(
-            record_sequences=[[], [_rec(created=True)]]
-        )
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]])
         svc = AssessmentService(driver)
         item = RegistryItem(
             item_id="ri-3",
@@ -732,11 +709,13 @@ class TestRegistryRouting:
         # 1) probe returns an existing public item owned by 'alice'
         driver = _make_driver(
             record_sequences=[
-                [_rec(
-                    graph_id=REGISTRY_CATALOG_GRAPH_ID,
-                    owner_user_id="alice",
-                    visibility="public",
-                )]
+                [
+                    _rec(
+                        graph_id=REGISTRY_CATALOG_GRAPH_ID,
+                        owner_user_id="alice",
+                        visibility="public",
+                    )
+                ]
             ]
         )
         svc = AssessmentService(driver)
@@ -761,11 +740,13 @@ class TestRegistryRouting:
         # 2) MERGE
         driver = _make_driver(
             record_sequences=[
-                [_rec(
-                    graph_id=REGISTRY_CATALOG_GRAPH_ID,
-                    owner_user_id="alice",
-                    visibility="public",
-                )],
+                [
+                    _rec(
+                        graph_id=REGISTRY_CATALOG_GRAPH_ID,
+                        owner_user_id="alice",
+                        visibility="public",
+                    )
+                ],
                 [_rec(created=False)],
             ]
         )
@@ -790,11 +771,13 @@ class TestRegistryRouting:
         # 2) MERGE
         driver = _make_driver(
             record_sequences=[
-                [_rec(
-                    graph_id=REGISTRY_CATALOG_GRAPH_ID,
-                    owner_user_id="eve",
-                    visibility="curated",
-                )],
+                [
+                    _rec(
+                        graph_id=REGISTRY_CATALOG_GRAPH_ID,
+                        owner_user_id="eve",
+                        visibility="curated",
+                    )
+                ],
                 [_rec(created=False)],
             ]
         )
@@ -819,11 +802,13 @@ class TestRegistryRouting:
         # writing public (target = __registry__)
         driver = _make_driver(
             record_sequences=[
-                [_rec(
-                    graph_id="tenant-X",
-                    owner_user_id="u1",
-                    visibility="private",
-                )],
+                [
+                    _rec(
+                        graph_id="tenant-X",
+                        owner_user_id="u1",
+                        visibility="private",
+                    )
+                ],
             ]
         )
         svc = AssessmentService(driver)

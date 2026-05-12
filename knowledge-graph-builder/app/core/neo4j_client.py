@@ -292,9 +292,7 @@ class Neo4jClient:
                 async with self.async_driver.session(
                     database=settings.NEO4J_DATABASE
                 ) as session:
-                    _neo4j_acquisition_histogram.record(
-                        (time.monotonic() - t0) * 1000
-                    )
+                    _neo4j_acquisition_histogram.record((time.monotonic() - t0) * 1000)
                     result = await session.run(query, parameters or {})
                     records = await result.data()
                     span.set_attribute("db.neo4j.row_count", len(records))
@@ -357,9 +355,7 @@ class Neo4jClient:
                 async with self.async_driver.session(
                     database=settings.NEO4J_DATABASE
                 ) as session:
-                    _neo4j_acquisition_histogram.record(
-                        (time.monotonic() - t0) * 1000
-                    )
+                    _neo4j_acquisition_histogram.record((time.monotonic() - t0) * 1000)
 
                     async def tx_func(tx):
                         result = await tx.run(query, parameters or {})

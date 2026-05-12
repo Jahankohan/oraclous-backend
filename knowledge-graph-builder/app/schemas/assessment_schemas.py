@@ -28,7 +28,7 @@ REST layer (TASK-069) and MCP wrappers (SPRINT-002) exchange with callers.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -97,15 +97,17 @@ class AssessmentTemplate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     template_id: str
-    slug: str = Field(..., description="Stable human-readable identifier (e.g. 'eurail-report-v1').")
+    slug: str = Field(
+        ..., description="Stable human-readable identifier (e.g. 'eurail-report-v1')."
+    )
     name: str
     version: str
-    vertical_slug: Optional[str] = Field(
+    vertical_slug: str | None = Field(
         default=None,
         description="Vertical specialization, e.g. 'rail-cooperative'. None for generic assess-vN.",
     )
-    description: Optional[str] = None
-    created_at: Optional[datetime] = None
+    description: str | None = None
+    created_at: datetime | None = None
 
 
 class Module(BaseModel):
@@ -121,14 +123,18 @@ class Module(BaseModel):
     template_id: str = Field(..., description="The template this module belongs to.")
     slug: str
     name: str
-    wave: int = Field(..., ge=1, description="Wave number (1-based). All modules in a wave run in parallel.")
+    wave: int = Field(
+        ...,
+        ge=1,
+        description="Wave number (1-based). All modules in a wave run in parallel.",
+    )
     ordinal: int = Field(..., ge=0, description="Display ordering inside the wave.")
     kind: ModuleKind
-    agent_id: Optional[str] = Field(
+    agent_id: str | None = Field(
         default=None,
         description="The `:Agent` row that carries the system prompt / model / tools for this module.",
     )
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class Source(BaseModel):
@@ -144,15 +150,17 @@ class Source(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_id: str
-    type: Optional[str] = Field(default=None, description="e.g. 'article', 'paper', 'press', 'webpage'.")
-    url_normalized: Optional[str] = Field(
+    type: str | None = Field(
+        default=None, description="e.g. 'article', 'paper', 'press', 'webpage'."
+    )
+    url_normalized: str | None = Field(
         default=None,
         description="Canonicalized URL used as the dedup key; None for non-web sources.",
     )
-    name: Optional[str] = None
-    publication_date: Optional[str] = None
-    fetch_date: Optional[str] = None
-    language: Optional[str] = None
+    name: str | None = None
+    publication_date: str | None = None
+    fetch_date: str | None = None
+    language: str | None = None
 
 
 # =============================================================================
@@ -175,7 +183,7 @@ class Subject(BaseModel):
     graph_id: str
     slug: str
     name: str
-    vertical_slug: Optional[str] = None
+    vertical_slug: str | None = None
     domains: list[str] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
 
@@ -197,14 +205,14 @@ class AssessmentRun(BaseModel):
     template_id: str
     subject_id: str
     status: RunStatus = "planned"
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    orchestrator_last_seen: Optional[datetime] = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    orchestrator_last_seen: datetime | None = None
     cli_flags: dict[str, Any] = Field(
         default_factory=dict,
         description="The CLI flags / config the orchestrator was invoked with.",
     )
-    failure_reason: Optional[str] = None
+    failure_reason: str | None = None
 
 
 class ModuleRun(BaseModel):
@@ -222,17 +230,17 @@ class ModuleRun(BaseModel):
     module_id: str
     wave: int = Field(..., ge=1)
     status: RunStatus = "planned"
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    last_heartbeat_at: Optional[datetime] = Field(
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    last_heartbeat_at: datetime | None = Field(
         default=None,
         description="Subagent heartbeat; orphan detection threshold = 5 minutes (STORY-026).",
     )
     evidence_count: int = Field(default=0, ge=0)
-    deliverable_path: Optional[str] = Field(
+    deliverable_path: str | None = Field(
         default=None, description="Filesystem path for the module's MD output."
     )
-    failure_reason: Optional[str] = None
+    failure_reason: str | None = None
 
 
 class Finding(BaseModel):
@@ -251,28 +259,33 @@ class Finding(BaseModel):
     run_id: str
     module_run_id: str
     claim: str
-    raw: Optional[str] = Field(default=None, description="Verbatim quote or raw extract text.")
+    raw: str | None = Field(
+        default=None, description="Verbatim quote or raw extract text."
+    )
     label: FindingLabel = "DIRECT"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     dimensions: list[str] = Field(
         default_factory=list,
         description="Free-form dimension tags (e.g. 'regulatory', 'tech-maturity').",
     )
-    ai_adoption_relevance: Optional[float] = Field(
-        default=None, ge=0.0, le=1.0,
+    ai_adoption_relevance: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
         description="Optional secondary score specific to AI-adoption assessments.",
     )
-    notes: Optional[str] = None
-    superseded_by: Optional[str] = Field(
+    notes: str | None = None
+    superseded_by: str | None = Field(
         default=None, description="finding_id of a later, more authoritative finding."
     )
     # Citation — denormalized for write-side simplicity. The service layer
     # MERGEs the `:Source` in the catalog graph and creates the `[:CITES]` edge.
-    source_id: Optional[str] = None
-    source_quote: Optional[str] = Field(
-        default=None, description="The exact passage cited (lands on the [:CITES] edge)."
+    source_id: str | None = None
+    source_quote: str | None = Field(
+        default=None,
+        description="The exact passage cited (lands on the [:CITES] edge).",
     )
-    source_locator: Optional[str] = Field(
+    source_locator: str | None = Field(
         default=None, description="Page/timestamp/anchor (lands on the [:CITES] edge)."
     )
 
@@ -288,8 +301,8 @@ class Conflict(BaseModel):
     topic: str
     summary: str
     status: ConflictStatus = "open"
-    resolution: Optional[str] = None
-    synthesis_note: Optional[str] = None
+    resolution: str | None = None
+    synthesis_note: str | None = None
     involved_finding_ids: list[str] = Field(
         default_factory=list,
         description="finding_ids that participate in this conflict. The service creates one [:INVOLVES] edge per id.",
@@ -311,26 +324,26 @@ class Deliverable(BaseModel):
     deliverable_id: str
     graph_id: str
     run_id: str
-    module_run_id: Optional[str] = Field(
+    module_run_id: str | None = Field(
         default=None,
         description="The module that produced this artifact, when applicable. None for final-* kinds.",
     )
     kind: DeliverableKind
     filename: str
     ordinal: int = Field(default=0, ge=0)
-    content_uri: Optional[str] = Field(
+    content_uri: str | None = Field(
         default=None,
         description="Path/URI to the rendered artifact (SPRINT-001 filesystem placeholder).",
     )
-    content_inline: Optional[str] = Field(
+    content_inline: str | None = Field(
         default=None,
         description=(
             "Optional inline content for small markdown payloads "
             "(< ~50KB). SPRINT-002 introduces :Blob CAS for large payloads."
         ),
     )
-    sha256: Optional[str] = None
-    word_count: Optional[int] = Field(default=None, ge=0)
+    sha256: str | None = None
+    word_count: int | None = Field(default=None, ge=0)
 
 
 class UnresolvedQuestion(BaseModel):
@@ -343,7 +356,7 @@ class UnresolvedQuestion(BaseModel):
     run_id: str
     module_run_id: str
     text: str
-    suggested_module: Optional[str] = Field(
+    suggested_module: str | None = Field(
         default=None,
         description="Slug of the module that should answer this question, if known.",
     )
@@ -385,17 +398,17 @@ class RegistryItem(BaseModel):
     visibility: RegistryVisibility = "private"
     owner_user_id: str
     name: str
-    description: Optional[str] = None
-    content_uri: Optional[str] = None
-    sha256: Optional[str] = None
-    created_at: Optional[datetime] = None
-    yanked_at: Optional[datetime] = None
+    description: str | None = None
+    content_uri: str | None = None
+    sha256: str | None = None
+    created_at: datetime | None = None
+    yanked_at: datetime | None = None
 
     @field_validator("yanked_at")
     @classmethod
     def _yanked_at_requires_visibility(
-        cls, v: Optional[datetime], info: Any
-    ) -> Optional[datetime]:
+        cls, v: datetime | None, info: Any
+    ) -> datetime | None:
         """ADR-019: yanked is reachable from public; ensure consistency."""
         if v is not None and info.data.get("visibility") not in ("yanked", "public"):
             raise ValueError(
@@ -423,7 +436,7 @@ class CreateRunRequest(BaseModel):
     template_slug: str
     subject: Subject
     cli_flags: dict[str, Any] = Field(default_factory=dict)
-    run_id: Optional[str] = Field(
+    run_id: str | None = Field(
         default=None,
         description=(
             "Optional client-supplied UUID for idempotent retry. If a run with this id "
@@ -449,13 +462,13 @@ class CreateRunResponse(BaseModel):
 class UpdateModuleRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Optional[RunStatus] = None
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    last_heartbeat_at: Optional[datetime] = None
-    evidence_count: Optional[int] = Field(default=None, ge=0)
-    deliverable_path: Optional[str] = None
-    failure_reason: Optional[str] = None
+    status: RunStatus | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    evidence_count: int | None = Field(default=None, ge=0)
+    deliverable_path: str | None = None
+    failure_reason: str | None = None
 
 
 class RecordFindingBulkRequest(BaseModel):
@@ -476,10 +489,12 @@ class BulkItemResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(..., description="The natural id of the row (finding_id, conflict_id, …).")
+    id: str = Field(
+        ..., description="The natural id of the row (finding_id, conflict_id, …)."
+    )
     success: bool
     already_existed: bool = False
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class BulkResponse(BaseModel):

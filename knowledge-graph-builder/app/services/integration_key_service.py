@@ -3,7 +3,6 @@
 import hashlib
 import secrets
 import time
-import uuid
 
 from app.core.logging import get_logger
 
@@ -98,7 +97,9 @@ class IntegrationKeyService:
                 {"slug": slug},
             )
             if check.records:
-                raise ValueError(f"Slug '{slug}' is already taken by an active published agent")
+                raise ValueError(
+                    f"Slug '{slug}' is already taken by an active published agent"
+                )
             raise ValueError(f"Agent {agent_id} not found in graph {graph_id}")
         return key, slug
 
@@ -129,10 +130,17 @@ class IntegrationKeyService:
             SET p.key_hash = $key_hash, p.key_last4 = $key_last4
             RETURN p.slug AS slug
             """,
-            {"agent_id": agent_id, "graph_id": graph_id, "key_hash": new_hash, "key_last4": new_last4},
+            {
+                "agent_id": agent_id,
+                "graph_id": graph_id,
+                "key_hash": new_hash,
+                "key_last4": new_last4,
+            },
         )
         if not result.records:
-            raise ValueError(f"No active published agent {agent_id} in graph {graph_id}")
+            raise ValueError(
+                f"No active published agent {agent_id} in graph {graph_id}"
+            )
         return new_key
 
     async def get_published(self, slug: str) -> dict | None:

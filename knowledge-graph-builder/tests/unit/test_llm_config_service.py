@@ -1,14 +1,14 @@
 """Unit tests for LLMConfigService (STORY-021 / TASK-040)."""
 
-from unittest.mock import AsyncMock, MagicMock, call
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from app.schemas.llm_config_schemas import LLMConfigCreate, LLMProvider
 from app.services.llm_config_service import LLMConfigService
 
 
-def _make_create(provider: str = "openrouter", model: str = "openai/gpt-4o") -> LLMConfigCreate:
+def _make_create(
+    provider: str = "openrouter", model: str = "openai/gpt-4o"
+) -> LLMConfigCreate:
     return LLMConfigCreate(
         provider=LLMProvider(provider),
         model=model,
@@ -32,7 +32,9 @@ class TestCreateOrgConfig:
     async def test_writes_api_key_ref_not_plaintext_key(self):
         driver = _mock_driver()
         svc = LLMConfigService(driver)
-        config_id = await svc.create_org_config("org1", "user1", _make_create(), "cred-ref-001")
+        config_id = await svc.create_org_config(
+            "org1", "user1", _make_create(), "cred-ref-001"
+        )
 
         assert isinstance(config_id, str) and len(config_id) == 36
         query, params = driver.execute_query.call_args.args
@@ -78,7 +80,9 @@ class TestCreateProjectConfig:
 class TestListOrgConfigs:
     async def test_returns_only_active_configs(self):
         rec1 = MagicMock()
-        rec1.__getitem__ = lambda self, k: {"config_id": "c1", "scope": "org"} if k == "c" else None
+        rec1.__getitem__ = (
+            lambda self, k: {"config_id": "c1", "scope": "org"} if k == "c" else None
+        )
         driver = MagicMock()
         result = MagicMock()
         result.records = [rec1]

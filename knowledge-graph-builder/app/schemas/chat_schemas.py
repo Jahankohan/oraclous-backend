@@ -7,7 +7,7 @@ all Neo4j GraphRAG retriever types with proper validation and examples.
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -141,7 +141,7 @@ class ChatRequest(BaseModel):
     # These complement temporal_filter and apply as a Cypher WHERE clause on
     # relationship properties (event_time / ingestion_time).
     # Omitting temporal_mode produces identical behavior to today (no change).
-    temporal_mode: Optional[TemporalMode] = Field(
+    temporal_mode: TemporalMode | None = Field(
         default=None,
         description=(
             "Temporal query mode. "
@@ -151,11 +151,11 @@ class ChatRequest(BaseModel):
             "Omit for current-state behavior."
         ),
     )
-    temporal_at: Optional[datetime] = Field(
+    temporal_at: datetime | None = Field(
         default=None,
         description="Reference timestamp for point_in_time and knowledge_as_of modes.",
     )
-    temporal_since: Optional[datetime] = Field(
+    temporal_since: datetime | None = Field(
         default=None,
         description="Reference timestamp for changes_since mode.",
     )
@@ -278,7 +278,7 @@ class ChatResponse(BaseModel):
 
     # Temporal mode confirmation — echoes back which temporal filter was applied.
     # Null when no temporal_mode was requested (backward-compatible default).
-    temporal_mode_applied: Optional[str] = Field(
+    temporal_mode_applied: str | None = Field(
         default=None,
         description="Temporal query mode that was applied to this response, or null if none.",
     )

@@ -32,7 +32,6 @@ def _mock_auth(user_id: str):
 
 
 class TestChatOwnership:
-
     @pytest.mark.unit
     async def test_chat_returns_403_when_graph_not_found(self, async_client):
         """Returns 403 when graph_id does not exist (not 404 — avoid enumeration)."""
@@ -146,7 +145,6 @@ class TestChatOwnership:
 
 
 class TestChatStreamOwnership:
-
     @pytest.mark.unit
     async def test_stream_returns_403_when_graph_not_found(self, async_client):
         """POST /chat/stream returns 403 when graph_id does not exist."""

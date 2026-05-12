@@ -91,7 +91,10 @@ async def enforce_key_prefix_rate_limit(request: Request) -> None:
 # body (e.g. "Rate limit exceeded: 10 per 1 minute").  This handler returns a
 # generic message so no rate-limit configuration is exposed to clients.
 
-async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+
+async def rate_limit_exceeded_handler(
+    request: Request, exc: RateLimitExceeded
+) -> JSONResponse:
     """Return a generic 429 — never expose limit configuration in the body."""
     return JSONResponse(
         status_code=429,

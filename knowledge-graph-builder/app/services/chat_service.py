@@ -406,9 +406,7 @@ class ChatService:
             }
         elif temporal_mode == TemporalMode.KNOWLEDGE_AS_OF:
             clause = "r.ingestion_time <= $temporal_at"
-            params = {
-                "temporal_at": temporal_at.isoformat() if temporal_at else None
-            }
+            params = {"temporal_at": temporal_at.isoformat() if temporal_at else None}
         elif temporal_mode == TemporalMode.CHANGES_SINCE:
             clause = "r.ingestion_time > $temporal_since"
             params = {
@@ -639,7 +637,7 @@ class ChatService:
                                 if r.get("anchor") and r.get("hop1_name")
                             )
                             augmented_query = (
-                                f"{query_text}\n\n" f"[Graph context: {hop_context}]"
+                                f"{query_text}\n\n[Graph context: {hop_context}]"
                             )
                             raw_result = self.rag.search(
                                 query_text=augmented_query,
@@ -718,8 +716,7 @@ class ChatService:
             # LLM timeout or rate-limit — return available graph context without an answer.
             _llm_err_code, _llm_err_msg = KGBError.LLM_UNAVAILABLE
             logger.warning(
-                f"LLM unavailable for graph {self.graph_id} "
-                f"[{_llm_err_code}]: {e}"
+                f"LLM unavailable for graph {self.graph_id} [{_llm_err_code}]: {e}"
             )
             span.record_exception(e)
             span.set_status(otel_trace.StatusCode.ERROR, str(e))
@@ -764,9 +761,7 @@ class ChatService:
         community_docs = await self.retriever.search(query_text)
 
         if not community_docs:
-            logger.warning(
-                "No community summaries found for graph %s", self.graph_id
-            )
+            logger.warning("No community summaries found for graph %s", self.graph_id)
             span.set_attribute("chat.is_grounded", False)
             span.set_attribute("chat.confidence", 0.0)
             span.set_attribute("chat.sources_count", 0)
@@ -790,9 +785,7 @@ class ChatService:
         ]
         context = "\n\n".join(context_parts)
 
-        prompt = STRICT_GROUNDING_PROMPT.format(
-            context=context, query_text=query_text
-        )
+        prompt = STRICT_GROUNDING_PROMPT.format(context=context, query_text=query_text)
         try:
             llm_response = await self.llm.ainvoke(prompt)
             answer = llm_response.content

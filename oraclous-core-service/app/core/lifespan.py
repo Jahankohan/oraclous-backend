@@ -1,5 +1,4 @@
 # app/core/lifespan.py
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -17,56 +16,59 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("Starting Oraclous Core Service...")
-    
+
     try:
         # Initialize database
         logger.info("Initializing database...")
         await init_db()
-        
+
         # Sync tools from database to in-memory registry
         logger.info("Synchronizing tools...")
         sync_result = await tool_sync_service.sync_tools_on_startup()
-        
+
         # Store sync result in app state for monitoring
         app.state.tool_sync_result = sync_result
-        
+
         logger.info(
             f"Startup completed successfully. Synced {sync_result['synced_successfully']} tools."
         )
-        
+
     except Exception as e:
         logger.error(f"Startup failed: {str(e)}")
         # You might want to raise this to prevent app startup
         # raise
-        
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down Oraclous Core Service...")
-    
+
     try:
         # Close database connections
         await close_db()
         logger.info("Database connections closed.")
-        
+
     except Exception as e:
         logger.error(f"Shutdown error: {str(e)}")
-    
+
     logger.info("Shutdown completed.")
 
 
 # Alternative approach using traditional startup/shutdown events
 # (Use this if you prefer not to use lifespan context manager)
 
+
 async def startup_event():
     """Startup event handler"""
     logger.info("Starting Oraclous Core Service...")
-    
+
     try:
         await init_db()
         sync_result = await tool_sync_service.sync_tools_on_startup()
-        logger.info(f"Startup completed. Synced {sync_result['synced_successfully']} tools.")
-        
+        logger.info(
+            f"Startup completed. Synced {sync_result['synced_successfully']} tools."
+        )
+
     except Exception as e:
         logger.error(f"Startup failed: {str(e)}")
 
@@ -74,11 +76,11 @@ async def startup_event():
 async def shutdown_event():
     """Shutdown event handler"""
     logger.info("Shutting down Oraclous Core Service...")
-    
+
     try:
         await close_db()
         logger.info("Shutdown completed.")
-        
+
     except Exception as e:
         logger.error(f"Shutdown error: {str(e)}")
 
@@ -97,6 +99,6 @@ app = FastAPI(
 )
 
 # OR if using traditional events:
-# app.add_event_handler("startup", startup_event)  
+# app.add_event_handler("startup", startup_event)
 # app.add_event_handler("shutdown", shutdown_event)
 """

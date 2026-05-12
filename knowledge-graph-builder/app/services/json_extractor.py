@@ -63,9 +63,7 @@ def _infer_schema(obj: Any) -> Any:
             return {"type": "array", "items": merged}
 
         # If all items have the same primitive type, use that
-        unique = set(
-            s if isinstance(s, str) else str(s) for s in item_schemas
-        )
+        unique = set(s if isinstance(s, str) else str(s) for s in item_schemas)
         if len(unique) == 1:
             return {"type": "array", "items": item_schemas[0]}
 

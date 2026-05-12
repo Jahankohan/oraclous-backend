@@ -75,7 +75,6 @@ def _auth_headers() -> dict:
 
 
 class TestHealthEndpoint:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_health_returns_200_when_all_healthy(self, async_client):
@@ -155,7 +154,6 @@ class TestHealthEndpoint:
 
 
 class TestGraphsCRUD:
-
     # ---- CREATE ----
 
     @pytest.mark.integration
@@ -459,8 +457,10 @@ class TestDeleteGraphEndpoint:
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
-                patch("app.api.v1.endpoints.graphs.verify_graph_access",
-                      new_callable=AsyncMock) as mock_vga,
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
             ):
@@ -483,7 +483,10 @@ class TestDeleteGraphEndpoint:
         svc.delete_graph.assert_not_called()
         # Confirm admin-level access was required
         called_args = mock_vga.call_args
-        assert called_args.args[1] == "admin" or called_args.kwargs.get("required_level") == "admin"
+        assert (
+            called_args.args[1] == "admin"
+            or called_args.kwargs.get("required_level") == "admin"
+        )
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -492,8 +495,10 @@ class TestDeleteGraphEndpoint:
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
-                patch("app.api.v1.endpoints.graphs.verify_graph_access",
-                      new_callable=AsyncMock) as mock_vga,
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
                 patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
             ):
@@ -513,7 +518,8 @@ class TestDeleteGraphEndpoint:
     @pytest.mark.api
     async def test_delete_graph_returns_403_when_not_admin(self, async_client):
         """DELETE /graphs/{id} → 403 when caller lacks admin permission."""
-        from fastapi import HTTPException, status as fastapi_status
+        from fastapi import HTTPException
+        from fastapi import status as fastapi_status
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
@@ -522,7 +528,8 @@ class TestDeleteGraphEndpoint:
                 new_callable=AsyncMock,
             ) as mock_vga:
                 mock_vga.side_effect = HTTPException(
-                    status_code=fastapi_status.HTTP_403_FORBIDDEN, detail="Access denied"
+                    status_code=fastapi_status.HTTP_403_FORBIDDEN,
+                    detail="Access denied",
                 )
 
                 response = await async_client.delete(
@@ -540,8 +547,10 @@ class TestDeleteGraphEndpoint:
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
-                patch("app.api.v1.endpoints.graphs.verify_graph_access",
-                      new_callable=AsyncMock) as mock_vga,
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
             ):
                 mock_vga.return_value = GRAPH_A_ID
@@ -596,13 +605,17 @@ class TestChatHistoryEndpoint:
         assert data == []
         # ReBAC must be checked at read level
         called_args = mock_vga.call_args
-        assert called_args.args[1] == "read" or called_args.kwargs.get("required_level") == "read"
+        assert (
+            called_args.args[1] == "read"
+            or called_args.kwargs.get("required_level") == "read"
+        )
 
     @pytest.mark.integration
     @pytest.mark.api
     async def test_chat_history_returns_403_when_no_access(self, async_client):
         """GET /graphs/{id}/chat/history → 403 when caller lacks read access."""
-        from fastapi import HTTPException, status as fastapi_status
+        from fastapi import HTTPException
+        from fastapi import status as fastapi_status
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
@@ -611,7 +624,8 @@ class TestChatHistoryEndpoint:
                 new_callable=AsyncMock,
             ) as mock_vga:
                 mock_vga.side_effect = HTTPException(
-                    status_code=fastapi_status.HTTP_403_FORBIDDEN, detail="Access denied"
+                    status_code=fastapi_status.HTTP_403_FORBIDDEN,
+                    detail="Access denied",
                 )
 
                 response = await async_client.get(
@@ -627,9 +641,7 @@ class TestChatHistoryEndpoint:
     @pytest.mark.api
     async def test_chat_history_requires_auth(self, async_client):
         """GET /graphs/{id}/chat/history without token → 401/403."""
-        response = await async_client.get(
-            f"/api/v1/graphs/{GRAPH_A_ID}/chat/history"
-        )
+        response = await async_client.get(f"/api/v1/graphs/{GRAPH_A_ID}/chat/history")
         assert response.status_code in (401, 403)
 
 
@@ -639,7 +651,6 @@ class TestChatHistoryEndpoint:
 
 
 class TestIngestEndpoint:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_ingest_creates_job_and_returns_pending(self, async_client):
@@ -662,7 +673,6 @@ class TestIngestEndpoint:
                 patch("app.api.v1.endpoints.graphs.background_job_service") as mock_bg,
                 patch("app.api.v1.endpoints.graphs.get_database") as mock_db_dep,
             ):
-
                 mock_neo4j.sync_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
                 mock_bg.start_ingestion_job.return_value = {
@@ -771,7 +781,6 @@ class TestIngestEndpoint:
 
 
 class TestGraphResponseFields:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_graph_response_contains_all_required_fields(self, async_client):

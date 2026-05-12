@@ -4,13 +4,27 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Core dependencies
-from app.api.dependencies import get_current_user, get_current_user_id, get_database, verify_graph_access
+from app.api.dependencies import (
+    get_current_user,
+    get_current_user_id,
+    get_database,
+    verify_graph_access,
+)
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.rate_limiter import limiter
@@ -556,7 +570,9 @@ async def ingest_data_corrected(
 
     # Start background ingestion job using pipeline service
     try:
-        job_result = await background_job_service.start_ingestion_job(str(job.id), user_id)
+        job_result = await background_job_service.start_ingestion_job(
+            str(job.id), user_id
+        )
 
         if job_result["status"] == "failed":
             logger.error(f"Failed to start background job: {job_result['message']}")
@@ -596,7 +612,11 @@ async def list_graph_llm_configs(
     current_user: dict = Depends(get_current_user),
 ):
     await verify_graph_access(str(graph_id), "read", str(current_user["id"]))
-    org_id = str(current_user.get("tenant_id") or current_user.get("org_id") or current_user["id"])
+    org_id = str(
+        current_user.get("tenant_id")
+        or current_user.get("org_id")
+        or current_user["id"]
+    )
     if not neo4j_client.async_driver:
         return []
     svc = LLMConfigService(neo4j_client.async_driver)
@@ -613,8 +633,17 @@ async def list_graph_llm_configs(
 
 
 def _job_to_document(job: IngestionJob) -> DocumentResponse:
-    status_map = {"pending": "processing", "running": "processing", "completed": "ready", "failed": "error"}
-    ext = job.filename.rsplit(".", 1)[-1].lower() if job.filename and "." in job.filename else (job.source_type or "txt")
+    status_map = {
+        "pending": "processing",
+        "running": "processing",
+        "completed": "ready",
+        "failed": "error",
+    }
+    ext = (
+        job.filename.rsplit(".", 1)[-1].lower()
+        if job.filename and "." in job.filename
+        else (job.source_type or "txt")
+    )
     return DocumentResponse(
         document_id=str(job.id),
         filename=job.filename or f"document_{str(job.id)[:8]}",
@@ -669,9 +698,16 @@ async def upload_document(
         content = raw.decode("latin-1")
 
     if len(content.strip()) < 10:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="File content too short")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="File content too short",
+        )
 
-    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in (file.filename or "") else "txt"
+    ext = (
+        (file.filename or "").rsplit(".", 1)[-1].lower()
+        if file.filename and "." in (file.filename or "")
+        else "txt"
+    )
 
     job = IngestionJob(
         graph_id=graph_id,
@@ -687,7 +723,10 @@ async def upload_document(
 
     job_result = await background_job_service.start_ingestion_job(str(job.id), user_id)
     if job_result.get("status") == "failed":
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to start ingestion job")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to start ingestion job",
+        )
 
     return _job_to_document(job)
 
@@ -1690,7 +1729,7 @@ async def update_entity_temporal_bounds(
     query = f"""
     MATCH (e:__Entity__ {{graph_id: $graph_id}})
     WHERE elementId(e) = $element_id
-    SET {', '.join(set_parts)}
+    SET {", ".join(set_parts)}
     RETURN elementId(e) AS element_id, e.name AS name, e.label AS label,
            e.valid_from AS valid_from, e.valid_to AS valid_to
     """

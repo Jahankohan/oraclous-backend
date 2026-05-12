@@ -7,7 +7,11 @@ credential-broker-service and never stored in Neo4j or returned in any response.
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 
-from app.api.dependencies import get_current_user, get_current_user_id, verify_graph_access
+from app.api.dependencies import (
+    get_current_user,
+    get_current_user_id,
+    verify_graph_access,
+)
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
@@ -16,7 +20,10 @@ from app.schemas.llm_config_schemas import (
     LLMConfigCreateResponse,
     LLMConfigResponse,
 )
-from app.services.credential_broker_client import CredentialBrokerClient, CredentialBrokerError
+from app.services.credential_broker_client import (
+    CredentialBrokerClient,
+    CredentialBrokerError,
+)
 from app.services.llm_config_service import LLMConfigService
 
 router = APIRouter()
@@ -132,7 +139,9 @@ async def delete_org_config(
 ):
     deleted = await svc.deactivate_config(config_id, org_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="LLM config not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="LLM config not found"
+        )
 
 
 # ── Project-level endpoints ────────────────────────────────────────────────────
@@ -167,7 +176,9 @@ async def create_project_config(
     except CredentialBrokerError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    config_id = await svc.create_project_config(graph_id, org_id, user_id, data, api_key_ref)
+    config_id = await svc.create_project_config(
+        graph_id, org_id, user_id, data, api_key_ref
+    )
     return LLMConfigCreateResponse(config_id=config_id)
 
 

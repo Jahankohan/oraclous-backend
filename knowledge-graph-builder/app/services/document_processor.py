@@ -351,7 +351,18 @@ class DocumentProcessor:
     @staticmethod
     def get_supported_types() -> list[str]:
         """Return list of supported document types."""
-        return ["text", "pdf", "doc", "docx", "csv", "tsv", "json", "jsonl", "md", "markdown"]
+        return [
+            "text",
+            "pdf",
+            "doc",
+            "docx",
+            "csv",
+            "tsv",
+            "json",
+            "jsonl",
+            "md",
+            "markdown",
+        ]
 
     @staticmethod
     def validate_source_type(source_type: str) -> bool:

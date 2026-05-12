@@ -26,7 +26,6 @@ import textwrap
 import time
 import uuid
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 import requests
@@ -84,6 +83,7 @@ def _token() -> str:
         _INTEGRATION_TOKEN = _get_integration_token()
     return _INTEGRATION_TOKEN
 
+
 # Graph IDs — populated by create_test_graphs fixture (server assigns the UUID)
 _GRAPH_ID_A: str = ""
 _GRAPH_ID_B: str = ""
@@ -98,10 +98,9 @@ def _create_graph(name: str) -> str:
         timeout=10,
     )
     if resp.status_code not in (200, 201):
-        raise RuntimeError(
-            f"Graph creation failed: {resp.status_code} {resp.text}"
-        )
+        raise RuntimeError(f"Graph creation failed: {resp.status_code} {resp.text}")
     return resp.json()["id"]
+
 
 # Minimal Python source with one taintable function
 _TAINT_SOURCE = textwrap.dedent("""\
@@ -131,9 +130,7 @@ def _neo4j_driver():
     """Return a sync Neo4j driver (neo4j Python package)."""
     from neo4j import GraphDatabase
 
-    return GraphDatabase.driver(
-        _NEO4J_BOLT, auth=(_NEO4J_USER, _NEO4J_PASS)
-    )
+    return GraphDatabase.driver(_NEO4J_BOLT, auth=(_NEO4J_USER, _NEO4J_PASS))
 
 
 def _api_headers(user_token: str | None = None) -> dict:
@@ -145,9 +142,7 @@ def _wait_for_api(timeout: float = 30.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = requests.get(
-                f"{_API_BASE.replace('/api/v1', '')}/health", timeout=2
-            )
+            resp = requests.get(f"{_API_BASE.replace('/api/v1', '')}/health", timeout=2)
             if resp.status_code < 500:
                 return
         except requests.ConnectionError:

@@ -25,6 +25,7 @@ from app.core.rate_limiter import rate_limit_exceeded_handler
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _build_test_client(limit_str: str) -> TestClient:
     """Create a minimal FastAPI app with a single POST /test endpoint.
 
@@ -44,12 +45,15 @@ def _build_test_client(limit_str: str) -> TestClient:
     return TestClient(app)
 
 
-def _build_ip_isolated_client(limit_str: str, key_header: str = "X-Test-Key") -> TestClient:
+def _build_ip_isolated_client(
+    limit_str: str, key_header: str = "X-Test-Key"
+) -> TestClient:
     """Build a test app whose rate-limit key is read from a custom request header.
 
     This allows per-IP isolation to be exercised within a single TestClient
     by passing different header values (simulating different client IPs).
     """
+
     def _key_from_header(request: Request) -> str:
         return request.headers.get(key_header, "default")
 
@@ -70,13 +74,14 @@ def _build_ip_isolated_client(limit_str: str, key_header: str = "X-Test-Key") ->
 # 429 handler: no info leakage
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_429_body_is_generic_no_limit_detail():
     """429 response body must not expose rate-limit configuration."""
     client = _build_test_client("1/minute")
 
-    client.post("/test")           # consume the 1 allowed
-    r = client.post("/test")       # should be blocked
+    client.post("/test")  # consume the 1 allowed
+    r = client.post("/test")  # should be blocked
 
     assert r.status_code == 429
     body = r.json()
@@ -105,6 +110,7 @@ def test_429_status_code_is_correct():
 # ---------------------------------------------------------------------------
 # Limit enforcement per endpoint spec
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_register_limit_5_per_minute():
@@ -174,6 +180,7 @@ def test_reset_password_limit_5_per_minute():
 # ---------------------------------------------------------------------------
 # Per-IP isolation
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_per_ip_isolation():

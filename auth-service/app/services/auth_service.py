@@ -6,8 +6,12 @@ from fastapi import HTTPException, status
 from passlib.context import CryptContext
 
 from app.core.config import settings
-from app.core.jwt_handler import (create_access_token, create_refresh_token,
-                                  verify_access_token, verify_refresh_token)
+from app.core.jwt_handler import (
+    create_access_token,
+    create_refresh_token,
+    verify_access_token,
+    verify_refresh_token,
+)
 from app.models.user_model import User
 from app.repositories.user_repository import UserRepository
 from app.schema import auth_schemas

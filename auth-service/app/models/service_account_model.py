@@ -3,6 +3,7 @@
 Stores bcrypt-hashed API keys for AgentServiceAccount principals.
 The raw API key is NEVER stored — only the bcrypt hash and key_prefix (first 8 chars).
 """
+
 import uuid
 
 from sqlalchemy import Column, String, TIMESTAMP, func
@@ -21,7 +22,9 @@ class AgentServiceAccountKey(Base):
     # JWT claim metadata — stored at creation for token exchange (no Neo4j in auth-service)
     tenant_id = Column(String, nullable=True)
     home_graph_id = Column(String, nullable=True)
-    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
     expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
     revoked_at = Column(TIMESTAMP(timezone=True), nullable=True)
     last_used_at = Column(TIMESTAMP(timezone=True), nullable=True)

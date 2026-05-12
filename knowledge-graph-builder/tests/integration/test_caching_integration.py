@@ -25,7 +25,6 @@ from uuid import uuid4
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -149,9 +148,7 @@ def test_second_query_cache_hit_and_fast(graph_id, auth_headers):
     assert body.get("cache_hit") is True, (
         f"Second identical query must be a cache hit; got cache_hit={body.get('cache_hit')}"
     )
-    assert elapsed < 1.0, (
-        f"Cache hit response time must be <1s; got {elapsed:.3f}s"
-    )
+    assert elapsed < 1.0, f"Cache hit response time must be <1s; got {elapsed:.3f}s"
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +168,9 @@ def test_cache_invalidated_after_ingest(graph_id, auth_headers):
     # Warm the cache
     _post_chat(graph_id, query, auth_headers)
     body_hit, _ = _post_chat(graph_id, query, auth_headers)
-    assert body_hit.get("cache_hit") is True, "Pre-condition: second query must be a cache hit"
+    assert body_hit.get("cache_hit") is True, (
+        "Pre-condition: second query must be a cache hit"
+    )
 
     # Ingest a new document — must trigger cache invalidation
     _post_ingest(

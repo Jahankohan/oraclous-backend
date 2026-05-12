@@ -129,7 +129,7 @@
 
 ### **Neo4j GraphRAG Weaknesses**
 - ❌ **Global Reasoning**: Limited corpus-wide analysis capabilities
-- ❌ **Initial Query Speed**: Live computation can be slower than pre-computed summaries  
+- ❌ **Initial Query Speed**: Live computation can be slower than pre-computed summaries
 - ❌ **LangChain Integration**: Requires custom implementation for multi-tenant scenarios
 - ❌ **Community Detection**: Optional feature, not core to the architecture
 - ❌ **Setup Complexity**: Higher initial configuration overhead
@@ -148,7 +148,7 @@
 
 ### **Choose Neo4j GraphRAG When:**
 - **Production Requirements**: Need enterprise-grade reliability and support
-- **Real-time Processing**: Require incremental updates and live data processing  
+- **Real-time Processing**: Require incremental updates and live data processing
 - **Complex Graph Queries**: Need arbitrary graph traversals and pattern matching
 - **Multi-tenancy**: Require secure tenant isolation and database-level separation
 - **Multi-modal Data**: Handle diverse data types beyond text documents

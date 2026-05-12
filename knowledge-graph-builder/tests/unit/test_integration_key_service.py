@@ -40,7 +40,9 @@ class TestKeyUtilities:
 
     def test_hash_is_deterministic(self):
         key = "oak-testkey"
-        assert IntegrationKeyService.hash_key(key) == IntegrationKeyService.hash_key(key)
+        assert IntegrationKeyService.hash_key(key) == IntegrationKeyService.hash_key(
+            key
+        )
 
     def test_hash_never_stores_plaintext(self):
         key = "oak-supersecret"
@@ -58,8 +60,13 @@ class TestPublishAgent:
 
         svc = IntegrationKeyService(driver)
         key, slug = await svc.publish_agent(
-            agent_id="a1", graph_id="g1", org_id="org1", user_id="u1",
-            slug="test-slug", cors_origins=[], rate_limit_rpm=60,
+            agent_id="a1",
+            graph_id="g1",
+            org_id="org1",
+            user_id="u1",
+            slug="test-slug",
+            cors_origins=[],
+            rate_limit_rpm=60,
         )
 
         assert key.startswith("oak-")
@@ -81,8 +88,12 @@ class TestPublishAgent:
         svc = IntegrationKeyService(driver)
         with pytest.raises(ValueError, match="already taken"):
             await svc.publish_agent(
-                agent_id="a1", graph_id="g1", org_id="org1", user_id="u1",
-                slug="taken-slug", cors_origins=[],
+                agent_id="a1",
+                graph_id="g1",
+                org_id="org1",
+                user_id="u1",
+                slug="taken-slug",
+                cors_origins=[],
             )
 
 
@@ -127,10 +138,16 @@ class TestValidateKey:
         key_hash = IntegrationKeyService.hash_key(key)
 
         published = {
-            "agent_id": "a1", "graph_id": "g1", "slug": "test-slug",
-            "key_hash": key_hash, "key_last4": key[-4:],
-            "cors_origins": [], "rate_limit_rpm": 60,
-            "egress_url": None, "published_at": 1000, "unpublished_at": None,
+            "agent_id": "a1",
+            "graph_id": "g1",
+            "slug": "test-slug",
+            "key_hash": key_hash,
+            "key_last4": key[-4:],
+            "cors_origins": [],
+            "rate_limit_rpm": 60,
+            "egress_url": None,
+            "published_at": 1000,
+            "unpublished_at": None,
         }
 
         driver = MagicMock()

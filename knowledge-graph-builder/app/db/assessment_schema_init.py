@@ -120,9 +120,7 @@ async def ensure_assessment_schema(async_driver: Any) -> None:
     skipped: list[tuple[str, str]] = []
     for stmt in statements:
         try:
-            await async_driver.execute_query(
-                stmt, database_=settings.NEO4J_DATABASE
-            )
+            await async_driver.execute_query(stmt, database_=settings.NEO4J_DATABASE)
             applied += 1
         except Exception as exc:  # pragma: no cover — defensive only
             # Constraints and indexes use `IF NOT EXISTS`, so collisions are

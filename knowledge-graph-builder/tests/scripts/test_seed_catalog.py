@@ -15,7 +15,6 @@ remain runnable in any environment.
 
 from __future__ import annotations
 
-import os
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -37,12 +36,10 @@ from app.scripts.seed_assessment_catalog import (
     SEED_CREATED_BY,
     TEMPLATES,
     ModuleSpec,
-    SeedCounts,
     _read_prompt,
     _skills_root,
     seed_assessment_catalog,
 )
-
 
 # ---------------------------------------------------------------------------
 # Unit tests — module inventory shape
@@ -104,12 +101,7 @@ class TestModuleInventory:
         assert "adversarial-redline" in shared
         # Each shared slug appears once per template → 2 distinct module_ids
         for slug in shared:
-            ids = [
-                m.module_id
-                for t in TEMPLATES
-                for m in t.modules
-                if m.slug == slug
-            ]
+            ids = [m.module_id for t in TEMPLATES for m in t.modules if m.slug == slug]
             assert len(ids) == 2, f"Slug {slug!r} did not produce 2 rows"
             assert len(set(ids)) == 2
 
@@ -362,9 +354,7 @@ class TestSeedIntegration:
         assert second.executed_by_edges == 44
 
     @pytest.mark.asyncio
-    async def test_seed_updates_system_prompt_on_rerun(
-        self, _seed_fixture, tmp_path
-    ):
+    async def test_seed_updates_system_prompt_on_rerun(self, _seed_fixture, tmp_path):
         """If a skill file is edited between runs, the :Module.system_prompt
         and the executor :Agent.system_prompt should both update — the seed
         doubles as a prompt-refresh tool."""

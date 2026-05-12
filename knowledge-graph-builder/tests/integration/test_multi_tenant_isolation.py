@@ -77,7 +77,6 @@ def _headers():
 
 
 class TestCrossGraphAccess:
-
     @pytest.mark.integration
     @pytest.mark.security
     async def test_user_a_cannot_read_user_b_graph(self, async_client):
@@ -236,7 +235,6 @@ class TestCrossGraphAccess:
 
 
 class TestChatCrossTenantIsolation:
-
     @pytest.mark.integration
     @pytest.mark.security
     async def test_chat_scoped_to_graph_a_does_not_return_graph_b_data(
@@ -280,7 +278,6 @@ class TestChatCrossTenantIsolation:
                 patch("app.api.v1.endpoints.chat.GraphNodeService") as MockGS,
                 patch("app.api.v1.endpoints.chat.auth_service") as mock_auth,
             ):
-
                 mock_cfg.OPENAI_API_KEY = "test-key"
                 mock_fac.create_retriever = AsyncMock(return_value=MagicMock())
                 rag = MagicMock()
@@ -309,9 +306,9 @@ class TestChatCrossTenantIsolation:
         assert response.status_code == 200
         data = response.json()
         # Tenant B's exclusive entity name must not appear in the answer
-        assert tenant_b_secret not in data.get(
-            "answer", ""
-        ), "Tenant B's data leaked into a chat response scoped to Tenant A's graph"
+        assert tenant_b_secret not in data.get("answer", ""), (
+            "Tenant B's data leaked into a chat response scoped to Tenant A's graph"
+        )
 
     @pytest.mark.integration
     @pytest.mark.security
@@ -340,7 +337,6 @@ class TestChatCrossTenantIsolation:
                 patch("app.api.v1.endpoints.chat.GraphNodeService") as MockGS,
                 patch("app.api.v1.endpoints.chat.auth_service") as mock_auth,
             ):
-
                 mock_cfg.OPENAI_API_KEY = "test-key"
                 # Ownership check: graph A is owned by User A
                 MockGS.return_value.get_graph.return_value = {
@@ -377,9 +373,9 @@ class TestChatCrossTenantIsolation:
         # (exact kwarg name depends on retriever_factory API)
         # We do a soft check: GRAPH_B_ID must not appear anywhere
         for gid in all_graph_ids:
-            assert GRAPH_B_ID not in str(
-                gid
-            ), "Retriever was called with Graph B's ID — cross-tenant contamination risk"
+            assert GRAPH_B_ID not in str(gid), (
+                "Retriever was called with Graph B's ID — cross-tenant contamination risk"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +384,6 @@ class TestChatCrossTenantIsolation:
 
 
 class TestSchemaCrossTenantIsolation:
-
     @pytest.mark.integration
     @pytest.mark.security
     async def test_schema_for_graph_a_does_not_contain_graph_b_entities(
@@ -437,9 +432,9 @@ class TestSchemaCrossTenantIsolation:
 
         # Graph B entity types (e.g., "MedicalRecord") must not appear
         tenant_b_type = "MedicalRecord"
-        assert (
-            tenant_b_type not in data["nodes"]
-        ), f"Schema for Graph A unexpectedly contains Graph B entity type '{tenant_b_type}'"
+        assert tenant_b_type not in data["nodes"], (
+            f"Schema for Graph A unexpectedly contains Graph B entity type '{tenant_b_type}'"
+        )
         assert "Company" in data["nodes"]
 
         # Confirm schema_manager was called with the correct graph_id
@@ -451,9 +446,9 @@ class TestSchemaCrossTenantIsolation:
             if called_with.args
             else called_with.kwargs.get("graph_id")
         )
-        assert (
-            called_graph_id == GRAPH_A_ID
-        ), f"extract_schema called with wrong graph_id: {called_graph_id}"
+        assert called_graph_id == GRAPH_A_ID, (
+            f"extract_schema called with wrong graph_id: {called_graph_id}"
+        )
 
     @pytest.mark.integration
     @pytest.mark.security
@@ -502,7 +497,6 @@ class TestSchemaCrossTenantIsolation:
 
 
 class TestDeleteIsolation:
-
     @pytest.mark.integration
     @pytest.mark.security
     async def test_graph_a_deletion_does_not_affect_graph_b(self, async_client):
@@ -546,9 +540,9 @@ class TestDeleteIsolation:
                     if call_args.args
                     else call_args.kwargs.get("graph_id")
                 )
-                assert (
-                    deleted_id == GRAPH_A_ID
-                ), f"delete_graph called with {deleted_id} instead of {GRAPH_A_ID}"
+                assert deleted_id == GRAPH_A_ID, (
+                    f"delete_graph called with {deleted_id} instead of {GRAPH_A_ID}"
+                )
                 assert deleted_id != GRAPH_B_ID
         else:
             # DELETE endpoint not yet implemented — document as known gap
@@ -564,7 +558,6 @@ class TestDeleteIsolation:
 
 
 class TestInstructionsCrossTenantIsolation:
-
     @pytest.mark.integration
     @pytest.mark.security
     async def test_user_a_cannot_set_instructions_on_user_b_graph(self, async_client):
@@ -621,7 +614,6 @@ class TestInstructionsCrossTenantIsolation:
 
 
 class TestAuthBoundaryChecks:
-
     @pytest.mark.integration
     @pytest.mark.security
     async def test_all_graph_endpoints_require_authentication(self, async_client):

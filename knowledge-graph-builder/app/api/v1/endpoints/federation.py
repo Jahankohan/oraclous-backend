@@ -145,14 +145,18 @@ _CANDIDATES_THRESHOLD = 0.60
     response_model=list[FederationCandidateResult],
     summary="Find SAME_AS candidate pairs for a graph",
     responses={
-        400: {"description": "Invalid graph_ids, graphs not federatable, or duplicate IDs"},
+        400: {
+            "description": "Invalid graph_ids, graphs not federatable, or duplicate IDs"
+        },
         403: {"description": "Access denied to graph_id or any target_graph_id"},
         503: {"description": "Neo4j unavailable"},
     },
 )
 async def federation_candidates(
     request: FederationCandidatesRequest,
-    graph_id: str = Path(..., description="Source graph ID to find SAME_AS candidates for"),
+    graph_id: str = Path(
+        ..., description="Source graph ID to find SAME_AS candidates for"
+    ),
     credentials: HTTPAuthorizationCredentials = Depends(security),
     service: FederationService = Depends(_get_federation_service),
 ) -> list[FederationCandidateResult]:
@@ -229,7 +233,9 @@ async def federation_candidates(
 )
 async def resolve_federation(
     request: FederationResolveRequest,
-    graph_id: str = Path(..., description="Source graph ID; caller must have write access"),
+    graph_id: str = Path(
+        ..., description="Source graph ID; caller must have write access"
+    ),
     credentials: HTTPAuthorizationCredentials = Depends(security),
     service: FederationService = Depends(_get_federation_service),
 ) -> FederationResolveResponse:

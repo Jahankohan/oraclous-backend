@@ -132,7 +132,6 @@ class _MockEvalCtx:
 
 
 class TestEvaluationServiceBasic:
-
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_evaluate_returns_all_fields(self):
@@ -241,7 +240,6 @@ class TestEvaluationServiceBasic:
 
 
 class TestEvaluationServiceContext:
-
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_retrieved_contexts_mapped_from_sources(self):
@@ -286,7 +284,6 @@ class TestEvaluationServiceContext:
 
 
 class TestEvaluationServiceRagasFailure:
-
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_ragas_import_error_returns_none_scores(self):
@@ -309,7 +306,6 @@ class TestEvaluationServiceRagasFailure:
 
 
 class TestEvaluationServiceOverall:
-
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_overall_is_mean_of_computed_scores(self):

@@ -6,34 +6,42 @@ from decimal import Decimal
 
 from app.schemas.common import InstanceStatus
 
+
 # Tool Instance (Workflow Execution)
 class ToolInstance(BaseModel):
     """
     Tool Instance - Configured instance of a tool for workflow execution
     """
+
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     workflow_id: uuid.UUID = Field(..., description="Parent workflow ID")
-    tool_definition_id: uuid.UUID = Field(..., description="Reference to tool definition")  # FIXED
+    tool_definition_id: uuid.UUID = Field(
+        ..., description="Reference to tool definition"
+    )  # FIXED
     user_id: uuid.UUID = Field(..., description="Owner user ID")
-    
+
     # Instance configuration
     name: str = Field(..., description="Instance name (user-defined)")
     description: Optional[str] = Field(None, description="Instance description")
     configuration: Dict[str, Any] = Field(default_factory=dict)
     settings: Dict[str, Any] = Field(default_factory=dict)
-    
+
     # Credential management
-    credential_mappings: Dict[str, str] = Field(default_factory=dict, description="Maps credential_type -> credential_id")
-    required_credentials: List[str] = Field(default_factory=list, description="List of required credential types")
-    
+    credential_mappings: Dict[str, str] = Field(
+        default_factory=dict, description="Maps credential_type -> credential_id"
+    )
+    required_credentials: List[str] = Field(
+        default_factory=list, description="List of required credential types"
+    )
+
     # Runtime state
     status: InstanceStatus = Field(default=InstanceStatus.PENDING)
-    
+
     # Execution metadata
     last_execution_id: Optional[uuid.UUID] = None  # FIXED
     execution_count: int = 0
-    total_credits_consumed: Decimal = Field(default=Decimal('0'))
-    
+    total_credits_consumed: Decimal = Field(default=Decimal("0"))
+
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -43,58 +51,69 @@ class ToolInstance(BaseModel):
 
     class Config:
         # Allow UUID objects to be converted to/from strings
-        json_encoders = {
-            uuid.UUID: str
-        }
+        json_encoders = {uuid.UUID: str}
 
 
 class CreateInstanceRequest(BaseModel):
     """Request to create a new tool instance"""
+
     workflow_id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4)  # FIXED
-    tool_definition_id: uuid.UUID = Field(..., description="Tool definition to instantiate")  # FIXED
+    tool_definition_id: uuid.UUID = Field(
+        ..., description="Tool definition to instantiate"
+    )  # FIXED
     name: str = Field(..., description="Instance name")
     description: Optional[str] = Field(None, description="Instance description")
-    configuration: Dict[str, Any] = Field(default_factory=dict, description="Initial configuration")
-    settings: Dict[str, Any] = Field(default_factory=dict, description="Runtime settings")
+    configuration: Dict[str, Any] = Field(
+        default_factory=dict, description="Initial configuration"
+    )
+    settings: Dict[str, Any] = Field(
+        default_factory=dict, description="Runtime settings"
+    )
 
-    @validator('name')
+    @validator("name")
     def validate_name(cls, v):
         if not v or len(v.strip()) == 0:
-            raise ValueError('Name cannot be empty')
+            raise ValueError("Name cannot be empty")
         if len(v) > 255:
-            raise ValueError('Name too long (max 255 characters)')
+            raise ValueError("Name too long (max 255 characters)")
         return v.strip()
 
     class Config:
-        json_encoders = {
-            uuid.UUID: str
-        }
+        json_encoders = {uuid.UUID: str}
+
 
 class UpdateInstanceRequest(BaseModel):
     """Request to update an existing instance"""
+
     name: Optional[str] = Field(None, description="Updated name")
     description: Optional[str] = Field(None, description="Updated description")
-    configuration: Optional[Dict[str, Any]] = Field(None, description="Updated configuration")
+    configuration: Optional[Dict[str, Any]] = Field(
+        None, description="Updated configuration"
+    )
     settings: Optional[Dict[str, Any]] = Field(None, description="Updated settings")
 
-    @validator('name')
+    @validator("name")
     def validate_name(cls, v):
         if v is not None:
             if len(v.strip()) == 0:
-                raise ValueError('Name cannot be empty')
+                raise ValueError("Name cannot be empty")
             if len(v) > 255:
-                raise ValueError('Name too long (max 255 characters)')
+                raise ValueError("Name too long (max 255 characters)")
             return v.strip()
         return v
 
 
 class ConfigureCredentialsRequest(BaseModel):
     """Request to configure credentials for an instance"""
-    credential_mappings: Dict[str, str] = Field(..., description="Maps credential_type -> credential_id")
+
+    credential_mappings: Dict[str, str] = Field(
+        ..., description="Maps credential_type -> credential_id"
+    )
 
 
 class InstanceCredentialStatus(BaseModel):
     """Status of instance credentials"""
+
     credential_type: str
     required: bool
     configured: bool
@@ -104,6 +123,7 @@ class InstanceCredentialStatus(BaseModel):
 
 class InstanceStatusResponse(BaseModel):
     """Complete status information for an instance"""
+
     instance: ToolInstance
     credentials_status: List[InstanceCredentialStatus]
     is_ready_for_execution: bool
@@ -112,6 +132,7 @@ class InstanceStatusResponse(BaseModel):
 
 class ExecutionContext(BaseModel):
     """Context provided during tool execution"""
+
     instance_id: uuid.UUID
     workflow_id: uuid.UUID
     user_id: uuid.UUID
@@ -121,94 +142,93 @@ class ExecutionContext(BaseModel):
     settings: Dict[str, Any] = Field(default_factory=dict)
 
     class Config:
-        json_encoders = {
-            uuid.UUID: str
-        }
+        json_encoders = {uuid.UUID: str}
 
 
 class ExecutionResult(BaseModel):
     """Result of tool execution"""
+
     success: bool
     data: Optional[Any] = None
     error_message: Optional[str] = None
     error_type: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    credits_consumed: Decimal = Field(default=Decimal('0'))
+    credits_consumed: Decimal = Field(default=Decimal("0"))
     processing_time_ms: Optional[int] = None
 
 
 # Execution tracking schemas
 class Execution(BaseModel):
     """Execution record"""
+
     id: uuid.UUID = Field(default_factory=uuid.uuid4)  # FIXED
     workflow_id: uuid.UUID  # FIXED
     instance_id: uuid.UUID  # FIXED
     user_id: uuid.UUID  # FIXED
-    
-    status: str = Field(default='QUEUED')
+
+    status: str = Field(default="QUEUED")
     input_data: Optional[Dict[str, Any]] = None
     output_data: Optional[Dict[str, Any]] = None
-    
+
     error_message: Optional[str] = None
     error_type: Optional[str] = None
     retry_count: int = 0
     max_retries: int = 3
-    
-    credits_consumed: Decimal = Field(default=Decimal('0'))
+
+    credits_consumed: Decimal = Field(default=Decimal("0"))
     processing_time_ms: Optional[int] = None
     execution_metadata: Dict[str, Any] = Field(default_factory=dict)
-    
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     queued_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
     class Config:
-        json_encoders = {
-            uuid.UUID: str
-        }
+        json_encoders = {uuid.UUID: str}
+
 
 class CreateExecutionRequest(BaseModel):
     """Request to create a new execution"""
+
     instance_id: uuid.UUID
     input_data: Dict[str, Any]
     max_retries: int = Field(default=3, ge=0, le=10)
 
     class Config:
-        json_encoders = {
-            uuid.UUID: str
-        }
+        json_encoders = {uuid.UUID: str}
 
 
 class Job(BaseModel):
     """Job for queue processing"""
+
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     job_type: str
     execution_id: uuid.UUID
-    
-    queue_name: str = 'default'
+
+    queue_name: str = "default"
     priority: int = 0
-    status: str = 'QUEUED'
+    status: str = "QUEUED"
     worker_id: Optional[str] = None
-    
+
     job_data: Dict[str, Any]
     result_data: Optional[Dict[str, Any]] = None
     error_details: Optional[Dict[str, Any]] = None
     retry_count: int = 0
-    
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     scheduled_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
     class Config:
-        json_encoders = {
-            uuid.UUID: str
-        }
+        json_encoders = {uuid.UUID: str}
+
 
 # Response schemas
 class InstanceListResponse(BaseModel):
     """Response for listing instances"""
+
     instances: List[ToolInstance]
     total: int
     page: int
@@ -217,6 +237,7 @@ class InstanceListResponse(BaseModel):
 
 class ExecutionListResponse(BaseModel):
     """Response for listing executions"""
+
     executions: List[Execution]
     total: int
     page: int

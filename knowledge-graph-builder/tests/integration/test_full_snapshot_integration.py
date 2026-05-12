@@ -58,9 +58,19 @@ def _make_schema_snapshot():
     )
 
     employee_cols = [
-        ColumnMeta(name="id", data_type="integer", nullable=False, is_pk=True, is_fk=False),
-        ColumnMeta(name="name", data_type="varchar", nullable=False, is_pk=False, is_fk=False),
-        ColumnMeta(name="department", data_type="varchar", nullable=True, is_pk=False, is_fk=False),
+        ColumnMeta(
+            name="id", data_type="integer", nullable=False, is_pk=True, is_fk=False
+        ),
+        ColumnMeta(
+            name="name", data_type="varchar", nullable=False, is_pk=False, is_fk=False
+        ),
+        ColumnMeta(
+            name="department",
+            data_type="varchar",
+            nullable=True,
+            is_pk=False,
+            is_fk=False,
+        ),
         ColumnMeta(
             name="manager_id",
             data_type="integer",
@@ -73,8 +83,12 @@ def _make_schema_snapshot():
     ]
 
     project_cols = [
-        ColumnMeta(name="id", data_type="integer", nullable=False, is_pk=True, is_fk=False),
-        ColumnMeta(name="title", data_type="varchar", nullable=False, is_pk=False, is_fk=False),
+        ColumnMeta(
+            name="id", data_type="integer", nullable=False, is_pk=True, is_fk=False
+        ),
+        ColumnMeta(
+            name="title", data_type="varchar", nullable=False, is_pk=False, is_fk=False
+        ),
     ]
 
     junction_cols = [
@@ -96,7 +110,13 @@ def _make_schema_snapshot():
             fk_table="projects",
             fk_column="id",
         ),
-        ColumnMeta(name="created_at", data_type="timestamp", nullable=True, is_pk=False, is_fk=False),
+        ColumnMeta(
+            name="created_at",
+            data_type="timestamp",
+            nullable=True,
+            is_pk=False,
+            is_fk=False,
+        ),
     ]
 
     return SchemaSnapshot(
@@ -113,14 +133,18 @@ def _make_schema_snapshot():
 
 def _make_employee_rows(count: int = 5) -> list[dict[str, Any]]:
     """Generate synthetic employee rows. Employee 1 has no manager (CEO)."""
-    rows = [{"id": 1, "name": "Alice CEO", "department": "Executive", "manager_id": None}]
+    rows = [
+        {"id": 1, "name": "Alice CEO", "department": "Executive", "manager_id": None}
+    ]
     for i in range(2, count + 1):
-        rows.append({
-            "id": i,
-            "name": f"Employee {i}",
-            "department": "Engineering",
-            "manager_id": 1,  # all report to CEO
-        })
+        rows.append(
+            {
+                "id": i,
+                "name": f"Employee {i}",
+                "department": "Engineering",
+                "manager_id": 1,  # all report to CEO
+            }
+        )
     return rows
 
 
@@ -278,7 +302,6 @@ def neo4j(request):
 def _make_worker_neo4j_manager():
     """Return a WorkerNeo4jManager backed by the real Neo4j sync driver
     (using the NullPool pattern from background_jobs.py)."""
-    from app.core.config import settings
     from app.services.background_jobs import WorkerNeo4jManager
 
     manager = WorkerNeo4jManager()
@@ -450,7 +473,8 @@ def test_junction_relationship_edges(neo4j):
 
     # Verify junction edge exists
     records = _query_relationships(
-        driver, graph_id,
+        driver,
+        graph_id,
         f"{_CONNECTOR_ID}:employees:1",
         f"{_CONNECTOR_ID}:projects:1",
     )
@@ -482,7 +506,8 @@ def test_self_referential_edges(neo4j):
 
     # employee 2 (pk=2) has manager_id=1 → edge from employee:2 → employee:1
     records = _query_manages(
-        driver, graph_id,
+        driver,
+        graph_id,
         f"{_CONNECTOR_ID}:employees:2",
         f"{_CONNECTOR_ID}:employees:1",
     )
@@ -548,7 +573,9 @@ def test_cross_tenant_isolation(neo4j):
 
     # Graph A must have the expected nodes
     count_a = _count_entities(driver, graph_id_a)
-    assert count_a == 8, f"Expected 8 entity nodes in graph A (5 employees + 3 projects), got {count_a}"
+    assert count_a == 8, (
+        f"Expected 8 entity nodes in graph A (5 employees + 3 projects), got {count_a}"
+    )
 
 
 @pytest.mark.integration
@@ -593,9 +620,7 @@ def test_1000_row_sync_completes_in_under_30s(neo4j):
     elapsed = time.monotonic() - start
 
     # Timing assertion — must complete within 30 seconds
-    assert elapsed < 30, (
-        f"1000-row sync took {elapsed:.2f}s — exceeds 30s SLA"
-    )
+    assert elapsed < 30, f"1000-row sync took {elapsed:.2f}s — exceeds 30s SLA"
 
     # Verify counts
     total_entities = _count_entities(driver, graph_id)
@@ -616,7 +641,7 @@ def test_no_entity_for_row_missing_pk(neo4j):
     project_rows = [
         {"id": 1, "title": "Alpha"},
         {"id": 2, "title": "Beta"},
-        {"title": "No PK"},          # id is missing — must be skipped
+        {"title": "No PK"},  # id is missing — must be skipped
     ]
 
     _run_pipeline(

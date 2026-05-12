@@ -17,7 +17,6 @@ from app.services.agent_executor import AgentExecutor, _sessions
 from app.services.agent_tools import AgentToolkit, ToolNotPermittedError
 from app.services.provenance import ProvenanceCollector
 
-
 # ── Test helpers ──────────────────────────────────────────────────────────────
 
 
@@ -88,7 +87,9 @@ class TestProvenanceCollector:
 
     def test_record_tool_adds_nodes(self):
         prov = ProvenanceCollector()
-        prov.record_tool("graph_search", [NodeResult(id="n1", label="X", properties={})])
+        prov.record_tool(
+            "graph_search", [NodeResult(id="n1", label="X", properties={})]
+        )
         p = prov.to_payload()
         assert p.total_nodes_traversed == 1
         assert p.reasoning_steps == 1
@@ -96,7 +97,9 @@ class TestProvenanceCollector:
 
     def test_record_multiple_tools(self):
         prov = ProvenanceCollector()
-        prov.record_tool("graph_search", [NodeResult(id="n1", label="A", properties={})])
+        prov.record_tool(
+            "graph_search", [NodeResult(id="n1", label="A", properties={})]
+        )
         prov.record_tool("neighbors", [NodeResult(id="n2", label="B", properties={})])
         p = prov.to_payload()
         assert p.total_nodes_traversed == 2
@@ -127,7 +130,9 @@ class TestDirectMode:
 
     async def test_graph_id_passed_to_graph_search(self):
         tk = _make_toolkit()
-        ex = _executor(agent=_make_agent(graph_id="my-graph"), toolkit=tk, responses=["ok"])
+        ex = _executor(
+            agent=_make_agent(graph_id="my-graph"), toolkit=tk, responses=["ok"]
+        )
         await ex.run("q", session_id=None)
         call_args = tk.graph_search.call_args
         assert call_args[0][0] == "my-graph"
@@ -169,7 +174,9 @@ class TestDirectMode:
 
 
 class TestResearchMode:
-    def _react_responses(self, tool_calls: list[tuple[str, dict]], answer: str) -> list[str]:
+    def _react_responses(
+        self, tool_calls: list[tuple[str, dict]], answer: str
+    ) -> list[str]:
         """Build JSON response sequence for the ReAct loop."""
         resp = []
         for name, args in tool_calls:
@@ -180,7 +187,10 @@ class TestResearchMode:
     async def test_executes_at_least_two_tool_calls(self):
         tk = _make_toolkit()
         responses = self._react_responses(
-            [("graph_search", {"query": "step1"}), ("graph_search", {"query": "step2"})],
+            [
+                ("graph_search", {"query": "step1"}),
+                ("graph_search", {"query": "step2"}),
+            ],
             "Final answer",
         )
         agent = _make_agent(mode="research", tools=["graph_search"])
@@ -248,7 +258,9 @@ class TestResearchMode:
 class TestAnalyticalMode:
     async def test_returns_response(self):
         agent = _make_agent(mode="analytical")
-        ex = _executor(agent=agent, responses=["Reasoning:\nStep 1...\n\nFinal Answer: X"])
+        ex = _executor(
+            agent=agent, responses=["Reasoning:\nStep 1...\n\nFinal Answer: X"]
+        )
         result = await ex.run("Analyse this.", session_id=None)
         assert "Reasoning" in result.response or result.response
 
@@ -259,7 +271,11 @@ class TestAnalyticalMode:
         ex = _executor(agent=agent, toolkit=tk, llm=llm)
         await ex.run("q", session_id=None)
         call_kwargs = llm.chat.completions.create.call_args
-        messages = call_kwargs[1]["messages"] if "messages" in call_kwargs[1] else call_kwargs[0][0]
+        messages = (
+            call_kwargs[1]["messages"]
+            if "messages" in call_kwargs[1]
+            else call_kwargs[0][0]
+        )
         full_text = " ".join(m["content"] for m in messages)
         assert "step by step" in full_text.lower()
 
@@ -307,7 +323,9 @@ class TestConversationalMode:
         await ex.run("Turn 2", session_id=r1.session_id)
 
         # Second call should include history (prior user + assistant messages)
-        second_call_messages = llm.chat.completions.create.call_args_list[1][1]["messages"]
+        second_call_messages = llm.chat.completions.create.call_args_list[1][1][
+            "messages"
+        ]
         roles = [m["role"] for m in second_call_messages]
         assert "assistant" in roles  # prior assistant turn injected
 
@@ -346,17 +364,25 @@ class TestFromNeo4jErrors:
         driver = MagicMock()
         agent = _make_agent(llm_config_id="some-config")
         resolved = {
-            "config_id": "some-config", "provider": "openrouter",
-            "model": "openai/gpt-4o", "base_url": "https://openrouter.ai/api/v1",
-            "api_version": None, "api_key_ref": "cred-123", "deactivated_at": None,
+            "config_id": "some-config",
+            "provider": "openrouter",
+            "model": "openai/gpt-4o",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_version": None,
+            "api_key_ref": "cred-123",
+            "deactivated_at": None,
         }
-        with patch("app.services.agent_executor.AgentService") as MockSvc, \
-             patch("app.services.agent_executor.LLMConfigService") as MockCfg, \
-             patch("app.services.agent_executor.CredentialBrokerClient") as MockBroker, \
-             patch("app.services.agent_executor.LLMClientFactory") as MockFactory:
+        with (
+            patch("app.services.agent_executor.AgentService") as MockSvc,
+            patch("app.services.agent_executor.LLMConfigService") as MockCfg,
+            patch("app.services.agent_executor.CredentialBrokerClient") as MockBroker,
+            patch("app.services.agent_executor.LLMClientFactory") as MockFactory,
+        ):
             MockSvc.return_value.get_agent = AsyncMock(return_value=agent)
             MockCfg.return_value.resolve_for_agent = AsyncMock(return_value=resolved)
-            MockBroker.return_value.retrieve_api_key = AsyncMock(return_value="sk-or-test")
+            MockBroker.return_value.retrieve_api_key = AsyncMock(
+                return_value="sk-or-test"
+            )
             MockFactory.build = MagicMock(return_value=MagicMock())
             executor = await AgentExecutor.from_neo4j(driver, "g", "a")
         assert executor is not None
@@ -364,8 +390,10 @@ class TestFromNeo4jErrors:
     async def test_no_api_key_raises_runtime_error(self):
         driver = MagicMock()
         agent = _make_agent()
-        with patch("app.services.agent_executor.AgentService") as MockSvc, \
-             patch("app.services.agent_executor.LLMConfigService") as MockCfg:
+        with (
+            patch("app.services.agent_executor.AgentService") as MockSvc,
+            patch("app.services.agent_executor.LLMConfigService") as MockCfg,
+        ):
             MockSvc.return_value.get_agent = AsyncMock(return_value=agent)
             MockCfg.return_value.resolve_for_agent = AsyncMock(return_value=None)
             with patch("app.services.agent_executor.settings") as mock_settings:

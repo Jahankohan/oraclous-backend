@@ -44,23 +44,25 @@ async def disambiguate_entities(
     """
     api_key = settings.OPENAI_API_KEY
     if not api_key:
-        logger.warning("disambiguate_entities: OPENAI_API_KEY not set — returning NO/LOW")
+        logger.warning(
+            "disambiguate_entities: OPENAI_API_KEY not set — returning NO/LOW"
+        )
         return {"decision": "NO", "confidence": "LOW", "reason": "no_api_key"}
 
     context_a_str = ", ".join(context_a[:3]) if context_a else "none"
     context_b_str = ", ".join(context_b[:3]) if context_b else "none"
 
     prompt = (
-        f'Are these two entities the same real-world entity? Answer YES or NO, '
-        f'and provide a brief reason.\n\n'
+        f"Are these two entities the same real-world entity? Answer YES or NO, "
+        f"and provide a brief reason.\n\n"
         f'Entity A: "{name_a}" (type: {type_a})\n'
-        f'Context A: {context_a_str}\n\n'
+        f"Context A: {context_a_str}\n\n"
         f'Entity B: "{name_b}" (type: {type_b})\n'
-        f'Context B: {context_b_str}\n\n'
-        f'Answer format:\n'
-        f'DECISION: YES | NO\n'
-        f'CONFIDENCE: HIGH | MEDIUM | LOW\n'
-        f'REASON: <one sentence>'
+        f"Context B: {context_b_str}\n\n"
+        f"Answer format:\n"
+        f"DECISION: YES | NO\n"
+        f"CONFIDENCE: HIGH | MEDIUM | LOW\n"
+        f"REASON: <one sentence>"
     )
 
     try:
@@ -88,22 +90,25 @@ async def disambiguate_entities(
             line = line.strip()
             upper = line.upper()
             if upper.startswith("DECISION:"):
-                val = line[len("DECISION:"):].strip().upper()
+                val = line[len("DECISION:") :].strip().upper()
                 if val in {"YES", "NO"}:
                     decision = val
             elif upper.startswith("CONFIDENCE:"):
-                val = line[len("CONFIDENCE:"):].strip().upper()
+                val = line[len("CONFIDENCE:") :].strip().upper()
                 if val in {"HIGH", "MEDIUM", "LOW"}:
                     confidence = val
             elif upper.startswith("REASON:"):
-                reason = line[len("REASON:"):].strip()
+                reason = line[len("REASON:") :].strip()
     except Exception as exc:
         logger.warning("disambiguate_entities: parse failed on %r: %s", raw, exc)
         return {"decision": "NO", "confidence": "LOW", "reason": "parse_error"}
 
     logger.debug(
         "disambiguate_entities: %r vs %r → decision=%s confidence=%s",
-        name_a, name_b, decision, confidence,
+        name_a,
+        name_b,
+        decision,
+        confidence,
     )
     return {"decision": decision, "confidence": confidence, "reason": reason}
 

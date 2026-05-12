@@ -25,6 +25,7 @@ import pytest_asyncio
 
 try:
     from neo4j import AsyncDriver
+
     _NEO4J_AVAILABLE = True
 except ImportError:
     _NEO4J_AVAILABLE = False
@@ -102,10 +103,13 @@ async def _cleanup(neo4j_test_driver: AsyncDriver):
 
 @pytest.fixture(autouse=True)
 def _override_auth(async_client):
-    from app.main import app
     from app.api.dependencies import get_current_user, get_current_user_id
+    from app.main import app
 
-    app.dependency_overrides[get_current_user] = lambda: {"id": _USER_ID, "tenant_id": "org1"}
+    app.dependency_overrides[get_current_user] = lambda: {
+        "id": _USER_ID,
+        "tenant_id": "org1",
+    }
     app.dependency_overrides[get_current_user_id] = lambda: _USER_ID
     yield
     app.dependency_overrides.pop(get_current_user, None)
@@ -114,11 +118,13 @@ def _override_auth(async_client):
 
 @pytest.fixture(autouse=True)
 def _override_integration_service(neo4j_test_driver: AsyncDriver):
-    from app.main import app
     from app.api.v1.endpoints.integration import _integration_service
+    from app.main import app
     from app.services.integration_key_service import IntegrationKeyService
 
-    app.dependency_overrides[_integration_service] = lambda: IntegrationKeyService(neo4j_test_driver)
+    app.dependency_overrides[_integration_service] = lambda: IntegrationKeyService(
+        neo4j_test_driver
+    )
     yield
     app.dependency_overrides.pop(_integration_service, None)
 
@@ -135,9 +141,7 @@ def _mock_verify_graph_access():
 @pytest.fixture(autouse=True)
 def _override_neo4j_client_for_public(neo4j_test_driver: AsyncDriver):
     """Patch neo4j_client.async_driver so public endpoints use the test driver."""
-    with patch(
-        "app.api.public.endpoints.public_agents.neo4j_client"
-    ) as mock_client:
+    with patch("app.api.public.endpoints.public_agents.neo4j_client") as mock_client:
         mock_client.async_driver = neo4j_test_driver
         yield
 
@@ -154,7 +158,9 @@ class TestPublishAgent:
         assert body["integration_key"].startswith("oak-")
         assert body["key_last4"] == body["integration_key"][-4:]
 
-    async def test_publish_stores_hash_not_plaintext(self, async_client, neo4j_test_driver):
+    async def test_publish_stores_hash_not_plaintext(
+        self, async_client, neo4j_test_driver
+    ):
         resp = await async_client.post(f"{_PREFIX}/publish", json=_PUBLISH_BODY)
         assert resp.status_code == 201
         key = resp.json()["integration_key"]
@@ -175,7 +181,9 @@ class TestPublishAgent:
         assert resp1.status_code == 201
 
         # Second publish with same slug on a different (fake) agent
-        other_prefix = f"/api/v1/api/v1/graphs/{_GRAPH_ID}/agents/other-agent-99/publish"
+        other_prefix = (
+            f"/api/v1/api/v1/graphs/{_GRAPH_ID}/agents/other-agent-99/publish"
+        )
         resp2 = await async_client.post(other_prefix, json=_PUBLISH_BODY)
         assert resp2.status_code == 409
 
@@ -221,9 +229,7 @@ class TestPublicChat:
         key = publish_resp.json()["integration_key"]
 
         mock_executor = _make_executor_mock("Hi there!")
-        with patch(
-            "app.api.public.endpoints.public_agents.AgentExecutor"
-        ) as MockExec:
+        with patch("app.api.public.endpoints.public_agents.AgentExecutor") as MockExec:
             MockExec.from_neo4j = AsyncMock(return_value=mock_executor)
             resp = await async_client.post(
                 _PUBLIC_PREFIX + "/chat",
@@ -274,9 +280,7 @@ class TestPublicChat:
         key = publish_resp.json()["integration_key"]
 
         mock_executor = _make_executor_mock()
-        with patch(
-            "app.api.public.endpoints.public_agents.AgentExecutor"
-        ) as MockExec:
+        with patch("app.api.public.endpoints.public_agents.AgentExecutor") as MockExec:
             MockExec.from_neo4j = AsyncMock(return_value=mock_executor)
 
             # First request: should succeed
@@ -304,9 +308,7 @@ class TestPublicChat:
         key = publish_resp.json()["integration_key"]
 
         mock_executor = _make_executor_mock()
-        with patch(
-            "app.api.public.endpoints.public_agents.AgentExecutor"
-        ) as MockExec:
+        with patch("app.api.public.endpoints.public_agents.AgentExecutor") as MockExec:
             MockExec.from_neo4j = AsyncMock(return_value=mock_executor)
             resp = await async_client.post(
                 _PUBLIC_PREFIX + "/chat",
@@ -330,9 +332,7 @@ class TestPublicChat:
             captured_graph_ids.append(graph_id)
             return _make_executor_mock()
 
-        with patch(
-            "app.api.public.endpoints.public_agents.AgentExecutor"
-        ) as MockExec:
+        with patch("app.api.public.endpoints.public_agents.AgentExecutor") as MockExec:
             MockExec.from_neo4j = AsyncMock(side_effect=_spy_from_neo4j)
             await async_client.post(
                 _PUBLIC_PREFIX + "/chat",

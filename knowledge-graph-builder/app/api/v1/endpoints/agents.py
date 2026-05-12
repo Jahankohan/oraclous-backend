@@ -98,7 +98,9 @@ async def get_agent(
     await verify_graph_access(graph_id, "read", user_id)
     agent = await svc.get_agent(graph_id, agent_id)
     if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
+        )
     return _to_response(agent)
 
 
@@ -122,7 +124,9 @@ async def update_agent(
     await verify_graph_access(graph_id, "admin", user_id)
     updated = await svc.update_agent(graph_id, agent_id, data)
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
+        )
     return _to_response(updated)
 
 
@@ -145,7 +149,9 @@ async def delete_agent(
     await verify_graph_access(graph_id, "admin", user_id)
     deleted = await svc.deactivate_agent(graph_id, agent_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
+        )
 
 
 # ── Chat ──────────────────────────────────────────────────────────────────────
@@ -181,7 +187,9 @@ async def agent_chat(
             neo4j_client.async_driver, graph_id, agent_id
         )
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
+        )
     except NotImplementedError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)

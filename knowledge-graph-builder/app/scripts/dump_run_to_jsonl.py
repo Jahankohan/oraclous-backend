@@ -47,7 +47,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("dump_run_to_jsonl")
 
@@ -57,10 +57,10 @@ async def dump_run_findings(
     graph_id: str,
     run_id: str,
     output: Path,
-    neo4j_uri: Optional[str] = None,
-    neo4j_user: Optional[str] = None,
-    neo4j_password: Optional[str] = None,
-    driver: Optional[Any] = None,
+    neo4j_uri: str | None = None,
+    neo4j_user: str | None = None,
+    neo4j_password: str | None = None,
+    driver: Any | None = None,
 ) -> int:
     """Walk :Finding rows in the tenant graph and write one JSON object per line.
 
@@ -82,12 +82,9 @@ async def dump_run_findings(
 
         if not (neo4j_uri and neo4j_user and neo4j_password):
             raise ValueError(
-                "dump_run_findings requires either a driver or "
-                "neo4j_uri+user+password"
+                "dump_run_findings requires either a driver or neo4j_uri+user+password"
             )
-        driver = AsyncGraphDatabase.driver(
-            neo4j_uri, auth=(neo4j_user, neo4j_password)
-        )
+        driver = AsyncGraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
         own_driver = True
 
     try:
@@ -182,7 +179,7 @@ def _finding_record_to_dict(rec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="dump_run_to_jsonl",
         description=(
@@ -208,7 +205,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _main(argv: Optional[list[str]] = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

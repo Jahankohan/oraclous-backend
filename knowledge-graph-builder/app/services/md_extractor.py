@@ -65,9 +65,7 @@ def _build_hierarchy(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return hierarchy
 
 
-def extract_markdown_from_text(
-    text: str, fallback_title: str = ""
-) -> dict[str, Any]:
+def extract_markdown_from_text(text: str, fallback_title: str = "") -> dict[str, Any]:
     """
     Extract structure from a Markdown string.
 

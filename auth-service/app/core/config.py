@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: str = 1440  # 24 hours
-    REFRESH_TOKEN_EXPIRE_DAYS: str = 7 # 7 days
+    REFRESH_TOKEN_EXPIRE_DAYS: str = 7  # 7 days
     DB_URL: str
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
@@ -33,5 +33,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
 
 settings = Settings()

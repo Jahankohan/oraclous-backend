@@ -43,9 +43,7 @@ logger = get_logger(__name__)
 _TAINT_NAME_PATTERNS = re.compile(
     r"(view|handler|endpoint|route|request)", re.IGNORECASE
 )
-_TAINT_DECORATOR_PATTERNS = re.compile(
-    r"(app\.route|router\.|api_view)", re.IGNORECASE
-)
+_TAINT_DECORATOR_PATTERNS = re.compile(r"(app\.route|router\.|api_view)", re.IGNORECASE)
 
 
 def _is_taint_source(func_name: str, decorator_names: list[str]) -> bool:
@@ -185,7 +183,7 @@ class _FunctionFlowVisitor(ast.NodeVisitor):
         return [n for n in self._names_in_expr(node) if n in self.tracked_vars]
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        """Handle simple and augmented-style assignments: x = ... """
+        """Handle simple and augmented-style assignments: x = ..."""
         rhs_tracked = self._expr_refs_tracked(node.value)
 
         for target in node.targets:
@@ -212,7 +210,7 @@ class _FunctionFlowVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        """Handle annotated assignments: x: int = ... """
+        """Handle annotated assignments: x: int = ..."""
         if node.value is None:
             return
         rhs_tracked = self._expr_refs_tracked(node.value)
@@ -245,7 +243,9 @@ class _FunctionFlowVisitor(ast.NodeVisitor):
             if tname in self.tracked_vars:
                 all_sources.append(tname)
             for src_name in all_sources:
-                src_qname = self.tracked_vars.get(src_name, f"{self.func_qname}.{src_name}")
+                src_qname = self.tracked_vars.get(
+                    src_name, f"{self.func_qname}.{src_name}"
+                )
                 self.edges.append(
                     _FlowEdge(
                         source_qualified_name=src_qname,

@@ -43,58 +43,58 @@ class MultiTenantRetriever(Retriever):
     Wraps any Neo4j retriever with multi-tenant capabilities.
     Your architectural innovation as a reusable component.
     """
-    
+
     def __init__(self, base_retriever: Retriever, graph_id: UUID):
         super().__init__()
         self.base_retriever = base_retriever
         self.graph_id = graph_id
         self.name = f"MultiTenant_{base_retriever.name}"
-    
+
     async def search(
-        self, 
-        query_text: str, 
-        top_k: int = 5, 
+        self,
+        query_text: str,
+        top_k: int = 5,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Inject graph_id filtering into any retriever"""
-        
+
         # Inject multi-tenant parameters
         tenant_kwargs = self._inject_graph_filter(kwargs)
-        
+
         # Use the base retriever with tenant filtering
         results = await self.base_retriever.search(
-            query_text, 
-            top_k=top_k, 
+            query_text,
+            top_k=top_k,
             **tenant_kwargs
         )
-        
+
         # Validate tenant isolation
         return self._validate_tenant_results(results)
-    
+
     def _inject_graph_filter(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """Your multi-tenant logic"""
-        
+
         # For Cypher-based retrievers
         if 'cypher_params' not in kwargs:
             kwargs['cypher_params'] = {}
         kwargs['cypher_params']['graph_id'] = str(self.graph_id)
-        
+
         # For vector retrievers
         if 'vector_index_name' in kwargs:
             kwargs['vector_index_name'] = f"{kwargs['vector_index_name']}_{self.graph_id}"
-        
+
         # For graph traversal filters
         if 'node_filter' not in kwargs:
             kwargs['node_filter'] = []
         kwargs['node_filter'].append(f"n.graph_id = '{self.graph_id}'")
-        
+
         return kwargs
 
 # Usage: Wrap any Neo4j retriever with your multi-tenancy
 vector_retriever = VectorRetriever(driver=driver, index_name="embeddings")
 multi_tenant_vector = MultiTenantRetriever(vector_retriever, graph_id)
 
-hybrid_retriever = HybridRetriever(driver=driver)  
+hybrid_retriever = HybridRetriever(driver=driver)
 multi_tenant_hybrid = MultiTenantRetriever(hybrid_retriever, graph_id)
 ```
 
@@ -109,48 +109,48 @@ class SchemaEvolutionKnowledgeGraph(KnowledgeGraph):
     Extends Neo4j's KnowledgeGraph with your schema evolution capabilities.
     Your innovation integrated into their construction pipeline.
     """
-    
+
     def __init__(self, driver, llm: LLMInterface, graph_id: UUID):
         super().__init__(driver, llm)
         self.graph_id = graph_id
         self.schema_evolution_service = YourSchemaEvolutionService()
-    
+
     async def add_documents(
-        self, 
-        documents: List[Document], 
+        self,
+        documents: List[Document],
         **kwargs
     ) -> None:
         """Override with schema evolution"""
-        
+
         # Phase 1: Analyze content for schema evolution
         evolution_analysis = await self.schema_evolution_service.analyze_documents(
             documents, self.graph_id
         )
-        
+
         # Phase 2: Evolve schema if needed
         if evolution_analysis.should_evolve:
             await self.schema_evolution_service.evolve_schema(
                 evolution_analysis.suggested_changes,
                 self.graph_id
             )
-            
+
             # Update LLM prompts with new schema
             self._update_extraction_prompts(evolution_analysis.new_schema)
-        
+
         # Phase 3: Use Neo4j's standard construction with evolved schema
         # Inject graph_id into all created nodes
         for doc in documents:
             doc.metadata['graph_id'] = str(self.graph_id)
-        
+
         await super().add_documents(documents, **kwargs)
-    
+
     def _update_extraction_prompts(self, new_schema: Dict[str, Any]):
         """Update Neo4j's entity extraction prompts with your evolved schema"""
-        
+
         schema_prompt = self.schema_evolution_service.generate_extraction_prompt(
             new_schema
         )
-        
+
         # Override Neo4j's default entity extraction prompt
         self.entity_extractor.prompt_template = schema_prompt
 
@@ -169,27 +169,27 @@ class AdvancedAnalyticsRetriever(Retriever):
     Your analytics service integrated as a Neo4j retriever.
     Provides community-aware and influence-aware retrieval.
     """
-    
+
     def __init__(self, driver, analytics_service, graph_id: UUID):
         super().__init__()
         self.driver = driver
         self.analytics_service = analytics_service  # Your existing service
         self.graph_id = graph_id
         self.name = "AdvancedAnalytics"
-    
+
     async def search(
-        self, 
-        query_text: str, 
+        self,
+        query_text: str,
         top_k: int = 5,
         include_communities: bool = True,
         include_influence: bool = True,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Retrieval enhanced with your advanced analytics"""
-        
+
         # Extract entities from query
         entities = await self._extract_entities_from_query(query_text)
-        
+
         # Use your existing comprehensive analysis
         analytics_result = await self.analytics_service.comprehensive_graph_analysis(
             entities=entities,
@@ -197,10 +197,10 @@ class AdvancedAnalyticsRetriever(Retriever):
             include_communities=include_communities,
             include_influence=include_influence
         )
-        
+
         # Convert your analytics format to Neo4j retriever format
         neo4j_results = []
-        
+
         # Community insights
         if analytics_result.communities:
             for community in analytics_result.communities:
@@ -214,7 +214,7 @@ class AdvancedAnalyticsRetriever(Retriever):
                     },
                     "score": community.relevance_score
                 })
-        
+
         # Influential entities
         if analytics_result.influential_entities:
             for entity in analytics_result.influential_entities:
@@ -228,7 +228,7 @@ class AdvancedAnalyticsRetriever(Retriever):
                     },
                     "score": entity.centrality
                 })
-        
+
         # Sort by relevance and return top_k
         neo4j_results.sort(key=lambda x: x["score"], reverse=True)
         return neo4j_results[:top_k]
@@ -247,7 +247,7 @@ class DRIFTRetriever(Retriever):
     Microsoft's DRIFT search methodology as a Neo4j retriever.
     Community-based search + follow-up questions + local search + re-ranking
     """
-    
+
     def __init__(self, driver, llm: LLMInterface, community_service, graph_id: UUID):
         super().__init__()
         self.driver = driver
@@ -255,44 +255,44 @@ class DRIFTRetriever(Retriever):
         self.community_service = community_service
         self.graph_id = graph_id
         self.name = "DRIFT"
-    
+
     async def search(
-        self, 
-        query_text: str, 
+        self,
+        query_text: str,
         top_k: int = 5,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Microsoft's DRIFT methodology"""
-        
+
         # Step 1: Community-based global search
         community_results = await self._community_based_search(query_text)
-        
+
         # Step 2: Generate follow-up questions
         follow_up_questions = await self._generate_follow_up_questions(
             query_text, community_results
         )
-        
+
         # Step 3: Local search for each follow-up question
         local_results = []
         for question in follow_up_questions:
             local_result = await self._local_entity_search(question)
             local_results.extend(local_result)
-        
+
         # Step 4: Re-rank and synthesize
         synthesized_results = await self._rerank_and_synthesize(
             community_results, local_results, query_text
         )
-        
+
         return synthesized_results[:top_k]
-    
+
     async def _community_based_search(self, query: str) -> List[Dict[str, Any]]:
         """Search against community summaries"""
-        
+
         # Get hierarchical community summaries
         communities = await self.community_service.get_hierarchical_communities(
             self.graph_id
         )
-        
+
         # Score communities against query
         community_results = []
         for community in communities:
@@ -307,26 +307,26 @@ class DRIFTRetriever(Retriever):
                     },
                     "score": relevance
                 })
-        
+
         return community_results
-    
+
     async def _generate_follow_up_questions(
-        self, 
-        original_query: str, 
+        self,
+        original_query: str,
         community_results: List[Dict[str, Any]]
     ) -> List[str]:
         """Generate follow-up questions based on community insights"""
-        
+
         community_summaries = [r["content"] for r in community_results]
-        
+
         prompt = f"""
         Original question: {original_query}
-        
+
         Community insights: {community_summaries}
-        
+
         Generate 3 specific follow-up questions that would help answer the original question:
         """
-        
+
         response = await self.llm.invoke(prompt)
         return self._parse_follow_up_questions(response.content)
 
@@ -343,26 +343,26 @@ class HierarchicalLeidenKnowledgeGraph(KnowledgeGraph):
     """
     Extends Neo4j KnowledgeGraph with Microsoft's hierarchical Leiden algorithm.
     """
-    
+
     def __init__(self, driver, llm: LLMInterface, graph_id: UUID):
         super().__init__(driver, llm)
         self.graph_id = graph_id
-    
+
     async def add_documents(self, documents: List[Document], **kwargs) -> None:
         """Override to add hierarchical community detection"""
-        
+
         # Phase 1: Standard Neo4j knowledge graph construction
         await super().add_documents(documents, **kwargs)
-        
+
         # Phase 2: Microsoft's hierarchical Leiden community detection
         await self._apply_hierarchical_leiden()
-        
+
         # Phase 3: Generate LLM summaries for each community level
         await self._generate_community_summaries()
-    
+
     async def _apply_hierarchical_leiden(self):
         """Apply Microsoft's hierarchical Leiden algorithm"""
-        
+
         # Create graph projection for GDS (filtered by graph_id)
         projection_query = """
         CALL gds.graph.project(
@@ -375,16 +375,16 @@ class HierarchicalLeidenKnowledgeGraph(KnowledgeGraph):
             }
         )
         """
-        
+
         projection_name = f"leiden_projection_{self.graph_id}"
         await self.driver.execute_query(
-            projection_query, 
+            projection_query,
             {"projection_name": projection_name, "graph_id": str(self.graph_id)}
         )
-        
+
         # Apply Leiden at multiple resolutions (Microsoft pattern)
         resolutions = [0.1, 0.5, 1.0, 2.0, 5.0]  # Multi-resolution hierarchy
-        
+
         for resolution in resolutions:
             leiden_query = """
             CALL gds.leiden.write($projection_name, {
@@ -396,7 +396,7 @@ class HierarchicalLeidenKnowledgeGraph(KnowledgeGraph):
             YIELD communityCount, modularity
             RETURN communityCount, modularity
             """
-            
+
             property_name = f"leiden_resolution_{resolution}"
             result = await self.driver.execute_query(
                 leiden_query,
@@ -406,15 +406,15 @@ class HierarchicalLeidenKnowledgeGraph(KnowledgeGraph):
                     "resolution": resolution
                 }
             )
-    
+
     async def _generate_community_summaries(self):
         """Generate LLM summaries for each community level (Microsoft pattern)"""
-        
+
         resolutions = [0.1, 0.5, 1.0, 2.0, 5.0]
-        
+
         for resolution in resolutions:
             property_name = f"leiden_resolution_{resolution}"
-            
+
             # Get all communities at this resolution
             communities_query = """
             MATCH (e:Entity {graph_id: $graph_id})
@@ -422,18 +422,18 @@ class HierarchicalLeidenKnowledgeGraph(KnowledgeGraph):
             WITH e[$property_name] as community_id, collect(e) as members
             RETURN community_id, members
             """
-            
+
             communities = await self.driver.execute_query(
                 communities_query,
                 {"graph_id": str(self.graph_id), "property_name": property_name}
             )
-            
+
             # Generate summary for each community
             for community in communities:
                 summary = await self._generate_community_summary(
                     community["members"], resolution
                 )
-                
+
                 # Store community summary
                 await self._store_community_node(
                     community["community_id"], summary, resolution, community["members"]
@@ -455,33 +455,33 @@ class HybridGraphRAGPipeline:
     Complete pipeline using Neo4j as foundation with your extensions.
     Neo4j handles orchestration, your innovations provide enhanced capabilities.
     """
-    
+
     def __init__(self, driver, llm, graph_id: UUID):
         self.driver = driver
         self.llm = llm
         self.graph_id = graph_id
         self.setup_pipeline()
-    
+
     def setup_pipeline(self):
         """Setup the complete pipeline with all components"""
-        
+
         # Phase 1: Knowledge Graph Construction (your enhanced version)
         self.knowledge_graph = HierarchicalLeidenKnowledgeGraph(
             self.driver, self.llm, self.graph_id
         )
-        
+
         # Phase 2: Retriever Setup (Neo4j + your extensions + Microsoft innovations)
         base_retrievers = [
             VectorRetriever(self.driver, index_name="embeddings"),
             HybridRetriever(self.driver),
         ]
-        
+
         # Wrap with your multi-tenancy
         multi_tenant_retrievers = [
-            MultiTenantRetriever(retriever, self.graph_id) 
+            MultiTenantRetriever(retriever, self.graph_id)
             for retriever in base_retrievers
         ]
-        
+
         # Add your advanced retrievers
         advanced_retrievers = [
             AdvancedAnalyticsRetriever(
@@ -491,31 +491,31 @@ class HybridGraphRAGPipeline:
                 self.driver, self.llm, your_community_service, self.graph_id
             )
         ]
-        
+
         # Combine all retrievers
         all_retrievers = multi_tenant_retrievers + advanced_retrievers
-        
+
         # Phase 3: Neo4j GraphRAG handles orchestration
         self.graphrag = GraphRAG(
             llm=self.llm,
             retrievers=all_retrievers,  # Neo4j orchestrates all your innovations
             knowledge_graph=self.knowledge_graph
         )
-    
+
     async def ingest_documents(self, documents: List[Document]) -> None:
         """Ingest with your schema evolution + hierarchical communities"""
         await self.knowledge_graph.add_documents(documents)
-    
+
     async def search(
-        self, 
-        query: str, 
+        self,
+        query: str,
         retriever_config: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """Search using Neo4j orchestration with your enhancements"""
-        
+
         # Neo4j handles the orchestration across all retrievers
         result = await self.graphrag.search(query, retriever_config or {})
-        
+
         return {
             "answer": result.answer,
             "sources": result.sources,
@@ -543,7 +543,7 @@ result = await pipeline.search("Find AI safety regulations")
 
 ### **Week 2: Advanced Features Integration**
 - [ ] Create `SchemaEvolutionKnowledgeGraph` component
-- [ ] Create `AdvancedAnalyticsRetriever` component  
+- [ ] Create `AdvancedAnalyticsRetriever` component
 - [ ] Integrate your existing `AnalyticsService` as retriever
 - [ ] Test that your innovations work within Neo4j's architecture
 
@@ -567,7 +567,7 @@ result = await pipeline.search("Find AI safety regulations")
 - Advanced analytics becomes a powerful retriever option
 - All your work has value and is preserved
 
-### **✅ Leverages Neo4j's Strengths**  
+### **✅ Leverages Neo4j's Strengths**
 - Production-grade orchestration and coordination
 - LangChain integration works out of the box
 - Proven scalability and reliability
@@ -575,7 +575,7 @@ result = await pipeline.search("Find AI safety regulations")
 
 ### **✅ Adds Microsoft Innovations**
 - DRIFT search as a retriever component
-- Hierarchical Leiden as knowledge construction enhancement  
+- Hierarchical Leiden as knowledge construction enhancement
 - Global reasoning patterns as specialized retrievers
 - Research innovations without research-level instability
 
@@ -590,7 +590,7 @@ result = await pipeline.search("Find AI safety regulations")
 **Beyond Standard Neo4j GraphRAG:**
 - ✅ **Superior multi-tenancy** through your wrapper components
 - ✅ **Dynamic schema evolution** enhancing knowledge construction
-- ✅ **Advanced analytics** as retrieval enhancement  
+- ✅ **Advanced analytics** as retrieval enhancement
 - ✅ **Microsoft-level community detection** in production system
 
 **Beyond Microsoft GraphRAG:**

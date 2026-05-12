@@ -193,9 +193,9 @@ class Neo4jSchemaManager:
                 sample_count = int(count_records[0]["count"]) if count_records else 0
 
                 # Get indexes for this label (simplified)
-                indexes: list[str] = (
-                    []
-                )  # Would need to query SHOW INDEXES for actual indexes
+                indexes: list[
+                    str
+                ] = []  # Would need to query SHOW INDEXES for actual indexes
 
                 nodes[label] = NodeSchema(
                     label=label,
@@ -218,7 +218,7 @@ class Neo4jSchemaManager:
             # Get all relationship types and their schemas
             query = """
             MATCH (start {graph_id: $graph_id})-[r]->(end {graph_id: $graph_id})
-            WITH type(r) as relType, labels(start) as startLabels, labels(end) as endLabels, 
+            WITH type(r) as relType, labels(start) as startLabels, labels(end) as endLabels,
                  keys(r) as props, r
             UNWIND props as prop
             WITH relType, startLabels, endLabels, prop, r[prop] as value
@@ -417,19 +417,19 @@ class Neo4jSchemaManager:
             # Return a basic fallback schema
             return f"""
             # Basic Schema for {graph_id}
-            
+
             ## Node Types
             - Entity (name: string, type: string, graph_id: string)
             - Chunk (text: string, graph_id: string)
             - Document (path: string, title: string, graph_id: string)
-            
+
             ## Relationship Types
             - (Entity)-[:FOUNDED_BY]->(Entity)
             - (Entity)-[:CEO_OF]->(Entity)
             - (Entity)-[:LOCATED_IN]->(Entity)
             - (Entity)-[:FROM_CHUNK]->(Chunk)
             - (Chunk)-[:FROM_DOCUMENT]->(Document)
-            
+
             ## Important Notes
             - Always include 'graph_id: "{graph_id}"' in WHERE clauses
             """

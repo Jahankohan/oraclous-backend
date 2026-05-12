@@ -7,7 +7,6 @@ ToolNotPermittedError is raised at the top of every method, before any I/O,
 so the check cannot be bypassed by the calling code.
 """
 
-import asyncio
 import inspect
 from typing import Any
 
@@ -128,7 +127,9 @@ class AgentToolkit:
         self._require("neighbors")
         depth = min(max(1, depth), _MAX_DEPTH)
         # depth embedded as f-string — Neo4j 5.x does not allow range upper bounds as params
-        edge_filter = "AND ALL(rel IN r WHERE TYPE(rel) = $edge_type)" if edge_type else ""
+        edge_filter = (
+            "AND ALL(rel IN r WHERE TYPE(rel) = $edge_type)" if edge_type else ""
+        )
         query = f"""
         MATCH (n {{graph_id: $gid, id: $nid}})-[r*1..{depth}]-(m)
         WHERE m.graph_id = $gid {edge_filter}
@@ -153,7 +154,9 @@ class AgentToolkit:
         ORDER BY degree DESC
         LIMIT $top_n
         """
-        result = await self._driver.execute_query(query, {"gid": graph_id, "top_n": top_n})
+        result = await self._driver.execute_query(
+            query, {"gid": graph_id, "top_n": top_n}
+        )
         return [_node_to_result(dict(rec["n"])) for rec in result.records]
 
     async def shortest_path(

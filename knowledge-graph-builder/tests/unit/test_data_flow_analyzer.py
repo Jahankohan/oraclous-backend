@@ -27,14 +27,13 @@ import ast
 import pytest
 
 from app.services.data_flow_analyzer import (
-    DataFlowAnalyzer,
     _MARK_TAINT,
     _MERGE_FLOWS_TO,
+    DataFlowAnalyzer,
     _analyze_function_ast,
     _is_taint_source,
     _module_qname_from_path,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers

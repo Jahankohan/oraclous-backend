@@ -118,7 +118,6 @@ class _AuthAndEvalPatch:
 
 
 class TestEvaluationEndpointHappyPath:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_evaluate_returns_200_with_scores(self, async_client):
@@ -231,7 +230,6 @@ class TestEvaluationEndpointHappyPath:
 
 
 class TestEvaluationEndpointAuth:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_missing_auth_header_returns_403(self, async_client):
@@ -281,7 +279,6 @@ class TestEvaluationEndpointAuth:
 
 
 class TestEvaluationEndpointValidation:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_empty_question_returns_422(self, async_client):
@@ -326,7 +323,6 @@ class TestEvaluationEndpointValidation:
 
 
 class TestEvaluationEndpointErrors:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_service_runtime_error_returns_500(self, async_client):

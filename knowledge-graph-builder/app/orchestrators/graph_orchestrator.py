@@ -250,14 +250,14 @@ class GraphOrchestrator:
 
         synthesis_prompt = f"""
         Original query: "{original_query}"
-        
+
         Base response: {graphrag_response}
-        
+
         Additional graph analytics:
-        - Communities: {analytics.get('communities', [])}
-        - Influential entities: {analytics.get('influential_entities', [])}
-        - Key relationships: {analytics.get('relationships', [])}
-        
+        - Communities: {analytics.get("communities", [])}
+        - Influential entities: {analytics.get("influential_entities", [])}
+        - Key relationships: {analytics.get("relationships", [])}
+
         Enhance the base response by incorporating relevant analytics insights.
         Keep the response natural and focused on answering the original query.
         Only add analytics insights that directly relate to the query.

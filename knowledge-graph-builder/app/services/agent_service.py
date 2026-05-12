@@ -63,9 +63,7 @@ class AgentService:
     def __init__(self, driver: AsyncDriver):
         self._driver = driver
 
-    async def create_agent(
-        self, graph_id: str, user_id: str, data: AgentCreate
-    ) -> str:
+    async def create_agent(self, graph_id: str, user_id: str, data: AgentCreate) -> str:
         agent_id = str(uuid4())
         now = int(time.time())
         await self._driver.execute_query(
@@ -118,9 +116,7 @@ class AgentService:
         )
         return [_row_to_dict(dict(rec)) for rec in result.records]
 
-    async def get_agent(
-        self, graph_id: str, agent_id: str
-    ) -> dict[str, Any] | None:
+    async def get_agent(self, graph_id: str, agent_id: str) -> dict[str, Any] | None:
         result = await self._driver.execute_query(
             """
             MATCH (a:Agent:__Platform__ {graph_id: $graph_id, agent_id: $agent_id})
@@ -177,7 +173,7 @@ class AgentService:
         query = f"""
         MATCH (a:Agent:__Platform__ {{graph_id: $graph_id, agent_id: $agent_id}})
         WHERE a.deactivated_at IS NULL
-        SET {', '.join(set_clauses)}
+        SET {", ".join(set_clauses)}
         RETURN a
         """
         result = await self._driver.execute_query(query, params)

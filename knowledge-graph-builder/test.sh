@@ -56,20 +56,20 @@ wait_for_service() {
     local service=$1
     local max_attempts=30
     local attempt=1
-    
+
     echo "⏳ Waiting for $service to be ready..."
-    
+
     while [ $attempt -le $max_attempts ]; do
         if docker-compose exec -T $service echo "ready" >/dev/null 2>&1; then
             echo "✅ $service is ready!"
             return 0
         fi
-        
+
         echo "   Attempt $attempt/$max_attempts - waiting 2 seconds..."
         sleep 2
         ((attempt++))
     done
-    
+
     echo "❌ Timeout waiting for $service"
     return 1
 }
@@ -78,16 +78,16 @@ wait_for_service() {
 if [ "$SETUP" = true ]; then
     echo ""
     echo "🚀 Setting up test environment..."
-    
+
     # Start Docker services
     echo "Starting Docker services..."
     docker-compose up -d
-    
+
     # Wait for services
     wait_for_service "neo4j"
-    wait_for_service "postgres" 
+    wait_for_service "postgres"
     wait_for_service "knowledge-graph-builder"
-    
+
     # Additional wait for Neo4j initialization
     echo "⏳ Waiting for Neo4j to fully initialize..."
     sleep 10

@@ -30,16 +30,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.schemas.chat_schemas import TemporalMode
+
 # Stubs for TASK-003 symbols (CommunitySummaryRetriever, COMMUNITY_SUMMARY) are
 # injected in conftest.py::pytest_sessionstart before collection begins.
 # Those stubs allow chat_service.py (which references TASK-003 code) to be imported.
-
 from app.schemas.graph_schemas import (
     EntityNodeProperties,
     RelationshipProperties,
     TemporalFilter,
 )
-from app.schemas.chat_schemas import TemporalMode
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -445,9 +445,7 @@ class TestPointInTimeFilter:
         rel_vt = _dt(2022, 12, 31)
 
         # Simulate what the WHERE clause checks
-        passes = (rel_vf is None or rel_vf <= pit) and (
-            rel_vt is None or rel_vt > pit
-        )
+        passes = (rel_vf is None or rel_vf <= pit) and (rel_vt is None or rel_vt > pit)
         assert passes, "Relationship valid 2020-2022 should pass point_in_time 2021-06"
 
     def test_relationship_starting_after_pit_fails_filter(self):
@@ -456,10 +454,10 @@ class TestPointInTimeFilter:
         rel_vf = _dt(2023, 1, 1)
         rel_vt = None  # still valid
 
-        passes = (rel_vf is None or rel_vf <= pit) and (
-            rel_vt is None or rel_vt > pit
+        passes = (rel_vf is None or rel_vf <= pit) and (rel_vt is None or rel_vt > pit)
+        assert not passes, (
+            "Relationship starting 2023 should NOT pass point_in_time 2021"
         )
-        assert not passes, "Relationship starting 2023 should NOT pass point_in_time 2021"
 
 
 # ===========================================================================
@@ -622,9 +620,7 @@ class TestEndToEndTemporalMultihop:
             patch("app.services.chat_service.OpenAIEmbeddings"),
             patch("app.services.chat_service.OpenAILLM"),
             patch("app.services.chat_service.settings") as mock_settings,
-            patch(
-                "app.services.chat_service.neo4j_client"
-            ) as mock_neo4j,
+            patch("app.services.chat_service.neo4j_client") as mock_neo4j,
         ):
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_neo4j.async_driver = mock_driver
@@ -633,9 +629,7 @@ class TestEndToEndTemporalMultihop:
                 graph_id="test-graph-001",
                 retriever_type=RetrieverType.VECTOR_CYPHER,
             )
-            await svc._multihop_enrich(
-                ["Alice"], temporal_filter=tf
-            )
+            await svc._multihop_enrich(["Alice"], temporal_filter=tf)
 
         # Verify the driver was called with a query that includes temporal params.
         assert mock_driver.execute_query.called
@@ -659,7 +653,7 @@ class TestEndToEndTemporalMultihop:
         Without a temporal filter, _multihop_enrich must use the base
         _MULTIHOP_CYPHER query (no valid_from / valid_to conditions).
         """
-        from app.services.chat_service import ChatService, _MULTIHOP_CYPHER
+        from app.services.chat_service import ChatService
         from app.services.retriever_factory import RetrieverType
 
         mock_driver = AsyncMock()
@@ -671,9 +665,7 @@ class TestEndToEndTemporalMultihop:
             patch("app.services.chat_service.OpenAIEmbeddings"),
             patch("app.services.chat_service.OpenAILLM"),
             patch("app.services.chat_service.settings") as mock_settings,
-            patch(
-                "app.services.chat_service.neo4j_client"
-            ) as mock_neo4j,
+            patch("app.services.chat_service.neo4j_client") as mock_neo4j,
         ):
             mock_settings.OPENAI_API_KEY = "test-key"
             mock_neo4j.async_driver = mock_driver
@@ -781,7 +773,9 @@ class TestBitemporalMigrationTask:
     @pytest.fixture(autouse=True)
     def _check_presence(self):
         try:
-            from app.services.background_jobs import run_bitemporal_migration_v1  # noqa: F401
+            from app.services.background_jobs import (
+                run_bitemporal_migration_v1,  # noqa: F401
+            )
         except (ImportError, AttributeError):
             pytest.skip(
                 "TASK-006 absent: run_bitemporal_migration_v1 not in background_jobs on this branch"

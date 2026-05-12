@@ -27,7 +27,6 @@ What this file does NOT cover (delegated to TASK-072, QA):
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import shutil
@@ -49,13 +48,12 @@ from app.scripts.backfill_assessment_run import (
     CONFIDENCE_STR_TO_FLOAT,
     LEGACY_SLUG_ALIASES,
     BackfillConfig,
-    BackfillStats,
     _conflict_to_payload,
     _deliverable_from_md_file,
     _evidence_to_finding,
     _iter_jsonl_records,
-    _normalize_conflict_status,
     _normalize_confidence,
+    _normalize_conflict_status,
     _normalize_label,
     _normalize_module_slug,
     _resolve_record_id,
@@ -63,7 +61,6 @@ from app.scripts.backfill_assessment_run import (
     _walk_module_md_files,
     run_backfill,
 )
-
 
 # ============================================================================
 # Unit tests — value normalization
@@ -144,7 +141,10 @@ class TestNormalizeModuleSlug:
         assert _normalize_module_slug("company-intel") == "company-intel"
 
     def test_legacy_alias(self):
-        assert _normalize_module_slug("cust-journey") == LEGACY_SLUG_ALIASES["cust-journey"]
+        assert (
+            _normalize_module_slug("cust-journey")
+            == LEGACY_SLUG_ALIASES["cust-journey"]
+        )
         assert _normalize_module_slug("cust-journey") == "customer-journey"
 
     def test_trim_and_lower(self):
@@ -189,13 +189,15 @@ class TestIterJsonlRecords:
         p.write_text('{"id":"good","x":1}\n{not-json}\n{"id":"good2"}\n')
         recs = list(_iter_jsonl_records(p))
         ok_ids = [r.get("id") for _, r in recs if isinstance(r, dict) and "id" in r]
-        parse_errors = [r for _, r in recs if isinstance(r, dict) and "__parse_error__" in r]
+        parse_errors = [
+            r for _, r in recs if isinstance(r, dict) and "__parse_error__" in r
+        ]
         assert "good" in ok_ids and "good2" in ok_ids
         assert len(parse_errors) == 1
 
     def test_blank_lines_skipped(self, tmp_path: Path):
         p = tmp_path / "evidence.jsonl"
-        p.write_text("\n\n{\"id\":\"a\"}\n\n")
+        p.write_text('\n\n{"id":"a"}\n\n')
         recs = [r for _, r in _iter_jsonl_records(p)]
         assert len(recs) == 1 and recs[0]["id"] == "a"
 
@@ -566,10 +568,12 @@ async def test_backfill_minimal_synthetic_run_round_trips(
         api_base="http://test/api/v1",
         token=None,
     )
-    stats = await run_backfill(cfg, http_client=_http_client, neo4j_driver=neo4j_test_driver)
+    stats = await run_backfill(
+        cfg, http_client=_http_client, neo4j_driver=neo4j_test_driver
+    )
 
     # ── Findings round-trip ──────────────────────────────────────────────
-    run_id = getattr(stats, "run_id")
+    run_id = stats.run_id
     rs = await neo4j_test_driver.execute_query(
         """
         MATCH (f:Finding {graph_id: $gid, run_id: $rid})
@@ -659,8 +663,10 @@ async def test_backfill_is_idempotent(
         token=None,
     )
     # First pass.
-    first = await run_backfill(cfg, http_client=_http_client, neo4j_driver=neo4j_test_driver)
-    run_id_1 = getattr(first, "run_id")
+    first = await run_backfill(
+        cfg, http_client=_http_client, neo4j_driver=neo4j_test_driver
+    )
+    run_id_1 = first.run_id
 
     # Count findings after first pass.
     rs = await neo4j_test_driver.execute_query(
@@ -678,7 +684,9 @@ async def test_backfill_is_idempotent(
     # asserting on the global Finding count in the tenant graph.
     # (The script's own create_run generates a fresh run_id each time —
     # idempotency at the finding level is what STORY-026 cares about.)
-    second = await run_backfill(cfg, http_client=_http_client, neo4j_driver=neo4j_test_driver)
+    second = await run_backfill(
+        cfg, http_client=_http_client, neo4j_driver=neo4j_test_driver
+    )
     rs = await neo4j_test_driver.execute_query(
         """
         MATCH (f:Finding {graph_id: $gid}) RETURN count(f) AS n
@@ -793,11 +801,11 @@ async def test_backfill_real_eurail_run_round_trips(
             graph_id=gid,
             template_slug=template_slug,
             # The FastAPI app double-prefixes assessment routes (outer /api/v1 in
-        # main.py + inner /api/v1 in api/v1/router.py). The script's REST
-        # client appends "/api/v1/assessments" to api_base, so we have to thread
-        # one /api/v1 into the base for the URL to land on the live router
-        # (TASK-072 QA Defect 2).
-        api_base="http://test/api/v1",
+            # main.py + inner /api/v1 in api/v1/router.py). The script's REST
+            # client appends "/api/v1/assessments" to api_base, so we have to thread
+            # one /api/v1 into the base for the URL to land on the live router
+            # (TASK-072 QA Defect 2).
+            api_base="http://test/api/v1",
             token=None,
             neo4j_uri=neo4j_uri,
             neo4j_user=neo4j_user,

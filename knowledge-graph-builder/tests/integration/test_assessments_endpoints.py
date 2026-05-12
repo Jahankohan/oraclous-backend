@@ -17,7 +17,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock
 
 import pytest
@@ -222,9 +222,7 @@ class TestCreateRunEndpointIntegration:
         assert len(result.records) == 1
         assert result.records[0]["template_id"] == _TEMPLATE_ID
 
-    async def test_create_run_idempotent_replay_when_run_id_supplied(
-        self, client
-    ):
+    async def test_create_run_idempotent_replay_when_run_id_supplied(self, client):
         run_id = f"run-rest-{_SESSION}-replay"
         body = {
             "run_id": run_id,
@@ -389,9 +387,7 @@ class TestRecordUnresolvedQuestionIntegration:
 
 
 class TestPersistDeliverableIntegration:
-    async def test_persists_deliverable(
-        self, client, neo4j_test_driver: AsyncDriver
-    ):
+    async def test_persists_deliverable(self, client, neo4j_test_driver: AsyncDriver):
         data = await _create_run(client, subject_slug="deliv-test")
         run_id = data["run_id"]
         mr_id = data["module_run_ids"][0]
@@ -407,9 +403,7 @@ class TestPersistDeliverableIntegration:
                 "content_uri": "file:///tmp/m1.md",
             }
         }
-        resp = await client.post(
-            f"{_BASE}/runs/{run_id}/deliverables", json=body
-        )
+        resp = await client.post(f"{_BASE}/runs/{run_id}/deliverables", json=body)
         assert resp.status_code == 201, resp.text
         assert resp.json()["created"] is True
 
@@ -425,9 +419,7 @@ class TestPersistDeliverableIntegration:
 
 
 class TestPersistFinalDocsIntegration:
-    async def test_bulk_207_persists_each(
-        self, client, neo4j_test_driver: AsyncDriver
-    ):
+    async def test_bulk_207_persists_each(self, client, neo4j_test_driver: AsyncDriver):
         data = await _create_run(client, subject_slug="final-docs")
         run_id = data["run_id"]
         body = {
@@ -575,9 +567,7 @@ class TestHeartbeatIntegration:
         data = await _create_run(client, subject_slug="hb-mr")
         run_id = data["run_id"]
         mr_id = data["module_run_ids"][0]
-        resp = await client.post(
-            f"{_BASE}/runs/{run_id}/module-runs/{mr_id}:heartbeat"
-        )
+        resp = await client.post(f"{_BASE}/runs/{run_id}/module-runs/{mr_id}:heartbeat")
         assert resp.status_code == 200, resp.text
 
         result = await neo4j_test_driver.execute_query(

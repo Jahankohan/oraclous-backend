@@ -1,7 +1,6 @@
 """Pydantic schemas for Graph-Native Agent CRUD and execution."""
 
 from typing import Literal
-from uuid import UUID
 
 from pydantic import BaseModel, field_validator
 

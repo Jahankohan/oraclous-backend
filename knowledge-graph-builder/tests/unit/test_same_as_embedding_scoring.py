@@ -24,11 +24,12 @@ from app.components.entity_resolver import (
 )
 from app.schemas.federation_schemas import SameAsCandidate
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _make_candidate(entity: dict, score: float, method: str = "vector") -> SameAsCandidate:
+def _make_candidate(
+    entity: dict, score: float, method: str = "vector"
+) -> SameAsCandidate:
     return SameAsCandidate(entity=entity, score=score, method=method)
 
 
@@ -125,7 +126,9 @@ async def test_type_mismatch_prevents_merge():
     session = _make_async_session(neighbor_rows=[])
 
     type_score = EntityResolver._type_score(entity_a, entity_b)
-    assert type_score == 0.0, f"Expected type_score=0.0 for Organization vs Fruit, got {type_score}"
+    assert type_score == 0.0, (
+        f"Expected type_score=0.0 for Organization vs Fruit, got {type_score}"
+    )
 
     final_score = await EntityResolver.score(
         entity_a=entity_a,
@@ -220,7 +223,10 @@ async def test_zero_neighbors_no_zero_division():
 @pytest.mark.asyncio
 async def test_candidate_threshold_filters_low_similarity():
     """find_same_as_candidates must not return candidates with similarity < 0.60."""
-    from app.services.federation_service import FederationService, _SAME_AS_CANDIDATE_THRESHOLD
+    from app.services.federation_service import (
+        _SAME_AS_CANDIDATE_THRESHOLD,
+        FederationService,
+    )
 
     assert _SAME_AS_CANDIDATE_THRESHOLD == 0.60, (
         f"Expected candidate threshold to be 0.60, got {_SAME_AS_CANDIDATE_THRESHOLD}"
@@ -232,15 +238,17 @@ async def test_candidate_threshold_filters_low_similarity():
 
     # Vector search returns a candidate with similarity below threshold
     mock_result_low = AsyncMock()
-    mock_result_low.data = AsyncMock(return_value=[
-        {
-            "entity_id": "id-b",
-            "name": "Unrelated Entity",
-            "type": "Organization",
-            "source_graph_id": "graph-b",
-            "similarity": 0.45,  # below threshold
-        }
-    ])
+    mock_result_low.data = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "id-b",
+                "name": "Unrelated Entity",
+                "type": "Organization",
+                "source_graph_id": "graph-b",
+                "similarity": 0.45,  # below threshold
+            }
+        ]
+    )
 
     call_count = 0
 
@@ -275,44 +283,54 @@ async def test_candidate_threshold_filters_low_similarity():
     embedding = [0.1] * 10
 
     # Patch _vector_search_candidates to return a below-threshold candidate
-    with patch.object(
-        svc,
-        "_vector_search_candidates",
-        new=AsyncMock(return_value=[
-            {
-                "entity_id": "id-b",
-                "name": "Unrelated Entity",
-                "type": "Organization",
-                "source_graph_id": "graph-b",
-                "similarity": 0.45,  # below threshold — should be excluded by the query
-            }
-        ]),
-    ), patch.object(
-        svc,
-        "_find_exact_match",
-        new=AsyncMock(return_value=None),
-    ), patch.object(
-        svc,
-        "_validate_and_filter",
-        new=AsyncMock(return_value=None),
+    with (
+        patch.object(
+            svc,
+            "_vector_search_candidates",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "entity_id": "id-b",
+                        "name": "Unrelated Entity",
+                        "type": "Organization",
+                        "source_graph_id": "graph-b",
+                        "similarity": 0.45,  # below threshold — should be excluded by the query
+                    }
+                ]
+            ),
+        ),
+        patch.object(
+            svc,
+            "_find_exact_match",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            svc,
+            "_validate_and_filter",
+            new=AsyncMock(return_value=None),
+        ),
     ):
         candidates = await svc.find_same_as_candidates(
             "id-a", "graph-a", ["graph-b"], embedding, user_id="user-1"
         )
 
     # Threshold filtering is done at the Cypher level (inside _vector_search_candidates).
-    with patch.object(
-        svc,
-        "_vector_search_candidates",
-        new=AsyncMock(return_value=[]),
-    ) as mock_vec, patch.object(
-        svc,
-        "_find_exact_match",
-        new=AsyncMock(return_value=None),
-    ), patch.object(
-        svc,
-        "_validate_and_filter",
-        new=AsyncMock(return_value=None),
+    with (
+        patch.object(
+            svc,
+            "_vector_search_candidates",
+            new=AsyncMock(return_value=[]),
+        ) as mock_vec,
+        patch.object(
+            svc,
+            "_find_exact_match",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            svc,
+            "_validate_and_filter",
+            new=AsyncMock(return_value=None),
+        ),
     ):
         await svc.find_same_as_candidates(
             "id-a", "graph-a", ["graph-b"], embedding, user_id="user-1"
@@ -353,13 +371,19 @@ async def test_llm_disambiguation_yes_path():
     async def fake_create_same_as_link(
         session, id_a, id_b, score, graph_id_a, graph_id_b, method="multi-signal"
     ):
-        links_created.append({"method": method, "score": score, "id_a": id_a, "id_b": id_b})
+        links_created.append(
+            {"method": method, "score": score, "id_a": id_a, "id_b": id_b}
+        )
 
     with (
         patch(
             "app.components.entity_resolver.disambiguate_entities",
             new=AsyncMock(
-                return_value={"decision": "YES", "confidence": "HIGH", "reason": "same entity"}
+                return_value={
+                    "decision": "YES",
+                    "confidence": "HIGH",
+                    "reason": "same entity",
+                }
             ),
         ),
         patch.object(
@@ -456,8 +480,18 @@ async def test_end_to_end_federation_same_as_link():
     graph_ids = ["graph-a", "graph-b"]
 
     validation_rows = [
-        {"graph_id": "graph-a", "user_id": user_id, "name": "Graph A", "federatable": True},
-        {"graph_id": "graph-b", "user_id": user_id, "name": "Graph B", "federatable": True},
+        {
+            "graph_id": "graph-a",
+            "user_id": user_id,
+            "name": "Graph A",
+            "federatable": True,
+        },
+        {
+            "graph_id": "graph-b",
+            "user_id": user_id,
+            "name": "Graph B",
+            "federatable": True,
+        },
     ]
     entity_rows = [
         {
@@ -549,9 +583,18 @@ async def test_exact_match_fast_path_confidence():
 
     svc = FederationService(async_driver=driver)
 
-    exact_result = {"entity_id": "id-b", "name": "IBM", "type": "Organization", "source_graph_id": "graph-b"}
-    with patch.object(svc, "_validate_and_filter", new=AsyncMock(return_value=None)), \
-         patch.object(svc, "_find_exact_match", new=AsyncMock(return_value=exact_result)):
+    exact_result = {
+        "entity_id": "id-b",
+        "name": "IBM",
+        "type": "Organization",
+        "source_graph_id": "graph-b",
+    }
+    with (
+        patch.object(svc, "_validate_and_filter", new=AsyncMock(return_value=None)),
+        patch.object(
+            svc, "_find_exact_match", new=AsyncMock(return_value=exact_result)
+        ),
+    ):
         candidates = await svc.find_same_as_candidates(
             "id-a", "graph-a", ["graph-b"], [], user_id="user-1"
         )

@@ -64,7 +64,6 @@ class TestRetrieverFactoryGraphIdFilter:
     """retriever_factory._inject_graph_id_filter must produce parameterized WHERE."""
 
     def _make_factory(self):
-
         from app.services.retriever_factory import RetrieverFactory
 
         factory = RetrieverFactory.__new__(RetrieverFactory)

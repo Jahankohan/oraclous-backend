@@ -1,9 +1,10 @@
 from enum import Enum
 
+
 # Enums for tool categorization
 class ToolCategory(str, Enum):
     INGESTION = "INGESTION"
-    TRANSFORMERS = "TRANSFORMERS"  
+    TRANSFORMERS = "TRANSFORMERS"
     ANALYTICS = "ANALYTICS"
     STORAGE = "STORAGE"
     FINETUNER = "FINETUNER"
@@ -11,8 +12,8 @@ class ToolCategory(str, Enum):
 
 class ToolType(str, Enum):
     INTERNAL = "INTERNAL"  # Implemented in our codebase
-    MCP = "MCP"           # Model Context Protocol servers
-    API = "API"           # External API integrations
+    MCP = "MCP"  # Model Context Protocol servers
+    API = "API"  # External API integrations
 
 
 class CredentialType(str, Enum):

@@ -133,11 +133,13 @@ async def _resolve_same_as_async(
                     # A link was created if entity_b does NOT appear in ambiguous_rejected.
                     already_linked = _was_linked(entity_b_id, ambiguous_rejected)
                     if already_linked:
-                        created_links.append({
-                            "entity_a_id": entity_id,
-                            "entity_b_id": entity_b_id,
-                            "confidence": candidate.get("score", 0.0),
-                        })
+                        created_links.append(
+                            {
+                                "entity_a_id": entity_id,
+                                "entity_b_id": entity_b_id,
+                                "confidence": candidate.get("score", 0.0),
+                            }
+                        )
                     else:
                         # Check whether this candidate fell in the rejected zone
                         if candidate.get("score", 0.0) < AMBIGUOUS_LOWER:
@@ -177,7 +179,9 @@ async def _fetch_entities_with_embeddings(
         result = await session.run(query, {"graph_id": graph_id})
         return await result.data()
     except Exception as exc:
-        logger.error("_fetch_entities_with_embeddings failed for graph %s: %s", graph_id, exc)
+        logger.error(
+            "_fetch_entities_with_embeddings failed for graph %s: %s", graph_id, exc
+        )
         return []
 
 
@@ -263,7 +267,11 @@ async def _find_candidates_for_entity(
         ]
     except Exception as exc:
         # Vector index may not exist — degrade gracefully
-        logger.warning("vector candidate search failed for entity %s: %s", entity.get("entity_id"), exc)
+        logger.warning(
+            "vector candidate search failed for entity %s: %s",
+            entity.get("entity_id"),
+            exc,
+        )
         return []
 
 

@@ -14,9 +14,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from app.services.row_transformer import (
     RowTransformer,
@@ -571,7 +569,7 @@ def test_transform_junctions_self_ref():
     tm = _make_employee_self_ref_mapping()
     rows_by_table = {
         "employees": [
-            {"id": 1, "name": "CEO", "manager_id": None},    # no manager — skipped
+            {"id": 1, "name": "CEO", "manager_id": None},  # no manager — skipped
             {"id": 2, "name": "VP", "manager_id": 1},
             {"id": 3, "name": "Manager", "manager_id": 1},
         ]
@@ -596,9 +594,7 @@ def test_transform_junctions_self_ref_rel_type_in_cypher():
     xfm = RowTransformer(mock_manager)
 
     tm = _make_employee_self_ref_mapping()
-    rows_by_table = {
-        "employees": [{"id": 2, "name": "VP", "manager_id": 1}]
-    }
+    rows_by_table = {"employees": [{"id": 2, "name": "VP", "manager_id": 1}]}
     xfm.transform_junctions([tm], rows_by_table, _GRAPH_ID, _CONNECTOR_ID)
 
     cypher = mock_session.run.call_args[0][0]
@@ -656,8 +652,6 @@ def test_import_from_schema_mapper():
     """Verify RowTransformer can use real TableMapping from schema_mapper."""
     from app.services.schema_mapper import (
         ColumnMapping,
-        GraphMappingRules,
-        RelationshipMapping,
         TableMapping,
     )
 

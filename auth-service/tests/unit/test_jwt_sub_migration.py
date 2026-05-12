@@ -8,6 +8,7 @@ Verifies:
 - verify_access_token / verify_refresh_token enforce UUID sub
 - TokenData uses user_id field
 """
+
 import uuid
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
@@ -44,6 +45,7 @@ from app.schema.auth_schemas import TokenData
 # _is_email helper
 # ---------------------------------------------------------------------------
 
+
 def test_is_email_detects_email():
     assert _is_email("user@example.com") is True
 
@@ -56,12 +58,15 @@ def test_is_email_rejects_uuid():
 # create_access_token — sub must be UUID, email separate claim
 # ---------------------------------------------------------------------------
 
+
 def test_create_access_token_sub_is_user_id():
     user_id = str(uuid.uuid4())
     email = "user@example.com"
 
     with patch("app.core.jwt_handler.settings", mock_settings):
-        token, expires_in = create_access_token({"sub": user_id, "email": email, "is_superuser": False})
+        token, expires_in = create_access_token(
+            {"sub": user_id, "email": email, "is_superuser": False}
+        )
 
     payload = jwt.decode(token, FAKE_SECRET, algorithms=[FAKE_ALGORITHM])
     assert payload["sub"] == user_id
@@ -73,7 +78,9 @@ def test_create_access_token_email_is_separate_claim():
     email = "user@example.com"
 
     with patch("app.core.jwt_handler.settings", mock_settings):
-        token, _ = create_access_token({"sub": user_id, "email": email, "is_superuser": False})
+        token, _ = create_access_token(
+            {"sub": user_id, "email": email, "is_superuser": False}
+        )
 
     payload = jwt.decode(token, FAKE_SECRET, algorithms=[FAKE_ALGORITHM])
     assert payload["email"] == email
@@ -83,7 +90,9 @@ def test_create_access_token_returns_expires_in():
     user_id = str(uuid.uuid4())
 
     with patch("app.core.jwt_handler.settings", mock_settings):
-        _, expires_in = create_access_token({"sub": user_id, "email": "u@example.com", "is_superuser": False})
+        _, expires_in = create_access_token(
+            {"sub": user_id, "email": "u@example.com", "is_superuser": False}
+        )
 
     assert expires_in == int(FAKE_EXPIRE_MINUTES) * 60
 
@@ -92,11 +101,14 @@ def test_create_access_token_returns_expires_in():
 # create_refresh_token — same sub=UUID guarantee
 # ---------------------------------------------------------------------------
 
+
 def test_create_refresh_token_sub_is_user_id():
     user_id = str(uuid.uuid4())
 
     with patch("app.core.jwt_handler.settings", mock_settings):
-        token = create_refresh_token({"sub": user_id, "email": "u@example.com", "is_superuser": False})
+        token = create_refresh_token(
+            {"sub": user_id, "email": "u@example.com", "is_superuser": False}
+        )
 
     payload = jwt.decode(token, FAKE_SECRET, algorithms=[FAKE_ALGORITHM])
     assert payload["sub"] == user_id
@@ -106,9 +118,11 @@ def test_create_refresh_token_sub_is_user_id():
 # verify_access_token — rejects legacy email-sub tokens
 # ---------------------------------------------------------------------------
 
+
 def _mint_legacy_token(email: str) -> str:
     """Mint a token with email in sub (legacy format)."""
     from datetime import datetime, timezone
+
     payload = {
         "sub": email,
         "exp": datetime.now(timezone.utc) + timedelta(hours=1),
@@ -119,6 +133,7 @@ def _mint_legacy_token(email: str) -> str:
 def _mint_valid_token(user_id: str) -> str:
     """Mint a token with UUID in sub (new format)."""
     from datetime import datetime, timezone
+
     payload = {
         "sub": user_id,
         "email": "user@example.com",
@@ -150,6 +165,7 @@ def test_verify_access_token_rejects_email_sub():
 
 def test_verify_access_token_rejects_missing_sub():
     from datetime import datetime, timezone
+
     payload = {"exp": datetime.now(timezone.utc) + timedelta(hours=1)}
     token = jwt.encode(payload, FAKE_SECRET, algorithm=FAKE_ALGORITHM)
 
@@ -174,11 +190,14 @@ def test_verify_access_token_rejects_tampered_token():
 # verify_refresh_token — returns TokenData with user_id field
 # ---------------------------------------------------------------------------
 
+
 def test_verify_refresh_token_returns_token_data_with_user_id():
     user_id = str(uuid.uuid4())
 
     with patch("app.core.jwt_handler.settings", mock_settings):
-        refresh_token = create_refresh_token({"sub": user_id, "email": "u@example.com", "is_superuser": True})
+        refresh_token = create_refresh_token(
+            {"sub": user_id, "email": "u@example.com", "is_superuser": True}
+        )
         token_data = verify_refresh_token(refresh_token)
 
     assert isinstance(token_data, TokenData)
@@ -199,6 +218,7 @@ def test_verify_refresh_token_rejects_email_sub():
 # ---------------------------------------------------------------------------
 # TokenData schema
 # ---------------------------------------------------------------------------
+
 
 def test_token_data_has_user_id_field():
     user_id = str(uuid.uuid4())

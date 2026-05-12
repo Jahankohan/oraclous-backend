@@ -170,7 +170,7 @@ async def sample_test_data(neo4j_test_driver: AsyncDriver, clean_test_graph: Non
             CREATE (l:Location {name: 'San Francisco', type: 'City', graph_id: $graph_id})
             CREATE (d:Document {title: 'Company Overview', path: '/docs/overview.pdf', graph_id: $graph_id})
             CREATE (ch:Chunk {text: 'TechNova Corp is a leading technology company...', graph_id: $graph_id})
-            
+
             CREATE (p)-[:CEO_OF]->(c)
             CREATE (c)-[:LOCATED_IN]->(l)
             CREATE (ch)-[:FROM_DOCUMENT]->(d)

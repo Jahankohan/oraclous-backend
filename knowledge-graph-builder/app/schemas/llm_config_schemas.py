@@ -14,10 +14,19 @@ class LLMProvider(str, Enum):
 
 class LLMConfigCreate(BaseModel):
     provider: LLMProvider
-    model: str = Field(..., description="Model identifier, e.g. 'claude-sonnet-4-6', 'openai/gpt-4o'")
-    api_key: str = Field(..., description="Plaintext API key — forwarded to credential-broker, never stored in Neo4j")
-    base_url: str | None = Field(None, description="Required for openrouter and azure-openai")
-    api_version: str | None = Field(None, description="Azure OpenAI API version, e.g. '2024-02-01'")
+    model: str = Field(
+        ..., description="Model identifier, e.g. 'claude-sonnet-4-6', 'openai/gpt-4o'"
+    )
+    api_key: str = Field(
+        ...,
+        description="Plaintext API key — forwarded to credential-broker, never stored in Neo4j",
+    )
+    base_url: str | None = Field(
+        None, description="Required for openrouter and azure-openai"
+    )
+    api_version: str | None = Field(
+        None, description="Azure OpenAI API version, e.g. '2024-02-01'"
+    )
 
 
 class LLMConfigCreateResponse(BaseModel):

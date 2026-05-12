@@ -129,9 +129,10 @@ import re
 import sys
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any
 
 import httpx
 
@@ -167,7 +168,7 @@ CONFIDENCE_STR_TO_FLOAT: dict[str, float] = {
 
 #: The schema constrains label to {DIRECT, INFERRED, CONTRADICTION}. The
 #: Eurail run has 18 nulls + 1 ASSUMPTION outlier; we map deterministically.
-LABEL_NORMALIZE: dict[Optional[str], str] = {
+LABEL_NORMALIZE: dict[str | None, str] = {
     None: "DIRECT",
     "": "DIRECT",
     "DIRECT": "DIRECT",
@@ -178,7 +179,7 @@ LABEL_NORMALIZE: dict[Optional[str], str] = {
 
 #: Conflict resolution → status. Legacy uses uppercase labels; new schema
 #: uses lowercase enum status.
-CONFLICT_RESOLUTION_TO_STATUS: dict[Optional[str], str] = {
+CONFLICT_RESOLUTION_TO_STATUS: dict[str | None, str] = {
     None: "open",
     "": "open",
     "OPEN": "open",
@@ -341,7 +342,7 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex}"
 
 
-def _resolve_record_id(record: dict[str, Any]) -> Optional[str]:
+def _resolve_record_id(record: dict[str, Any]) -> str | None:
     """Pick the natural id off a legacy JSONL record.
 
     The Eurail 2026-05-06 run has three id shapes:
@@ -373,10 +374,10 @@ class AssessmentApiClient:
     def __init__(
         self,
         base_url: str,
-        token: Optional[str],
+        token: str | None,
         timeout: float = 30.0,
         *,
-        http_client: Optional[httpx.AsyncClient] = None,
+        http_client: httpx.AsyncClient | None = None,
     ):
         # The router is mounted under /api/v1 in main.py AND the assessments
         # router itself has its own prefix=/api/v1 in v1/router.py — so the
@@ -403,7 +404,7 @@ class AssessmentApiClient:
         if self._owns_client:
             await self._client.aclose()
 
-    async def __aenter__(self) -> "AssessmentApiClient":
+    async def __aenter__(self) -> AssessmentApiClient:
         return self
 
     async def __aexit__(self, *exc) -> None:
@@ -480,15 +481,15 @@ class AssessmentApiClient:
 
 async def _insert_gap_module_and_module_run(
     *,
-    neo4j_uri: Optional[str] = None,
-    neo4j_user: Optional[str] = None,
-    neo4j_password: Optional[str] = None,
+    neo4j_uri: str | None = None,
+    neo4j_user: str | None = None,
+    neo4j_password: str | None = None,
     catalog_graph_id: str,
     tenant_graph_id: str,
     template_id: str,
     run_id: str,
     module_slug: str,
-    driver: Optional[Any] = None,
+    driver: Any | None = None,
 ) -> tuple[str, str]:
     """Insert an ad-hoc gap-research :Module + :ModuleRun via direct Cypher.
 
@@ -519,9 +520,7 @@ async def _insert_gap_module_and_module_run(
                 "_insert_gap_module_and_module_run requires either a driver or "
                 "neo4j_uri+user+password"
             )
-        driver = AsyncGraphDatabase.driver(
-            neo4j_uri, auth=(neo4j_user, neo4j_password)
-        )
+        driver = AsyncGraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
         own_driver = True
     try:
         # 1. MERGE the Module in the catalog graph.
@@ -578,12 +577,12 @@ async def _insert_gap_module_and_module_run(
 
 async def _fetch_module_run_id_to_slug(
     *,
-    neo4j_uri: Optional[str] = None,
-    neo4j_user: Optional[str] = None,
-    neo4j_password: Optional[str] = None,
+    neo4j_uri: str | None = None,
+    neo4j_user: str | None = None,
+    neo4j_password: str | None = None,
     tenant_graph_id: str,
     run_id: str,
-    driver: Optional[Any] = None,
+    driver: Any | None = None,
 ) -> dict[str, str]:
     """Read the (module_run_id → module slug) mapping for a run.
 
@@ -601,9 +600,7 @@ async def _fetch_module_run_id_to_slug(
                 "_fetch_module_run_id_to_slug requires either a driver or "
                 "neo4j_uri+user+password"
             )
-        driver = AsyncGraphDatabase.driver(
-            neo4j_uri, auth=(neo4j_user, neo4j_password)
-        )
+        driver = AsyncGraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
         own_driver = True
     try:
         result = await driver.execute_query(
@@ -633,7 +630,7 @@ async def _fetch_module_run_id_to_slug(
 RAW_LIST_JOIN_DELIMITER = "\n\n"
 
 
-def _normalize_raw_text(value: Any) -> Optional[str]:
+def _normalize_raw_text(value: Any) -> str | None:
     """Coerce a legacy ``raw`` / ``searched`` field to ``Optional[str]``.
 
     The new ``Finding.raw`` schema field is ``str | None``, but 14 gap-research
@@ -698,12 +695,7 @@ def _evidence_to_finding(
     # Some gap-research records use a richer flat shape (gap_id / missing /
     # searched / finding / recommend_ask) instead of the canonical
     # {id, claim, raw}. Fold the closest free-text field into ``claim``.
-    claim = (
-        record.get("claim")
-        or record.get("finding")
-        or record.get("missing")
-        or ""
-    )
+    claim = record.get("claim") or record.get("finding") or record.get("missing") or ""
 
     # Normalize raw + source_quote to ``Optional[str]`` — see ``_normalize_raw_text``.
     # 14 Eurail gap-research records carry a list-shaped ``searched`` field
@@ -785,7 +777,7 @@ def _deliverable_from_md_file(
     *,
     graph_id: str,
     run_id: str,
-    module_run_id: Optional[str],
+    module_run_id: str | None,
     ordinal: int,
 ) -> dict[str, Any]:
     """Build a Deliverable payload from a markdown file on disk."""
@@ -901,23 +893,23 @@ class BackfillConfig:
     graph_id: str
     template_slug: str
     api_base: str
-    token: Optional[str]
+    token: str | None
     subject_slug: str = "eurail"
     subject_name: str = "Eurail B.V."
     vertical_slug: str = "rail-cooperative"
     # Optional direct-graph creds for ad-hoc gap-research ModuleRuns and
     # the post-create_run module_run_id→slug join (REST doesn't expose it).
-    neo4j_uri: Optional[str] = None
-    neo4j_user: Optional[str] = None
-    neo4j_password: Optional[str] = None
+    neo4j_uri: str | None = None
+    neo4j_user: str | None = None
+    neo4j_password: str | None = None
     catalog_graph_id: str = "__assessments_catalog__"
 
 
 async def run_backfill(
     cfg: BackfillConfig,
     *,
-    http_client: Optional[httpx.AsyncClient] = None,
-    neo4j_driver: Optional[Any] = None,
+    http_client: httpx.AsyncClient | None = None,
+    neo4j_driver: Any | None = None,
 ) -> BackfillStats:
     """Drive the full backfill end-to-end. Returns the stats counter.
 
@@ -1160,9 +1152,7 @@ async def run_backfill(
                         stats.conflicts_replayed += 1
                 except httpx.HTTPStatusError as exc:
                     stats.conflicts_failed += 1
-                    logger.error(
-                        "conflict %s POST failed: %s", record.get("id"), exc
-                    )
+                    logger.error("conflict %s POST failed: %s", record.get("id"), exc)
 
         # ── 6. Walk markdown deliverables (NN_/ddN_/gap-NN_) → POST each.
         files = _walk_module_md_files(cfg.run_dir)
@@ -1204,18 +1194,14 @@ async def run_backfill(
                     stats.deliverables_replayed += 1
             except httpx.HTTPStatusError as exc:
                 stats.deliverables_failed += 1
-                logger.error(
-                    "deliverable POST failed for %s: %s", path.name, exc
-                )
+                logger.error("deliverable POST failed for %s: %s", path.name, exc)
 
         # ── 7. final/ → bulk-final.
         final_files = _walk_final_doc_files(cfg.run_dir)
         stats.final_docs_total = len(final_files)
         if final_files:
             payload = [
-                _final_doc_from_file(
-                    p, graph_id=cfg.graph_id, run_id=run_id, ordinal=i
-                )
+                _final_doc_from_file(p, graph_id=cfg.graph_id, run_id=run_id, ordinal=i)
                 for i, p in enumerate(final_files)
             ]
             try:
@@ -1276,7 +1262,7 @@ async def run_backfill(
 # =============================================================================
 
 
-def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="backfill_assessment_run",
         description=(
@@ -1353,7 +1339,7 @@ def _format_summary(stats: BackfillStats) -> str:
     )
 
 
-def _main(argv: Optional[list[str]] = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

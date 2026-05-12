@@ -79,9 +79,14 @@ SCENARIOS = [(1, "1_graph"), (2, "2_graphs"), (5, "5_graphs")]
 
 def get_headers() -> dict[str, str]:
     if not ORACLOUS_API_KEY:
-        print("ERROR: ORACLOUS_API_KEY environment variable is not set.", file=sys.stderr)
+        print(
+            "ERROR: ORACLOUS_API_KEY environment variable is not set.", file=sys.stderr
+        )
         sys.exit(1)
-    return {"Authorization": f"Bearer {ORACLOUS_API_KEY}", "Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {ORACLOUS_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
 
 def percentile(values: list[float], pct: float) -> float:
@@ -130,7 +135,9 @@ def federation_query(
 
         if resp.status_code in (404, 405):
             # Federation endpoint not yet deployed — fall back to sequential chat
-            elapsed, success, error = _sequential_chat_fallback(session, query, graph_ids)
+            elapsed, success, error = _sequential_chat_fallback(
+                session, query, graph_ids
+            )
             return elapsed, success, "fallback:sequential"
 
         return elapsed, resp.ok, (resp.text[:200] if not resp.ok else None)
@@ -276,11 +283,19 @@ def main() -> None:
     # Compute overhead per additional graph
     overhead_per_graph: float | None = None
     p95_1 = next(
-        (r.get("p95_s") for r in scenario_results if r["n_graphs"] == 1 and not r.get("skipped")),
+        (
+            r.get("p95_s")
+            for r in scenario_results
+            if r["n_graphs"] == 1 and not r.get("skipped")
+        ),
         None,
     )
     p95_5 = next(
-        (r.get("p95_s") for r in scenario_results if r["n_graphs"] == 5 and not r.get("skipped")),
+        (
+            r.get("p95_s")
+            for r in scenario_results
+            if r["n_graphs"] == 5 and not r.get("skipped")
+        ),
         None,
     )
     if p95_1 is not None and p95_5 is not None:
@@ -305,7 +320,7 @@ def main() -> None:
     print("RESULTS — Federation Overhead")
     print("=" * 60)
     print(f"  {'Scenario':<15} {'P50':>8} {'P95':>8} {'P99':>8} {'mean':>8}")
-    print(f"  {'-'*15} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
+    print(f"  {'-' * 15} {'-' * 8} {'-' * 8} {'-' * 8} {'-' * 8}")
     for r in scenario_results:
         if r.get("skipped"):
             print(f"  {r['label']:<15} SKIPPED ({r.get('reason', '')})")

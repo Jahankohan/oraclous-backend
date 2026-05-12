@@ -10,7 +10,6 @@ from fastapi import HTTPException
 
 from app.services.document_processor import DocumentProcessor, document_processor
 
-
 # ---------------------------------------------------------------------------
 # Tests: process_document for markdown
 # ---------------------------------------------------------------------------
@@ -29,9 +28,7 @@ class TestProcessMarkdown:
 
     @pytest.mark.unit
     def test_markdown_returns_non_empty_text(self):
-        result = DocumentProcessor.process_document(
-            self.SAMPLE, source_type="md"
-        )
+        result = DocumentProcessor.process_document(self.SAMPLE, source_type="md")
         assert result["text"], "markdown text must be non-empty so chunker runs"
         assert "Behavioral Simulation" in result["text"]
         assert "Section A" in result["text"]
@@ -39,9 +36,7 @@ class TestProcessMarkdown:
 
     @pytest.mark.unit
     def test_markdown_keeps_structured_hierarchy(self):
-        result = DocumentProcessor.process_document(
-            self.SAMPLE, source_type="markdown"
-        )
+        result = DocumentProcessor.process_document(self.SAMPLE, source_type="markdown")
         assert "structured" in result
         assert result["structured"]["title"] == "Behavioral Simulation"
         assert len(result["structured"]["sections"]) == 3
@@ -56,6 +51,7 @@ class TestProcessMarkdown:
         assert result["metadata"]["content_type"] == "text/markdown"
         assert result["metadata"]["processing_method"] == "md_extractor"
         assert result["metadata"]["section_count"] == 3
+
 
 # ---------------------------------------------------------------------------
 # Tests: process_document routing

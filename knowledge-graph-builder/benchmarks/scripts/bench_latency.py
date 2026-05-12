@@ -174,7 +174,9 @@ BENCHMARK_QUESTIONS: list[str] = [
     "What is a Transformer model?",
 ]
 
-assert len(BENCHMARK_QUESTIONS) == 100, f"Expected 100 questions, got {len(BENCHMARK_QUESTIONS)}"
+assert len(BENCHMARK_QUESTIONS) == 100, (
+    f"Expected 100 questions, got {len(BENCHMARK_QUESTIONS)}"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +186,14 @@ assert len(BENCHMARK_QUESTIONS) == 100, f"Expected 100 questions, got {len(BENCH
 
 def get_headers() -> dict[str, str]:
     if not ORACLOUS_API_KEY:
-        print("ERROR: ORACLOUS_API_KEY environment variable is not set.", file=sys.stderr)
+        print(
+            "ERROR: ORACLOUS_API_KEY environment variable is not set.", file=sys.stderr
+        )
         sys.exit(1)
-    return {"Authorization": f"Bearer {ORACLOUS_API_KEY}", "Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {ORACLOUS_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
 
 def percentile(values: list[float], pct: float) -> float:
@@ -323,7 +330,7 @@ def main() -> None:
     print("RESULTS — Chat Latency")
     print("=" * 60)
     print(f"  {'Retriever':<20} {'P50':>8} {'P95':>8} {'P99':>8} {'mean':>8} {'OK':>6}")
-    print(f"  {'-'*20} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*6}")
+    print(f"  {'-' * 20} {'-' * 8} {'-' * 8} {'-' * 8} {'-' * 8} {'-' * 6}")
     for rt, data in per_retriever.items():
         s = data["stats"]
         print(
@@ -335,9 +342,13 @@ def main() -> None:
 
     if vector_p95 is not None:
         result_str = "PASS" if vector_target_met else "FAIL"
-        print(f"  TARGET vector P95 <{TARGET_P95_VECTOR_S}s: {result_str} ({vector_p95}s)")
+        print(
+            f"  TARGET vector P95 <{TARGET_P95_VECTOR_S}s: {result_str} ({vector_p95}s)"
+        )
     else:
-        print(f"  TARGET vector P95 <{TARGET_P95_VECTOR_S}s: SKIP (vector retriever not tested or no results)")
+        print(
+            f"  TARGET vector P95 <{TARGET_P95_VECTOR_S}s: SKIP (vector retriever not tested or no results)"
+        )
 
     print(f"\nResults written to: {out_path}")
 

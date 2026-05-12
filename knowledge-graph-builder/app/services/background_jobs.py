@@ -223,7 +223,8 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=60 * 60,  # 60 minutes — local LLMs are slow; give headroom for big docs
+    task_time_limit=60
+    * 60,  # 60 minutes — local LLMs are slow; give headroom for big docs
     task_soft_time_limit=50 * 60,  # 50 minutes
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=1000,
@@ -830,9 +831,7 @@ async def _invalidate_query_cache(graph_id: str) -> None:
         finally:
             await r.aclose()
     except Exception as exc:
-        logger.warning(
-            f"Query cache invalidation failed for graph {graph_id}: {exc}"
-        )
+        logger.warning(f"Query cache invalidation failed for graph {graph_id}: {exc}")
 
 
 # ==================== VERSIONING TASKS ====================
@@ -1937,7 +1936,9 @@ async def _sync_database_connector_async(
                         )
                         total_entities += count
                     except Exception as e:
-                        logger.warning(f"Schema-only KG write failed for {table.name}: {e}")
+                        logger.warning(
+                            f"Schema-only KG write failed for {table.name}: {e}"
+                        )
                         tables_failed.append(table.name)
             else:
                 from app.services.row_transformer import RowTransformer
@@ -2257,7 +2258,9 @@ def _run_bitemporal_migration_for_graph(self, graph_id: str) -> dict[str, Any]:
         driver.close()
 
 
-@celery_app.task(bind=True, name="app.services.background_jobs.run_bitemporal_migration_v1")
+@celery_app.task(
+    bind=True, name="app.services.background_jobs.run_bitemporal_migration_v1"
+)
 def run_bitemporal_migration_v1(self) -> dict[str, Any]:
     """
     Fan-out orchestrator: fetch all distinct graph_ids from Neo4j and dispatch

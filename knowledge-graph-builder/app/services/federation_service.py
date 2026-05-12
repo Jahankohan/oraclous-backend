@@ -300,8 +300,7 @@ class FederationService:
 
         union_body = "\n  UNION ALL\n".join(branches)
         cypher = (
-            f"CALL {{\n{union_body}\n}}\n"
-            "RETURN entity_id, name, type, source_graph_id"
+            f"CALL {{\n{union_body}\n}}\nRETURN entity_id, name, type, source_graph_id"
         )
 
         async with self._driver.session(database=self._database) as session:
@@ -577,8 +576,13 @@ class FederationService:
                     )
                     if confidence >= _SAME_AS_STORE_THRESHOLD:
                         merge_tasks.append(
-                            (a.entity_id, b.entity_id, confidence,
-                             a.source_graph_id, b.source_graph_id)
+                            (
+                                a.entity_id,
+                                b.entity_id,
+                                confidence,
+                                a.source_graph_id,
+                                b.source_graph_id,
+                            )
                         )
 
         if merge_tasks:
@@ -697,7 +701,7 @@ class FederationService:
 
                     name_score: float = 1.0  # exact normalised match
                     type_score: float = 1.0 if norm_type else 0.0
-                    embedding_score: float = 0.0   # stub
+                    embedding_score: float = 0.0  # stub
                     shared_rel_score: float = 0.0  # stub
 
                     score = round(

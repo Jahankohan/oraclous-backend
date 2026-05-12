@@ -13,7 +13,6 @@ import pytest
 from app.schemas.agent_schemas import NodeResult, PathResult
 from app.services.agent_tools import AgentToolkit, ToolNotPermittedError
 
-
 # ── Test helpers ──────────────────────────────────────────────────────────────
 
 
@@ -82,7 +81,9 @@ class TestToolNotPermitted:
     async def test_allowed_tool_does_not_raise(self):
         driver, _ = _make_driver()
         # Should NOT raise — driver returns empty records
-        result = await _toolkit(driver, ["community_members"]).community_members("g", "c")
+        result = await _toolkit(driver, ["community_members"]).community_members(
+            "g", "c"
+        )
         assert result == []
 
 
@@ -100,7 +101,9 @@ class TestGraphSearch:
         driver, _ = _make_driver(records=[rec])
         embedder = AsyncMock()
         embedder.embed_query = AsyncMock(return_value=[0.1, 0.2])
-        results = await _toolkit(driver, ["graph_search"], embedder).graph_search("g1", "query")
+        results = await _toolkit(driver, ["graph_search"], embedder).graph_search(
+            "g1", "query"
+        )
         assert len(results) == 1
         assert isinstance(results[0], NodeResult)
 
@@ -108,14 +111,18 @@ class TestGraphSearch:
         driver, _ = _make_driver()
         embedder = AsyncMock()
         embedder.embed_query = AsyncMock(return_value=[0.0])
-        await _toolkit(driver, ["graph_search"], embedder).graph_search("g1", "my question")
+        await _toolkit(driver, ["graph_search"], embedder).graph_search(
+            "g1", "my question"
+        )
         embedder.embed_query.assert_called_once_with("my question")
 
     async def test_graph_id_in_params(self):
         driver, _ = _make_driver()
         embedder = AsyncMock()
         embedder.embed_query = AsyncMock(return_value=[0.0])
-        await _toolkit(driver, ["graph_search"], embedder).graph_search("target-graph", "q")
+        await _toolkit(driver, ["graph_search"], embedder).graph_search(
+            "target-graph", "q"
+        )
         params = driver.execute_query.call_args[0][1]
         assert params["gid"] == "target-graph"
 
@@ -123,7 +130,9 @@ class TestGraphSearch:
         driver, _ = _make_driver()
         embedder = AsyncMock()
         embedder.embed_query = AsyncMock(return_value=[0.0])
-        await _toolkit(driver, ["graph_search"], embedder).graph_search("g", "q", max_results=7)
+        await _toolkit(driver, ["graph_search"], embedder).graph_search(
+            "g", "q", max_results=7
+        )
         params = driver.execute_query.call_args[0][1]
         assert params["max_results"] == 7
 
@@ -135,7 +144,9 @@ class TestCommunityMembers:
     async def test_returns_node_results(self):
         rec = {"n": _FakeNode({"id": "n1", "label": "Member", "graph_id": "g1"})}
         driver, _ = _make_driver(records=[rec])
-        results = await _toolkit(driver, ["community_members"]).community_members("g1", "c42")
+        results = await _toolkit(driver, ["community_members"]).community_members(
+            "g1", "c42"
+        )
         assert len(results) == 1
         assert isinstance(results[0], NodeResult)
 
@@ -153,7 +164,9 @@ class TestCommunityMembers:
 
     async def test_empty_returns_empty_list(self):
         driver, _ = _make_driver(records=[])
-        results = await _toolkit(driver, ["community_members"]).community_members("g", "c")
+        results = await _toolkit(driver, ["community_members"]).community_members(
+            "g", "c"
+        )
         assert results == []
 
 
@@ -214,9 +227,14 @@ class TestNeighbors:
 
 class TestDegreeCentrality:
     async def test_returns_node_results(self):
-        rec = {"n": _FakeNode({"id": "n1", "label": "Person", "graph_id": "g1"}), "degree": 5}
+        rec = {
+            "n": _FakeNode({"id": "n1", "label": "Person", "graph_id": "g1"}),
+            "degree": 5,
+        }
         driver, _ = _make_driver(records=[rec])
-        results = await _toolkit(driver, ["degree_centrality"]).degree_centrality("g1", "Person")
+        results = await _toolkit(driver, ["degree_centrality"]).degree_centrality(
+            "g1", "Person"
+        )
         assert len(results) == 1
 
     async def test_node_label_embedded_in_cypher(self):
@@ -227,20 +245,26 @@ class TestDegreeCentrality:
 
     async def test_graph_id_in_params(self):
         driver, _ = _make_driver()
-        await _toolkit(driver, ["degree_centrality"]).degree_centrality("g-123", "Entity")
+        await _toolkit(driver, ["degree_centrality"]).degree_centrality(
+            "g-123", "Entity"
+        )
         params = driver.execute_query.call_args[0][1]
         assert params["gid"] == "g-123"
 
     async def test_top_n_in_params(self):
         driver, _ = _make_driver()
-        await _toolkit(driver, ["degree_centrality"]).degree_centrality("g", "X", top_n=3)
+        await _toolkit(driver, ["degree_centrality"]).degree_centrality(
+            "g", "X", top_n=3
+        )
         params = driver.execute_query.call_args[0][1]
         assert params["top_n"] == 3
 
     async def test_invalid_label_raises_value_error(self):
         driver, _ = _make_driver()
         with pytest.raises(ValueError):
-            await _toolkit(driver, ["degree_centrality"]).degree_centrality("g", "DROP; MATCH(n)")
+            await _toolkit(driver, ["degree_centrality"]).degree_centrality(
+                "g", "DROP; MATCH(n)"
+            )
 
     async def test_label_not_a_cypher_param(self):
         driver, _ = _make_driver()
@@ -255,17 +279,25 @@ class TestDegreeCentrality:
 class TestShortestPath:
     async def test_returns_none_when_no_path(self):
         driver, _ = _make_driver(records=[])
-        result = await _toolkit(driver, ["shortest_path"]).shortest_path("g", "a::X", "b::Y")
+        result = await _toolkit(driver, ["shortest_path"]).shortest_path(
+            "g", "a::X", "b::Y"
+        )
         assert result is None
 
     async def test_returns_path_result(self):
-        n1 = _FakeNode({"id": "n1", "label": "A", "qualified_name": "mod::A", "graph_id": "g"})
-        n2 = _FakeNode({"id": "n2", "label": "B", "qualified_name": "mod::B", "graph_id": "g"})
+        n1 = _FakeNode(
+            {"id": "n1", "label": "A", "qualified_name": "mod::A", "graph_id": "g"}
+        )
+        n2 = _FakeNode(
+            {"id": "n2", "label": "B", "qualified_name": "mod::B", "graph_id": "g"}
+        )
         mock_path = MagicMock()
         mock_path.nodes = [n1, n2]
         rec = {"p": mock_path, "hop_count": 1}
         driver, _ = _make_driver(records=[rec])
-        result = await _toolkit(driver, ["shortest_path"]).shortest_path("g", "mod::A", "mod::B")
+        result = await _toolkit(driver, ["shortest_path"]).shortest_path(
+            "g", "mod::A", "mod::B"
+        )
         assert result is not None
         assert isinstance(result, PathResult)
         assert result.hop_count == 1
@@ -331,14 +363,22 @@ class TestTaintTrace:
 
 class TestTemporalSlice:
     async def test_returns_node_results(self):
-        rec = {"n": _FakeNode({"id": "e1", "label": "Event", "graph_id": "g", "valid_from": 0})}
+        rec = {
+            "n": _FakeNode(
+                {"id": "e1", "label": "Event", "graph_id": "g", "valid_from": 0}
+            )
+        }
         driver, _ = _make_driver(records=[rec])
-        results = await _toolkit(driver, ["temporal_slice"]).temporal_slice("g", "Event", 500)
+        results = await _toolkit(driver, ["temporal_slice"]).temporal_slice(
+            "g", "Event", 500
+        )
         assert len(results) == 1
 
     async def test_graph_id_in_params(self):
         driver, _ = _make_driver()
-        await _toolkit(driver, ["temporal_slice"]).temporal_slice("g-time", "Event", 1000)
+        await _toolkit(driver, ["temporal_slice"]).temporal_slice(
+            "g-time", "Event", 1000
+        )
         params = driver.execute_query.call_args[0][1]
         assert params["gid"] == "g-time"
 
@@ -370,6 +410,8 @@ class TestTemporalSlice:
 
     async def test_max_results_in_params(self):
         driver, _ = _make_driver()
-        await _toolkit(driver, ["temporal_slice"]).temporal_slice("g", "Event", 0, max_results=25)
+        await _toolkit(driver, ["temporal_slice"]).temporal_slice(
+            "g", "Event", 0, max_results=25
+        )
         params = driver.execute_query.call_args[0][1]
         assert params["max_results"] == 25

@@ -37,7 +37,6 @@ GRAPH_ID_STR = str(TEST_GRAPH_ID)
 
 
 class TestMakeCommunityId:
-
     @pytest.mark.unit
     def test_returns_string_with_community_prefix(self):
         cid = make_community_id("graph-1", 0, 0.5, ["e1", "e2", "e3"])
@@ -81,7 +80,6 @@ class TestMakeCommunityId:
 
 
 class TestMakeSummaryHash:
-
     @pytest.mark.unit
     def test_deterministic_order_independent(self):
         h1 = make_summary_hash(["e1", "e2", "e3"])
@@ -101,7 +99,6 @@ class TestMakeSummaryHash:
 
 
 class TestBuildHierarchy:
-
     @pytest.mark.unit
     def test_level_0_has_no_parent(self):
         communities_map = {
@@ -139,7 +136,6 @@ class TestBuildHierarchy:
 
 
 class TestGetCommunityContext:
-
     @pytest.mark.unit
     async def test_reads_from_persisted_nodes_not_gds(self):
         """Must query persisted __Community__ nodes; must NOT call gds.louvain."""
@@ -196,9 +192,9 @@ class TestGetCommunityContext:
             await svc.get_community_context(entities, TEST_GRAPH_ID)
 
         call_args = mock_client.execute_query.call_args
-        assert (
-            "graph_id" in call_args[0][1]
-        ), "graph_id must be in Cypher params (multi-tenant)"
+        assert "graph_id" in call_args[0][1], (
+            "graph_id must be in Cypher params (multi-tenant)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +203,6 @@ class TestGetCommunityContext:
 
 
 class TestDetectCommunitiesAsync:
-
     @pytest.mark.unit
     async def test_queues_celery_task_and_returns_job_id(self):
         svc = GraphAnalyticsService()
@@ -251,7 +246,6 @@ class TestDetectCommunitiesAsync:
 
 
 class TestGetCommunityStatus:
-
     @pytest.mark.unit
     async def test_returns_correct_shape(self):
         svc = GraphAnalyticsService()
@@ -286,7 +280,6 @@ class TestGetCommunityStatus:
 
 
 class TestGetCommunitiesList:
-
     @pytest.mark.unit
     async def test_filters_by_level_when_provided(self):
         svc = GraphAnalyticsService()
@@ -364,7 +357,6 @@ class TestGetCommunitiesList:
 
 
 class TestStalenessLogic:
-
     @pytest.mark.unit
     async def test_staleness_above_10_pct_marks_stale(self):
         """
@@ -432,7 +424,8 @@ class TestMaybeTriggerCommunityDetectionStaleness:
     async def test_negative_delta_above_threshold_marks_stale(self):
         """Negative delta of -20% → abs(-20)/100 = 0.20 > 0.10 → stale."""
         mock_driver, mock_engine = self._build_mocks(
-            entity_count_at_detection=100, entity_delta=-21  # new_delta = -21+1 = -20
+            entity_count_at_detection=100,
+            entity_delta=-21,  # new_delta = -21+1 = -20
         )
         with (
             patch("neo4j.GraphDatabase") as mock_gdb,
@@ -457,7 +450,8 @@ class TestMaybeTriggerCommunityDetectionStaleness:
     async def test_positive_delta_above_threshold_marks_stale(self):
         """Positive delta of +20% → abs(20)/100 = 0.20 > 0.10 → stale."""
         mock_driver, mock_engine = self._build_mocks(
-            entity_count_at_detection=100, entity_delta=19  # new_delta = 19+1 = 20
+            entity_count_at_detection=100,
+            entity_delta=19,  # new_delta = 19+1 = 20
         )
         with (
             patch("neo4j.GraphDatabase") as mock_gdb,
@@ -482,7 +476,8 @@ class TestMaybeTriggerCommunityDetectionStaleness:
     async def test_delta_below_threshold_not_stale(self):
         """Delta of 8% ≤ 10% threshold → communities NOT marked stale."""
         mock_driver, mock_engine = self._build_mocks(
-            entity_count_at_detection=100, entity_delta=7  # new_delta = 7+1 = 8
+            entity_count_at_detection=100,
+            entity_delta=7,  # new_delta = 7+1 = 8
         )
         with (
             patch("neo4j.GraphDatabase") as mock_gdb,

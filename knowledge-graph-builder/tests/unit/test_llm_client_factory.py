@@ -26,6 +26,7 @@ class TestLLMClientFactory:
 
     def test_openrouter_returns_async_openai_with_base_url(self):
         from openai import AsyncOpenAI
+
         client = LLMClientFactory.build(
             _cfg("openrouter", base_url="https://openrouter.ai/api/v1")
         )
@@ -34,12 +35,14 @@ class TestLLMClientFactory:
 
     def test_openrouter_uses_default_base_url_when_none(self):
         from openai import AsyncOpenAI
+
         client = LLMClientFactory.build(_cfg("openrouter", base_url=None))
         assert isinstance(client, AsyncOpenAI)
         assert "openrouter" in str(client.base_url)
 
     def test_azure_openai_returns_async_azure_openai(self):
         from openai import AsyncAzureOpenAI
+
         client = LLMClientFactory.build(
             _cfg(
                 "azure-openai",
@@ -51,6 +54,7 @@ class TestLLMClientFactory:
 
     def test_azure_openai_uses_default_api_version_when_none(self):
         from openai import AsyncAzureOpenAI
+
         client = LLMClientFactory.build(
             _cfg("azure-openai", base_url="https://resource.openai.azure.com/")
         )

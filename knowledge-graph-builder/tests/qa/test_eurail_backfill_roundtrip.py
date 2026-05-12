@@ -280,7 +280,9 @@ async def _seeded_template(neo4j_test_driver: AsyncDriver, _wipe_qa_state):
         pytest.skip(f"Real Eurail run dir not present at {_REAL_EURAIL_RUN_DIR}")
 
     seen_non_gap: set[str] = set()
-    for _, rec in _iter_jsonl_records(_REAL_EURAIL_RUN_DIR / "evidence" / "evidence.jsonl"):
+    for _, rec in _iter_jsonl_records(
+        _REAL_EURAIL_RUN_DIR / "evidence" / "evidence.jsonl"
+    ):
         if not isinstance(rec, dict):
             continue
         slug = _normalize_module_slug(rec.get("module") or "")
@@ -503,7 +505,7 @@ class TestCountParity:
         cfg, stats = _loaded_run
         rs = await neo4j_test_driver.execute_query(
             "MATCH (f:Finding {graph_id: $gid, run_id: $rid}) RETURN count(f) AS n",
-            {"gid": cfg.graph_id, "rid": getattr(stats, "run_id")},
+            {"gid": cfg.graph_id, "rid": stats.run_id},
         )
         n = rs.records[0]["n"]
         assert n == EXPECTED_SOURCE_EVIDENCE_RECORDS, (
@@ -521,9 +523,8 @@ class TestCountParity:
         """After backfill: graph Conflict count == unique source ids (23)."""
         cfg, stats = _loaded_run
         rs = await neo4j_test_driver.execute_query(
-            "MATCH (c:Conflict {graph_id: $gid, run_id: $rid}) "
-            "RETURN count(c) AS n",
-            {"gid": cfg.graph_id, "rid": getattr(stats, "run_id")},
+            "MATCH (c:Conflict {graph_id: $gid, run_id: $rid}) RETURN count(c) AS n",
+            {"gid": cfg.graph_id, "rid": stats.run_id},
         )
         n = rs.records[0]["n"]
         assert n == EXPECTED_UNIQUE_CONFLICT_IDS, (
@@ -544,7 +545,7 @@ class TestCountParity:
                   -[:HAS_DELIVERABLE]->(d:Deliverable)
             RETURN count(d) AS n
             """,
-            {"gid": cfg.graph_id, "rid": getattr(stats, "run_id")},
+            {"gid": cfg.graph_id, "rid": stats.run_id},
         )
         n = rs.records[0]["n"]
         assert n == EXPECTED_DELIVERABLE_FILES, (
@@ -585,7 +586,7 @@ class TestCountParity:
         """
         cfg, stats = _loaded_run
         expected_total_sources = _count_unique_sources()
-        run_id = getattr(stats, "run_id")
+        run_id = stats.run_id
         rs = await neo4j_test_driver.execute_query(
             """
             MATCH (f:Finding {graph_id: $gid, run_id: $rid})-[:CITES]->(s:Source)
@@ -663,7 +664,7 @@ class TestRoundTripDump:
         """The set of finding_ids in the dump == the set in the source."""
         cfg, stats = _loaded_run
         dump_path = tmp_path / "dump.jsonl"
-        run_id = getattr(stats, "run_id")
+        run_id = stats.run_id
         n_written = await dump_run_findings(
             graph_id=cfg.graph_id,
             run_id=run_id,
@@ -683,16 +684,14 @@ class TestRoundTripDump:
         missing = source_ids - dumped_ids
         extra = dumped_ids - source_ids
         assert n_written == EXPECTED_SOURCE_EVIDENCE_RECORDS, (
-            f"Dump wrote {n_written} rows; expected "
-            f"{EXPECTED_SOURCE_EVIDENCE_RECORDS}"
+            f"Dump wrote {n_written} rows; expected {EXPECTED_SOURCE_EVIDENCE_RECORDS}"
         )
         assert not missing, (
             f"Lossy backfill: {len(missing)} finding_ids dropped on the "
             f"round-trip. First 10: {sorted(missing)[:10]}"
         )
         assert not extra, (
-            f"Spurious findings in dump that aren't in source: "
-            f"{sorted(extra)[:10]}"
+            f"Spurious findings in dump that aren't in source: {sorted(extra)[:10]}"
         )
 
     @pytest.mark.asyncio
@@ -720,7 +719,7 @@ class TestRoundTripDump:
 
         cfg, stats = _loaded_run
         dump_path = tmp_path / "dump.jsonl"
-        run_id = getattr(stats, "run_id")
+        run_id = stats.run_id
         await dump_run_findings(
             graph_id=cfg.graph_id,
             run_id=run_id,
@@ -746,10 +745,7 @@ class TestRoundTripDump:
                 continue
             # claim — gap-research rows fold "finding"/"missing" → claim.
             expected_claim = (
-                src.get("claim")
-                or src.get("finding")
-                or src.get("missing")
-                or ""
+                src.get("claim") or src.get("finding") or src.get("missing") or ""
             )
             if (dmp.get("claim") or "") != expected_claim:
                 mismatches.append(
@@ -802,7 +798,7 @@ class TestRoundTripDump:
         """
         cfg, stats = _loaded_run
         dump_path = tmp_path / "dump.jsonl"
-        run_id = getattr(stats, "run_id")
+        run_id = stats.run_id
         await dump_run_findings(
             graph_id=cfg.graph_id,
             run_id=run_id,
@@ -849,7 +845,7 @@ class TestPropertyLevelSpotChecks:
         )
 
         cfg, stats = _loaded_run
-        run_id = getattr(stats, "run_id")
+        run_id = stats.run_id
 
         source = _read_source_evidence_by_id()
         all_ids = sorted(source.keys())
@@ -880,14 +876,9 @@ class TestPropertyLevelSpotChecks:
             g = in_graph[rid]
 
             expected_claim = (
-                src.get("claim")
-                or src.get("finding")
-                or src.get("missing")
-                or ""
+                src.get("claim") or src.get("finding") or src.get("missing") or ""
             )
-            assert (g.get("claim") or "") == expected_claim, (
-                f"{rid}: claim mismatch"
-            )
+            assert (g.get("claim") or "") == expected_claim, f"{rid}: claim mismatch"
 
             # raw — backfill sets to record.get('raw') or record.get('searched'),
             # then runs the result through `_normalize_raw_text` (which folds
@@ -909,13 +900,19 @@ class TestPropertyLevelSpotChecks:
             assert g.get("label") == _normalize_label(src.get("label")), (
                 f"{rid}: label — src={src.get('label')} g={g.get('label')}"
             )
-            assert abs(g.get("confidence", 0.0) - _normalize_confidence(src.get("confidence"))) < 1e-9, (
+            assert (
+                abs(
+                    g.get("confidence", 0.0)
+                    - _normalize_confidence(src.get("confidence"))
+                )
+                < 1e-9
+            ), (
                 f"{rid}: confidence — src={src.get('confidence')!r} "
                 f"g={g.get('confidence')}"
             )
-            assert list(g.get("dimensions") or []) == list(src.get("dimensions") or []), (
-                f"{rid}: dimensions mismatch"
-            )
+            assert list(g.get("dimensions") or []) == list(
+                src.get("dimensions") or []
+            ), f"{rid}: dimensions mismatch"
 
             # ai_adoption_relevance — the legacy file's value is free-text prose;
             # the backfill stores it in `notes` and sets `ai_adoption_relevance`
@@ -945,7 +942,7 @@ class TestPropertyLevelSpotChecks:
     ):
         """5 random conflicts: topic, summary, status, involved finding ids."""
         cfg, stats = _loaded_run
-        run_id = getattr(stats, "run_id")
+        run_id = stats.run_id
 
         source = _read_source_conflicts_by_id()
         all_ids = sorted(source.keys())
@@ -980,9 +977,7 @@ class TestPropertyLevelSpotChecks:
             assert g["topic"] == src.get("topic", ""), (
                 f"{cid}: topic — src={src.get('topic')!r} g={g['topic']!r}"
             )
-            assert g["summary"] == src.get("summary", ""), (
-                f"{cid}: summary mismatch"
-            )
+            assert g["summary"] == src.get("summary", ""), f"{cid}: summary mismatch"
             assert g["status"] == _normalize_conflict_status(src.get("resolution")), (
                 f"{cid}: status mismatch"
             )
@@ -1010,7 +1005,7 @@ class TestPropertyLevelSpotChecks:
         from app.scripts.backfill_assessment_run import INLINE_CONTENT_MAX_CHARS
 
         cfg, stats = _loaded_run
-        run_id = getattr(stats, "run_id")
+        run_id = stats.run_id
         files = _walk_module_md_files(_REAL_EURAIL_RUN_DIR)
         # Pick 5 distinct filenames across the three kinds.
         random.seed(_RNG_SEED + 2)
@@ -1123,6 +1118,6 @@ class TestIdempotency:
         n2 = rs2.records[0]["n"]
         assert n2 == n1, (
             f"Idempotency violation: tenant finding count {n1} → {n2} after "
-            f"replay. First run_id={getattr(first, 'run_id')}, "
-            f"second run_id={getattr(second, 'run_id')}."
+            f"replay. First run_id={first.run_id}, "
+            f"second run_id={second.run_id}."
         )

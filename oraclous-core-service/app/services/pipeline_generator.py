@@ -1,18 +1,19 @@
 from typing import Dict, Any, List
 from app.schemas.workflow import Workflow
 
+
 class PipelineGenerator:
     async def generate_workflow(self, prompt: str, context: Dict[str, Any]) -> Workflow:
         # Placeholder for LangGraph integration
         # Should generate workflow structure from prompt and context
         # Return a Workflow schema instance
         return Workflow(
-            name=f"Generated from prompt",
+            name="Generated from prompt",
             description=f"Workflow generated from: {prompt}",
             nodes=[],
             edges=[],
             generation_prompt=prompt,
-            generation_metadata=context
+            generation_metadata=context,
         )
 
     async def suggest_tools(self, requirements: List[str]) -> List[str]:
