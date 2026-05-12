@@ -737,16 +737,14 @@ async def seed_assessment_catalog(
         for spec in template.modules:
             prompt = _read_prompt(spec, root)
 
-            # ``name`` must be unique within the catalog ``graph_id`` because
-            # the codebase's pre-existing ``module_unique`` constraint
-            # ``(:Module) REQUIRE (graph_id, name) IS UNIQUE`` (created by
-            # ``code_parser_service.py`` for Python-code modules) collides
-            # with the assessment substrate's reuse of the ``:Module`` label.
-            # See the TASK-070 Notes table for the recommended schema-layer
-            # follow-up (rename to ``:CodeModule``, ``:AssessmentModule``, or
-            # drop the colliding constraint).
-            qualified_name = f"{spec.template_id} / {spec.name}"
-
+            # Module `name` is the clean, human-readable label (e.g. "Company
+            # Intel") — no more `template_id /` qualification. The colliding
+            # `module_unique` constraint on `(:Module, graph_id, name)` that
+            # forced TASK-070 to synthesise qualified names has been removed
+            # in TASK-075: the code-parser's `:Module` label was renamed to
+            # `:CodeModule` per ADR-015 so the two namespaces no longer share
+            # a constraint. Uniqueness for assessment modules is enforced by
+            # `module_id_unique` on `module_id` (TASK-067 migration).
             await async_driver.execute_query(
                 _MERGE_MODULE,
                 {
@@ -754,7 +752,7 @@ async def seed_assessment_catalog(
                     "graph_id": CATALOG_GRAPH_ID,
                     "module_id": spec.module_id,
                     "slug": spec.slug,
-                    "name": qualified_name,
+                    "name": spec.name,
                     "display_name": spec.name,
                     "wave": spec.wave,
                     "ordinal": spec.ordinal,
@@ -768,6 +766,12 @@ async def seed_assessment_catalog(
             )
 
             agent_id = spec.module_id  # one agent per module; same natural key
+            # Agent `name` keeps the `template_id /` prefix so that when a
+            # user lists all platform-managed agents across all assessment
+            # templates, the names disambiguate between overlapping slugs
+            # (e.g. `assess-v1 / Company Intel` vs `eurail-report-v1 /
+            # Company Intel`). The module `name` doesn't need this because
+            # modules are always read in the context of a parent template.
             agent_name = f"{spec.template_id} / {spec.name}"
             agent_description = (
                 f"Module-executor agent for {spec.name} "

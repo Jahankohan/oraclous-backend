@@ -184,7 +184,16 @@ async def list_symbols(
         )
 
     # Build a label filter. All code symbol labels share the same property set.
-    label_filter = f":{type.value}" if type else ":Function|Class|Variable|Module|File"
+    # The user-facing API enum still uses `Module` for the Python-module symbol
+    # type, but Neo4j stores it under `:CodeModule` (renamed per TASK-075 /
+    # ADR-015 to avoid the assessment-substrate `:Module` collision). Translate
+    # at the boundary so the API contract stays stable.
+    if type is None:
+        label_filter = ":Function|Class|Variable|CodeModule|File"
+    elif type.value == "Module":
+        label_filter = ":CodeModule"
+    else:
+        label_filter = f":{type.value}"
 
     # Build WHERE clauses
     where_parts: list[str] = ["n.graph_id = $graph_id"]
@@ -245,6 +254,10 @@ async def list_symbols(
     symbols: list[SymbolItem] = []
     for record in data_result.records:
         sym_type_str = record.get("sym_type") or "Function"
+        # Neo4j label `CodeModule` maps back to the user-facing API enum
+        # value `Module` (TASK-075 / ADR-015 boundary translation).
+        if sym_type_str == "CodeModule":
+            sym_type_str = "Module"
         try:
             sym_type = SymbolType(sym_type_str)
         except ValueError:
@@ -445,13 +458,15 @@ async def _run_code_query(
         fp = params.get("file_path")
         if not fp:
             raise _QueryParamError("'file_path' is required for query_type=file_deps")
+        # `:CodeModule` is the renamed code-parser label (TASK-075 / ADR-015);
+        # the assessment substrate owns the unqualified `:Module` label.
         result = await driver.execute_query(
             """
             MATCH (f:File {graph_id: $graph_id})-[rel:IMPORTS]->(target)
             WHERE f.path = $fp OR f.path ENDS WITH $fp
             RETURN
-                CASE WHEN target:Module  THEN target.name
-                     WHEN target:File    THEN target.path
+                CASE WHEN target:CodeModule THEN target.name
+                     WHEN target:File       THEN target.path
                      WHEN target:Dependency THEN target.name
                      ELSE toString(elementId(target))
                 END AS import_target,
