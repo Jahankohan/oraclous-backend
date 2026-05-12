@@ -2703,57 +2703,6 @@ class AssessmentService:
             )
         return rows, has_more
 
-    # ─── get_deliverable_content ───────────────────────────────────────────
-
-    async def get_deliverable_content(
-        self,
-        graph_id: str,
-        run_id: str,
-        deliverable_id: str,
-    ) -> dict[str, Any] | None:
-        """Fetch a deliverable's content payload.
-
-        Returns a dict with `kind`, `filename`, `content_uri`,
-        `content_inline`, `sha256`. The endpoint layer picks the right
-        Content-Type based on the `Accept` header.
-
-        Returns `None` when the deliverable does not exist in this tenant.
-        """
-        if not graph_id or not run_id or not deliverable_id:
-            raise ValueError("graph_id, run_id, deliverable_id are required")
-
-        result = await self._driver.execute_query(
-            """
-            MATCH (d:Deliverable:__Platform__ {
-                graph_id: $graph_id, run_id: $run_id, deliverable_id: $deliverable_id
-            })
-            RETURN
-                d.kind            AS kind,
-                d.filename        AS filename,
-                d.content_uri     AS content_uri,
-                d.content_inline  AS content_inline,
-                d.sha256          AS sha256,
-                d.word_count      AS word_count
-            LIMIT 1
-            """,
-            {
-                "graph_id": graph_id,
-                "run_id": run_id,
-                "deliverable_id": deliverable_id,
-            },
-        )
-        if not result.records:
-            return None
-        rec = result.records[0]
-        return {
-            "kind": rec["kind"],
-            "filename": rec["filename"],
-            "content_uri": rec["content_uri"],
-            "content_inline": rec["content_inline"],
-            "sha256": rec["sha256"],
-            "word_count": rec["word_count"],
-        }
-
     # ─── list_template_modules ─────────────────────────────────────────────
 
     async def list_template_modules(
