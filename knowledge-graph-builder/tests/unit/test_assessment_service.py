@@ -64,7 +64,7 @@ def _rec(**kwargs) -> dict:
 
 class TestSchemas:
     def test_finding_confidence_bounds(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             Finding(
                 finding_id="ev-1",
                 graph_id="g1",
@@ -89,7 +89,7 @@ class TestSchemas:
         # Module is imported lazily here to avoid clutter in the import block.
         from app.schemas.assessment_schemas import Module
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             Module(
                 module_id="m-1",
                 template_id="t-1",
@@ -102,7 +102,7 @@ class TestSchemas:
 
     def test_registry_item_yank_consistency(self):
         # yanked_at on a private item is rejected by the validator.
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             RegistryItem(
                 item_id="ri-1",
                 graph_id="g-owner-1",
@@ -275,7 +275,15 @@ class TestUpdateModuleRun:
         }
 
     async def test_update_status_to_running(self):
-        driver = _make_driver(record_sequences=[[_rec(id="mr-1")]])
+        # TASK-081 added a pre-update probe to capture prev_status for the
+        # `module_run.status_changed` event payload. Provide two pre-recorded
+        # responses: 1) the probe (returns prev status), 2) the actual SET.
+        driver = _make_driver(
+            record_sequences=[
+                [_rec(status="planned")],  # probe for prev_status
+                [_rec(id="mr-1")],  # SET .. RETURN mr.module_run_id
+            ]
+        )
         svc = AssessmentService(driver)
         now = datetime.now(UTC)
         ok = await svc.update_module_run(
@@ -285,6 +293,7 @@ class TestUpdateModuleRun:
             UpdateModuleRunRequest(status="running", started_at=now),
         )
         assert ok is True
+        # Assert on the *last* execute_query call — the SET, not the probe.
         cypher, params = driver.execute_query.call_args[0]
         assert "mr.status = $status" in cypher
         assert "mr.started_at = datetime($started_at)" in cypher
@@ -409,7 +418,6 @@ class TestRecordFindingBulk:
         ]
         with pytest.raises(ValueError, match="ModuleRun not found"):
             await svc.record_finding_bulk("tenant-A", "run-1", "mr-missing", findings)
-
 
     async def test_nested_source_threads_fields_to_catalog_merge(self):
         """TASK-077: when a Finding carries a nested `source` block the service
@@ -710,6 +718,248 @@ class TestPersistDeliverable:
         assert resp.total == 5
         assert resp.succeeded == 5
         assert resp.failed == 0
+
+
+# ── TASK-082 CAS integration ──────────────────────────────────────────────────
+
+
+class TestPersistDeliverableCAS:
+    """`persist_deliverable(content_bytes=…, mime_type=…, db=…)` writes through
+    the BlobCASService before MERGEing the Neo4j node."""
+
+    async def test_content_bytes_writes_cas_and_overwrites_uri(self):
+        import hashlib
+
+        from app.services.blob_cas_service import BlobCASService
+
+        # Mock the BlobCASService.put — it returns a fixed sha256/URI.
+        blob_cas = BlobCASService()
+        blob_cas.put = AsyncMock(
+            return_value={
+                "sha256": "a" * 64,
+                "content_uri": f"blob://sha256/{'a' * 64}",
+            }
+        )
+
+        # Driver sequence: probe → MERGE; no module_run_id so 2 calls total.
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]])
+        svc = AssessmentService(driver, blob_cas=blob_cas)
+
+        d = Deliverable(
+            deliverable_id="d-cas",
+            graph_id="tenant-A",
+            run_id="run-1",
+            kind="final-html",
+            filename="final.html",
+            # Caller passed a content_uri value that should be overwritten.
+            content_uri="/legacy/path.html",
+        )
+        # Pretend bytes; the hash is mocked anyway.
+        db = MagicMock()
+        created = await svc.persist_deliverable(
+            "tenant-A",
+            "run-1",
+            d,
+            content_bytes=b"<html>x</html>",
+            mime_type="text/html",
+            db=db,
+        )
+        assert created is True
+        blob_cas.put.assert_awaited_once_with(
+            db, "tenant-A", b"<html>x</html>", "text/html"
+        )
+        # The MERGE call should have received the CAS URI, not the caller's.
+        merge_call = driver.execute_query.call_args_list[1]
+        merge_params = merge_call.args[1]
+        assert merge_params["content_uri"] == f"blob://sha256/{'a' * 64}"
+        assert merge_params["sha256"] == "a" * 64
+
+        # Defensive: an unmocked digest would have produced this hash; we
+        # don't assert it here because the mocked CAS lies about the hash.
+        del hashlib
+
+    async def test_mismatched_caller_sha256_is_overwritten(self):
+        from app.services.blob_cas_service import BlobCASService
+
+        blob_cas = BlobCASService()
+        # CAS computes its own hash — caller's "deadbeef..." is ignored.
+        canonical = "b" * 64
+        blob_cas.put = AsyncMock(
+            return_value={
+                "sha256": canonical,
+                "content_uri": f"blob://sha256/{canonical}",
+            }
+        )
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]])
+        svc = AssessmentService(driver, blob_cas=blob_cas)
+        d = Deliverable(
+            deliverable_id="d-bad-hash",
+            graph_id="tenant-A",
+            run_id="run-1",
+            kind="final-md",
+            filename="x.md",
+            sha256="deadbeef" * 8,  # caller-supplied, wrong
+        )
+        await svc.persist_deliverable(
+            "tenant-A",
+            "run-1",
+            d,
+            content_bytes=b"hello",
+            mime_type="text/markdown",
+            db=MagicMock(),
+        )
+        merge_params = driver.execute_query.call_args_list[1].args[1]
+        assert merge_params["sha256"] == canonical
+
+    async def test_content_bytes_without_db_raises(self):
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]])
+        svc = AssessmentService(driver)
+        d = Deliverable(
+            deliverable_id="d-1",
+            graph_id="tenant-A",
+            run_id="run-1",
+            kind="module-md",
+            filename="m.md",
+        )
+        with pytest.raises(ValueError, match="db .* is required"):
+            await svc.persist_deliverable(
+                "tenant-A",
+                "run-1",
+                d,
+                content_bytes=b"x",
+                mime_type="text/plain",
+            )
+
+    async def test_content_bytes_without_mime_raises(self):
+        driver = _make_driver(record_sequences=[[], [_rec(created=True)]])
+        svc = AssessmentService(driver)
+        d = Deliverable(
+            deliverable_id="d-1",
+            graph_id="tenant-A",
+            run_id="run-1",
+            kind="module-md",
+            filename="m.md",
+        )
+        with pytest.raises(ValueError, match="mime_type is required"):
+            await svc.persist_deliverable(
+                "tenant-A", "run-1", d, content_bytes=b"x", db=MagicMock()
+            )
+
+    async def test_mime_or_db_without_bytes_raises(self):
+        """Inconsistent partial CAS contract triggers a clear error."""
+        driver = _make_driver(record_sequences=[[]])
+        svc = AssessmentService(driver)
+        d = Deliverable(
+            deliverable_id="d-1",
+            graph_id="tenant-A",
+            run_id="run-1",
+            kind="module-md",
+            filename="m.md",
+        )
+        with pytest.raises(ValueError, match="were supplied without content_bytes"):
+            await svc.persist_deliverable(
+                "tenant-A", "run-1", d, mime_type="text/plain"
+            )
+
+
+class TestGetDeliverableContent:
+    """`get_deliverable_content` resolution surface for TASK-079."""
+
+    async def test_resolves_cas_uri_to_bytes(self):
+        from app.services.blob_cas_service import BlobCASService
+
+        blob_cas = BlobCASService()
+        blob_cas.get = AsyncMock(
+            return_value={
+                "content_bytes": b"<html>x</html>",
+                "mime_type": "text/html",
+                "size_bytes": 14,
+            }
+        )
+
+        # Neo4j metadata fetch returns one record with a CAS URI.
+        cas_uri = f"blob://sha256/{'c' * 64}"
+        driver = _make_driver(
+            record_sequences=[
+                [
+                    _rec(
+                        deliverable_id="d-1",
+                        filename="report.html",
+                        kind="final-html",
+                        content_uri=cas_uri,
+                        content_inline=None,
+                        sha256="c" * 64,
+                    )
+                ]
+            ]
+        )
+        svc = AssessmentService(driver, blob_cas=blob_cas)
+        out = await svc.get_deliverable_content(MagicMock(), "tenant-A", "run-1", "d-1")
+        assert out is not None
+        assert out["content_bytes"] == b"<html>x</html>"
+        assert out["mime_type"] == "text/html"
+        assert out["size_bytes"] == 14
+        assert out["content_text"] is None
+        assert out["content_uri"] == cas_uri
+
+    async def test_falls_back_to_inline_when_no_cas_uri(self):
+        driver = _make_driver(
+            record_sequences=[
+                [
+                    _rec(
+                        deliverable_id="d-2",
+                        filename="m.md",
+                        kind="module-md",
+                        content_uri=None,
+                        content_inline="# Hello",
+                        sha256=None,
+                    )
+                ]
+            ]
+        )
+        svc = AssessmentService(driver)
+        out = await svc.get_deliverable_content(MagicMock(), "tenant-A", "run-1", "d-2")
+        assert out is not None
+        assert out["content_text"] == "# Hello"
+        assert out["content_bytes"] is None
+        assert out["size_bytes"] == len(b"# Hello")
+
+    async def test_missing_deliverable_returns_none(self):
+        driver = _make_driver(record_sequences=[[]])
+        svc = AssessmentService(driver)
+        out = await svc.get_deliverable_content(
+            MagicMock(), "tenant-A", "run-1", "missing"
+        )
+        assert out is None
+
+    async def test_cas_uri_missing_in_postgres_falls_back_to_inline(self):
+        """A CAS row that's gone (e.g. tenant deleted blobs) still returns
+        the deliverable metadata; inline content (if any) backfills."""
+        from app.services.blob_cas_service import BlobCASService
+
+        blob_cas = BlobCASService()
+        blob_cas.get = AsyncMock(return_value=None)  # CAS miss
+
+        cas_uri = f"blob://sha256/{'f' * 64}"
+        driver = _make_driver(
+            record_sequences=[
+                [
+                    _rec(
+                        deliverable_id="d-3",
+                        filename="x.md",
+                        kind="module-md",
+                        content_uri=cas_uri,
+                        content_inline="# fallback",
+                        sha256="f" * 64,
+                    )
+                ]
+            ]
+        )
+        svc = AssessmentService(driver, blob_cas=blob_cas)
+        out = await svc.get_deliverable_content(MagicMock(), "tenant-A", "run-1", "d-3")
+        assert out is not None
+        assert out["content_bytes"] is None  # CAS missed
+        assert out["content_text"] == "# fallback"
 
 
 # ── finalize_run ──────────────────────────────────────────────────────────────

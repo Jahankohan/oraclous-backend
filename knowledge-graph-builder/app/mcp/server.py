@@ -898,6 +898,36 @@ async def resource_graph_nodes(graph_id: str) -> str:
 
 
 # ===========================================================================
+# 7 – Assessment substrate + Registry tools (TASK-080)
+# ===========================================================================
+#
+# Per ADR-007 every REST endpoint under /api/v1/assessments/* has a 1:1 MCP
+# tool. The wrappers in app/mcp/tools/* call the service layer directly (no
+# HTTP) so they share the same boundary, auth plumbing, and Pydantic schemas
+# as the REST endpoints. We register them here via FastMCP's add_tool API so
+# the dispatch table stays in sync with the REST router.
+
+from app.mcp.tools import (  # noqa: E402  — late import keeps the file readable
+    ASSESSMENT_TOOLS,
+    REGISTRY_TOOLS,
+)
+
+
+def _register_assessment_tools() -> None:
+    """Register the TASK-080 assessment + registry tools with FastMCP.
+
+    Each entry in ``ASSESSMENT_TOOLS`` / ``REGISTRY_TOOLS`` is
+    ``(name, callable)``. The callable's docstring becomes the MCP tool
+    description so the 1:1 REST→MCP mapping stays self-documenting.
+    """
+    for name, fn in (*ASSESSMENT_TOOLS, *REGISTRY_TOOLS):
+        mcp.add_tool(fn, name=name, description=(fn.__doc__ or "").strip())
+
+
+_register_assessment_tools()
+
+
+# ===========================================================================
 # Entry point
 # ===========================================================================
 
