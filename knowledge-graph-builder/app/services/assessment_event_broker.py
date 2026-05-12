@@ -239,20 +239,25 @@ class AssessmentEventBroker:
 
     # ── Subscribe ────────────────────────────────────────────────────────────
 
-    async def subscribe(
+    def subscribe(
         self,
         graph_id: str,
         run_id: str,
         since: int = 0,
     ) -> AsyncIterator[AssessmentEvent]:
-        """Async iterator yielding events for `(graph_id, run_id)`.
+        """Return an async iterator yielding events for `(graph_id, run_id)`.
 
-        - First replays any in-buffer events with `event_id > since`.
-        - Then streams new events as they arrive.
-        - The iterator only exits when the caller stops consuming (e.g. the
-          SSE client disconnects). Callers should iterate inside a
-          `try/finally` and use the returned generator's `aclose()` to
-          clean up if they want to drop the subscription explicitly.
+        Registration is **synchronous** — by the time `subscribe()` returns,
+        the subscriber is already in the fanout set, and any subsequent
+        `publish()` will be delivered. This avoids the race where a caller
+        creates the iterator and then publishes before entering the loop.
+
+        Replay: every in-buffer event with `event_id > since` is enqueued
+        before live events. Replay is one-shot at subscribe time.
+
+        Cleanup: callers must `await aclose()` on the returned iterator
+        (or exhaust it normally) to unregister. The wrapping endpoint uses
+        a try/finally to guarantee this.
         """
         run_key = (graph_id, run_id)
         subscriber = _Subscriber()
@@ -264,10 +269,16 @@ class AssessmentEventBroker:
                 if ev.event_id > since:
                     subscriber.push(ev)
 
-        # Register *after* replay so we don't double-deliver an event that
-        # is both in the buffer and arrives between snapshot + register.
+        # Register synchronously so a publish() that races us is delivered.
         self._subscribers.setdefault(run_key, set()).add(subscriber)
 
+        return self._iter(run_key, subscriber)
+
+    async def _iter(
+        self,
+        run_key: tuple[str, str],
+        subscriber: _Subscriber,
+    ) -> AsyncIterator[AssessmentEvent]:
         try:
             while True:
                 event = await subscriber.queue.get()
