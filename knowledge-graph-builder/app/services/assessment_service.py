@@ -77,6 +77,10 @@ from app.schemas.assessment_schemas import (
     WaveModuleStatus,
     WaveStatusResponse,
 )
+from app.services.assessment_event_broker import (
+    AssessmentEventBroker,
+    get_assessment_event_broker,
+)
 from app.services.blob_cas_service import (
     BlobCASService,
     InvalidBlobURIError,
@@ -172,9 +176,44 @@ class AssessmentService:
         self,
         driver: AsyncDriver,
         blob_cas: BlobCASService | None = None,
+        event_broker: AssessmentEventBroker | None = None,
     ):
         self._driver = driver
         self._blob_cas = blob_cas or BlobCASService()
+        # TASK-081: fire-and-forget event broker for SSE tail_run subscribers.
+        # `publish()` is sync + non-blocking — drops events into per-subscriber
+        # bounded queues — so a slow SSE client can never stall a write.
+        # Defaults to the process-wide singleton so callers that don't supply
+        # one still exercise the publish path; tests inject their own.
+        self._events = event_broker or get_assessment_event_broker()
+
+    def _publish_event(
+        self,
+        graph_id: str,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Fire-and-forget event publish — never raises, never blocks.
+
+        Wrapped in a try/except so a broker malfunction (e.g. an overflowing
+        queue) can never roll back a Neo4j write that has already committed.
+        Called *after* every successful write Cypher commit.
+        """
+        try:
+            # The broker's EventType Literal is enforced at the broker
+            # boundary; this wrapper accepts plain `str` so service-layer
+            # call sites stay readable.
+            self._events.publish(graph_id, run_id, event_type, payload)  # type: ignore[arg-type]
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                "assessment_service: event publish failed graph_id=%s run_id=%s "
+                "type=%s err=%s",
+                graph_id,
+                run_id,
+                event_type,
+                exc,
+            )
 
     # =========================================================================
     # create_run
@@ -515,6 +554,29 @@ class AssessmentService:
             )
             return bool(result.records)
 
+        # TASK-081: read the prev status before the SET so the status-changed
+        # event payload can carry both prev and new. The probe is a separate
+        # query because the SET-and-return-prev pattern is awkward in Cypher
+        # and we need the row anyway for cross-tenant guard.
+        prev_status: str | None = None
+        if update.status is not None:
+            probe = await self._driver.execute_query(
+                """
+                MATCH (mr:ModuleRun:__Platform__ {
+                    graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
+                })
+                RETURN mr.status AS status
+                LIMIT 1
+                """,
+                {
+                    "graph_id": graph_id,
+                    "run_id": run_id,
+                    "module_run_id": module_run_id,
+                },
+            )
+            if probe.records:
+                prev_status = probe.records[0]["status"]
+
         cypher = f"""
             MATCH (mr:ModuleRun:__Platform__ {{
                 graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
@@ -523,7 +585,36 @@ class AssessmentService:
             RETURN mr.module_run_id AS id
             """
         result = await self._driver.execute_query(cypher, params)
-        return bool(result.records)
+        updated = bool(result.records)
+
+        if updated:
+            # TASK-081: publish post-commit. Status changes carry prev/new; a
+            # heartbeat-only update emits `module_run.heartbeat` (broker
+            # throttles to 1 per 30s per module_run_id).
+            if update.status is not None and update.status != prev_status:
+                self._publish_event(
+                    graph_id,
+                    run_id,
+                    "module_run.status_changed",
+                    {
+                        "module_run_id": module_run_id,
+                        "prev_status": prev_status,
+                        "new_status": update.status,
+                        "at": _utcnow().isoformat(),
+                    },
+                )
+            if update.last_heartbeat_at is not None:
+                self._publish_event(
+                    graph_id,
+                    run_id,
+                    "module_run.heartbeat",
+                    {
+                        "module_run_id": module_run_id,
+                        "last_heartbeat_at": update.last_heartbeat_at.isoformat(),
+                    },
+                )
+
+        return updated
 
     async def heartbeat_run(self, graph_id: str, run_id: str) -> bool:
         """Update `:AssessmentRun.orchestrator_last_seen` to now.
@@ -632,6 +723,22 @@ class AssessmentService:
 
         # Refresh the parent's evidence_count to match what's persisted.
         await self._refresh_evidence_count(graph_id, run_id, module_run_id)
+
+        # TASK-081: emit a single delta event for the whole batch (NOT one
+        # event per finding — keeps SSE traffic bounded for large batches).
+        # `finding_count_delta` counts only newly-created findings; idempotent
+        # replay yields delta=0.
+        new_count = sum(1 for r in results if r.success and not r.already_existed)
+        if new_count:
+            self._publish_event(
+                graph_id,
+                run_id,
+                "finding.recorded",
+                {
+                    "module_run_id": module_run_id,
+                    "finding_count_delta": new_count,
+                },
+            )
 
         return BulkResponse(
             total=len(findings),
@@ -925,6 +1032,20 @@ class AssessmentService:
                 },
             )
 
+        # TASK-081: emit on every conflict record (created OR updated) — the
+        # status / topic change matters to subscribers even on re-record.
+        self._publish_event(
+            graph_id,
+            run_id,
+            "conflict.recorded",
+            {
+                "conflict_id": conflict.conflict_id,
+                "summary": conflict.summary,
+                "status": conflict.status,
+                "created": created,
+            },
+        )
+
         return created
 
     # =========================================================================
@@ -1005,7 +1126,23 @@ class AssessmentService:
                 "status": question.status,
             },
         )
-        return bool(result.records and result.records[0]["created"])
+        created = bool(result.records and result.records[0]["created"])
+
+        # TASK-081: emit only on first observation. Re-record (idempotent
+        # replay) is silent.
+        if created:
+            self._publish_event(
+                graph_id,
+                run_id,
+                "unresolved_question.raised",
+                {
+                    "question_id": question.question_id,
+                    "module_run_id": module_run_id,
+                    "suggested_module": question.suggested_module,
+                },
+            )
+
+        return created
 
     # =========================================================================
     # persist_deliverable / persist_final_docs
@@ -1177,6 +1314,21 @@ class AssessmentService:
                     "module_run_id": deliverable.module_run_id,
                 },
             )
+
+        # TASK-081: emit on every persist (including overwrites) — frontend
+        # cares about content changes, not just first observation.
+        self._publish_event(
+            graph_id,
+            run_id,
+            "deliverable.persisted",
+            {
+                "deliverable_id": deliverable.deliverable_id,
+                "kind": deliverable.kind,
+                "filename": deliverable.filename,
+                "module_run_id": deliverable.module_run_id,
+                "created": created,
+            },
+        )
 
         return created
 
@@ -1457,6 +1609,24 @@ class AssessmentService:
             deliverable,
             unresolved_conflicts,
             open_questions,
+        )
+
+        # TASK-081: terminal event — subscribers should expect the stream to
+        # quiesce after this. The SSE endpoint keeps the connection open so
+        # clients can reconnect-with-cursor and still drain replay; closing
+        # is a client decision.
+        self._publish_event(
+            graph_id,
+            run_id,
+            "run.finalized",
+            {
+                "run_id": run_id,
+                "status": final_status,
+                "passed": passed,
+                "evidence_count_direct": direct,
+                "deliverable_count": deliverable,
+                "finished_at": finished_at.isoformat(),
+            },
         )
 
         return FinalizeRunResponse(

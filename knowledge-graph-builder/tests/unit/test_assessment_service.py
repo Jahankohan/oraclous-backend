@@ -275,7 +275,15 @@ class TestUpdateModuleRun:
         }
 
     async def test_update_status_to_running(self):
-        driver = _make_driver(record_sequences=[[_rec(id="mr-1")]])
+        # TASK-081 added a pre-update probe to capture prev_status for the
+        # `module_run.status_changed` event payload. Provide two pre-recorded
+        # responses: 1) the probe (returns prev status), 2) the actual SET.
+        driver = _make_driver(
+            record_sequences=[
+                [_rec(status="planned")],  # probe for prev_status
+                [_rec(id="mr-1")],  # SET .. RETURN mr.module_run_id
+            ]
+        )
         svc = AssessmentService(driver)
         now = datetime.now(UTC)
         ok = await svc.update_module_run(
@@ -285,6 +293,7 @@ class TestUpdateModuleRun:
             UpdateModuleRunRequest(status="running", started_at=now),
         )
         assert ok is True
+        # Assert on the *last* execute_query call — the SET, not the probe.
         cypher, params = driver.execute_query.call_args[0]
         assert "mr.status = $status" in cypher
         assert "mr.started_at = datetime($started_at)" in cypher
