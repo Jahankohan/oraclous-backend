@@ -23,6 +23,49 @@ Three entity tiers:
 
 The request/response wrappers at the bottom of this file are the shapes the
 REST layer (TASK-069) and MCP wrappers (SPRINT-002) exchange with callers.
+
+Size policy (TASK-076)
+----------------------
+
+Every string field declares an explicit ``max_length`` and every list field
+declares an explicit ``max_length`` (Pydantic v2 unifies the constraint name
+across ``str`` and ``list``; what older Pydantic called ``max_items`` is just
+``max_length`` here). The defense is against property-bloat / DoS via an
+adversarial caller submitting unbounded payloads that we then write into
+Neo4j as node properties — closing the MEDIUM finding (#3) from TASK-073.
+
+The bounds use module-level ``SIZE_*`` and ``LIST_MAX_*`` constants so every
+new field inherits the policy by picking the right tier rather than inventing
+a new number. If you find yourself reaching for an inline literal, add a tier
+or extend an existing one instead.
+
+| Tier               | Bound  | When to use                                         |
+|--------------------|--------|-----------------------------------------------------|
+| ``SIZE_ID``        |    128 | Natural ids (``run_id``, ``finding_id``, etc.)      |
+| ``SIZE_SLUG``      |    128 | Stable kebab-case slugs                             |
+| ``SIZE_ENUM``      |     64 | Short enum-like strings outside a ``Literal``       |
+| ``SIZE_LANG``      |     16 | ISO language / locale codes                         |
+| ``SIZE_DATE``      |     32 | ISO date / datetime strings                         |
+| ``SIZE_VERSION``   |     32 | SemVer-shaped strings                               |
+| ``SIZE_HASH``      |    128 | Hex digests (sha256 etc.)                           |
+| ``SIZE_NAME``      |    256 | Human-facing names / titles                         |
+| ``SIZE_URL``       |  2_048 | URLs / URIs (canonical and raw)                     |
+| ``SIZE_FILENAME``  |  1_024 | File / path basenames                               |
+| ``SIZE_SHORT_TEXT``|  4_096 | Short prose: ``description``, ``topic``, errors     |
+| ``SIZE_CLAIM``     |  8_192 | Single-sentence claims, ``source_quote``            |
+| ``SIZE_LONG_TEXT`` | 16_384 | Long prose: ``notes``, ``summary``, ``resolution``  |
+| ``SIZE_BLOB_TEXT`` | 65_536 | ``raw`` extracts, ``content_inline`` deliverables   |
+|                    |        | (~50 KB; matches the inline / CAS cutoff)           |
+| ``LIST_MAX_TAGS``  |     32 | Small free-form tag lists (``dimensions``)          |
+| ``LIST_MAX_IDS``   |    256 | Id-ref lists (``involved_finding_ids``)             |
+| ``LIST_MAX_ITEMS`` |    512 | Bulk-write payloads (``findings``, ``deliverables``)|
+
+Real-world reality check: the largest values observed in the Eurail
+2026-05-06 backfill run are ``claim`` 509, ``raw`` 775, ``notes`` 275,
+``resolution`` 358, ``synthesis_note`` 607, ``url`` 173, and the largest
+module-md deliverable inline payload is 43_876 chars — every bound above has
+substantial headroom over real data. ``content_inline`` is sized at 65_536
+specifically so the Eurail deliverable round-trips lossless.
 """
 
 from __future__ import annotations
@@ -39,6 +82,31 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ASSESSMENTS_CATALOG_GRAPH_ID = "__assessments_catalog__"
 REGISTRY_CATALOG_GRAPH_ID = "__registry__"
+
+
+# =============================================================================
+# Size-policy constants (TASK-076). See the module docstring for the table.
+# Importable by tests and future schema authors; never inline a literal.
+# =============================================================================
+
+SIZE_ID = 128
+SIZE_SLUG = 128
+SIZE_ENUM = 64
+SIZE_LANG = 16
+SIZE_DATE = 32
+SIZE_VERSION = 32
+SIZE_HASH = 128
+SIZE_NAME = 256
+SIZE_URL = 2_048
+SIZE_FILENAME = 1_024
+SIZE_SHORT_TEXT = 4_096
+SIZE_CLAIM = 8_192
+SIZE_LONG_TEXT = 16_384
+SIZE_BLOB_TEXT = 65_536
+
+LIST_MAX_TAGS = 32
+LIST_MAX_IDS = 256
+LIST_MAX_ITEMS = 512
 
 
 # =============================================================================
@@ -96,17 +164,20 @@ class AssessmentTemplate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    template_id: str
+    template_id: str = Field(..., max_length=SIZE_ID)
     slug: str = Field(
-        ..., description="Stable human-readable identifier (e.g. 'eurail-report-v1')."
+        ...,
+        max_length=SIZE_SLUG,
+        description="Stable human-readable identifier (e.g. 'eurail-report-v1').",
     )
-    name: str
-    version: str
+    name: str = Field(..., max_length=SIZE_NAME)
+    version: str = Field(..., max_length=SIZE_VERSION)
     vertical_slug: str | None = Field(
         default=None,
+        max_length=SIZE_SLUG,
         description="Vertical specialization, e.g. 'rail-cooperative'. None for generic assess-vN.",
     )
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
     created_at: datetime | None = None
 
 
@@ -119,10 +190,14 @@ class Module(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    module_id: str
-    template_id: str = Field(..., description="The template this module belongs to.")
-    slug: str
-    name: str
+    module_id: str = Field(..., max_length=SIZE_ID)
+    template_id: str = Field(
+        ...,
+        max_length=SIZE_ID,
+        description="The template this module belongs to.",
+    )
+    slug: str = Field(..., max_length=SIZE_SLUG)
+    name: str = Field(..., max_length=SIZE_NAME)
     wave: int = Field(
         ...,
         ge=1,
@@ -132,9 +207,10 @@ class Module(BaseModel):
     kind: ModuleKind
     agent_id: str | None = Field(
         default=None,
+        max_length=SIZE_ID,
         description="The `:Agent` row that carries the system prompt / model / tools for this module.",
     )
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
 
 
 class Source(BaseModel):
@@ -149,18 +225,21 @@ class Source(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_id: str
+    source_id: str = Field(..., max_length=SIZE_ID)
     type: str | None = Field(
-        default=None, description="e.g. 'article', 'paper', 'press', 'webpage'."
+        default=None,
+        max_length=SIZE_ENUM,
+        description="e.g. 'article', 'paper', 'press', 'webpage'.",
     )
     url_normalized: str | None = Field(
         default=None,
+        max_length=SIZE_URL,
         description="Canonicalized URL used as the dedup key; None for non-web sources.",
     )
-    name: str | None = None
-    publication_date: str | None = None
-    fetch_date: str | None = None
-    language: str | None = None
+    name: str | None = Field(default=None, max_length=SIZE_NAME)
+    publication_date: str | None = Field(default=None, max_length=SIZE_DATE)
+    fetch_date: str | None = Field(default=None, max_length=SIZE_DATE)
+    language: str | None = Field(default=None, max_length=SIZE_LANG)
 
 
 # =============================================================================
@@ -179,13 +258,13 @@ class Subject(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    subject_id: str
-    graph_id: str
-    slug: str
-    name: str
-    vertical_slug: str | None = None
-    domains: list[str] = Field(default_factory=list)
-    aliases: list[str] = Field(default_factory=list)
+    subject_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    slug: str = Field(..., max_length=SIZE_SLUG)
+    name: str = Field(..., max_length=SIZE_NAME)
+    vertical_slug: str | None = Field(default=None, max_length=SIZE_SLUG)
+    domains: list[str] = Field(default_factory=list, max_length=LIST_MAX_TAGS)
+    aliases: list[str] = Field(default_factory=list, max_length=LIST_MAX_TAGS)
 
 
 class AssessmentRun(BaseModel):
@@ -200,10 +279,10 @@ class AssessmentRun(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    run_id: str
-    graph_id: str
-    template_id: str
-    subject_id: str
+    run_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    template_id: str = Field(..., max_length=SIZE_ID)
+    subject_id: str = Field(..., max_length=SIZE_ID)
     status: RunStatus = "planned"
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -212,7 +291,7 @@ class AssessmentRun(BaseModel):
         default_factory=dict,
         description="The CLI flags / config the orchestrator was invoked with.",
     )
-    failure_reason: str | None = None
+    failure_reason: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
 
 
 class ModuleRun(BaseModel):
@@ -224,10 +303,10 @@ class ModuleRun(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    module_run_id: str
-    graph_id: str
-    run_id: str
-    module_id: str
+    module_run_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    module_id: str = Field(..., max_length=SIZE_ID)
     wave: int = Field(..., ge=1)
     status: RunStatus = "planned"
     started_at: datetime | None = None
@@ -238,9 +317,11 @@ class ModuleRun(BaseModel):
     )
     evidence_count: int = Field(default=0, ge=0)
     deliverable_path: str | None = Field(
-        default=None, description="Filesystem path for the module's MD output."
+        default=None,
+        max_length=SIZE_URL,
+        description="Filesystem path for the module's MD output.",
     )
-    failure_reason: str | None = None
+    failure_reason: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
 
 
 class Finding(BaseModel):
@@ -254,18 +335,21 @@ class Finding(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    finding_id: str
-    graph_id: str
-    run_id: str
-    module_run_id: str
-    claim: str
+    finding_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    module_run_id: str = Field(..., max_length=SIZE_ID)
+    claim: str = Field(..., max_length=SIZE_CLAIM)
     raw: str | None = Field(
-        default=None, description="Verbatim quote or raw extract text."
+        default=None,
+        max_length=SIZE_BLOB_TEXT,
+        description="Verbatim quote or raw extract text.",
     )
     label: FindingLabel = "DIRECT"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     dimensions: list[str] = Field(
         default_factory=list,
+        max_length=LIST_MAX_TAGS,
         description="Free-form dimension tags (e.g. 'regulatory', 'tech-maturity').",
     )
     ai_adoption_relevance: float | None = Field(
@@ -274,19 +358,39 @@ class Finding(BaseModel):
         le=1.0,
         description="Optional secondary score specific to AI-adoption assessments.",
     )
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=SIZE_LONG_TEXT)
     superseded_by: str | None = Field(
-        default=None, description="finding_id of a later, more authoritative finding."
+        default=None,
+        max_length=SIZE_ID,
+        description="finding_id of a later, more authoritative finding.",
     )
     # Citation — denormalized for write-side simplicity. The service layer
     # MERGEs the `:Source` in the catalog graph and creates the `[:CITES]` edge.
-    source_id: str | None = None
+    source_id: str | None = Field(default=None, max_length=SIZE_ID)
     source_quote: str | None = Field(
         default=None,
+        max_length=SIZE_CLAIM,
         description="The exact passage cited (lands on the [:CITES] edge).",
     )
     source_locator: str | None = Field(
-        default=None, description="Page/timestamp/anchor (lands on the [:CITES] edge)."
+        default=None,
+        max_length=SIZE_SHORT_TEXT,
+        description="Page/timestamp/anchor (lands on the [:CITES] edge).",
+    )
+    # Optional nested Source payload (TASK-077). When populated, the service
+    # threads the fields into the catalog `:Source` MERGE so cross-run search
+    # by URL/name/date works. `source.source_id` MUST equal `source_id` above
+    # when both are set; the service enforces this and rejects the write on
+    # mismatch (surfaced as per-record failure in the bulk response). Old
+    # callers that only supply `source_id` continue to work — the catalog row
+    # just won't carry URL/name/date for those.
+    source: Source | None = Field(
+        default=None,
+        description=(
+            "Full Source metadata to write into the catalog graph on first "
+            "observation. Optional; required only when the caller wants the "
+            "catalog `:Source` row populated with URL / name / dates."
+        ),
     )
 
 
@@ -295,16 +399,17 @@ class Conflict(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    conflict_id: str
-    graph_id: str
-    run_id: str
-    topic: str
-    summary: str
+    conflict_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    topic: str = Field(..., max_length=SIZE_SHORT_TEXT)
+    summary: str = Field(..., max_length=SIZE_LONG_TEXT)
     status: ConflictStatus = "open"
-    resolution: str | None = None
-    synthesis_note: str | None = None
+    resolution: str | None = Field(default=None, max_length=SIZE_LONG_TEXT)
+    synthesis_note: str | None = Field(default=None, max_length=SIZE_LONG_TEXT)
     involved_finding_ids: list[str] = Field(
         default_factory=list,
+        max_length=LIST_MAX_IDS,
         description="finding_ids that participate in this conflict. The service creates one [:INVOLVES] edge per id.",
     )
 
@@ -321,28 +426,32 @@ class Deliverable(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    deliverable_id: str
-    graph_id: str
-    run_id: str
+    deliverable_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
     module_run_id: str | None = Field(
         default=None,
+        max_length=SIZE_ID,
         description="The module that produced this artifact, when applicable. None for final-* kinds.",
     )
     kind: DeliverableKind
-    filename: str
+    filename: str = Field(..., max_length=SIZE_FILENAME)
     ordinal: int = Field(default=0, ge=0)
     content_uri: str | None = Field(
         default=None,
+        max_length=SIZE_URL,
         description="Path/URI to the rendered artifact (SPRINT-001 filesystem placeholder).",
     )
     content_inline: str | None = Field(
         default=None,
+        max_length=SIZE_BLOB_TEXT,
         description=(
             "Optional inline content for small markdown payloads "
-            "(< ~50KB). SPRINT-002 introduces :Blob CAS for large payloads."
+            "(~50 KB ceiling — SIZE_BLOB_TEXT). SPRINT-002 introduces "
+            ":Blob CAS for larger payloads."
         ),
     )
-    sha256: str | None = None
+    sha256: str | None = Field(default=None, max_length=SIZE_HASH)
     word_count: int | None = Field(default=None, ge=0)
 
 
@@ -351,13 +460,14 @@ class UnresolvedQuestion(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    question_id: str
-    graph_id: str
-    run_id: str
-    module_run_id: str
-    text: str
+    question_id: str = Field(..., max_length=SIZE_ID)
+    graph_id: str = Field(..., max_length=SIZE_ID)
+    run_id: str = Field(..., max_length=SIZE_ID)
+    module_run_id: str = Field(..., max_length=SIZE_ID)
+    text: str = Field(..., max_length=SIZE_LONG_TEXT)
     suggested_module: str | None = Field(
         default=None,
+        max_length=SIZE_SLUG,
         description="Slug of the module that should answer this question, if known.",
     )
     status: QuestionStatus = "open"
@@ -378,9 +488,10 @@ class RegistryItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    item_id: str
+    item_id: str = Field(..., max_length=SIZE_ID)
     graph_id: str = Field(
         ...,
+        max_length=SIZE_ID,
         description=(
             "Tenant graph_id for `private` items; '__registry__' for `curated` and `public`. "
             "Validated by `_validate_registry_placement()` at the service layer."
@@ -389,18 +500,19 @@ class RegistryItem(BaseModel):
     kind: RegistryKind
     slug: str = Field(
         ...,
+        max_length=SIZE_SLUG,
         description=(
             "Catalog namespace: `users/<owner_user_id>/<slug>` for private, flat for curated+public. "
             "Slug uniqueness is per (kind, visibility) tier per ADR-019."
         ),
     )
-    version: str = Field(default="0.1.0")
+    version: str = Field(default="0.1.0", max_length=SIZE_VERSION)
     visibility: RegistryVisibility = "private"
-    owner_user_id: str
-    name: str
-    description: str | None = None
-    content_uri: str | None = None
-    sha256: str | None = None
+    owner_user_id: str = Field(..., max_length=SIZE_ID)
+    name: str = Field(..., max_length=SIZE_NAME)
+    description: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
+    content_uri: str | None = Field(default=None, max_length=SIZE_URL)
+    sha256: str | None = Field(default=None, max_length=SIZE_HASH)
     created_at: datetime | None = None
     yanked_at: datetime | None = None
 
@@ -433,11 +545,12 @@ class CreateRunRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    template_slug: str
+    template_slug: str = Field(..., max_length=SIZE_SLUG)
     subject: Subject
     cli_flags: dict[str, Any] = Field(default_factory=dict)
     run_id: str | None = Field(
         default=None,
+        max_length=SIZE_ID,
         description=(
             "Optional client-supplied UUID for idempotent retry. If a run with this id "
             "already exists in the tenant graph, `create_run()` returns the existing run."
@@ -448,10 +561,10 @@ class CreateRunRequest(BaseModel):
 class CreateRunResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    run_id: str
-    template_id: str
-    subject_id: str
-    module_run_ids: list[str]
+    run_id: str = Field(..., max_length=SIZE_ID)
+    template_id: str = Field(..., max_length=SIZE_ID)
+    subject_id: str = Field(..., max_length=SIZE_ID)
+    module_run_ids: list[str] = Field(default_factory=list, max_length=LIST_MAX_IDS)
     status: RunStatus
     already_existed: bool = Field(
         default=False,
@@ -467,14 +580,14 @@ class UpdateModuleRunRequest(BaseModel):
     finished_at: datetime | None = None
     last_heartbeat_at: datetime | None = None
     evidence_count: int | None = Field(default=None, ge=0)
-    deliverable_path: str | None = None
-    failure_reason: str | None = None
+    deliverable_path: str | None = Field(default=None, max_length=SIZE_URL)
+    failure_reason: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
 
 
 class RecordFindingBulkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    findings: list[Finding]
+    findings: list[Finding] = Field(..., max_length=LIST_MAX_ITEMS)
 
 
 class BulkItemResult(BaseModel):
@@ -490,11 +603,13 @@ class BulkItemResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(
-        ..., description="The natural id of the row (finding_id, conflict_id, …)."
+        ...,
+        max_length=SIZE_ID,
+        description="The natural id of the row (finding_id, conflict_id, …).",
     )
     success: bool
     already_existed: bool = False
-    error: str | None = None
+    error: str | None = Field(default=None, max_length=SIZE_SHORT_TEXT)
 
 
 class BulkResponse(BaseModel):
@@ -503,7 +618,9 @@ class BulkResponse(BaseModel):
     total: int
     succeeded: int
     failed: int
-    results: list[BulkItemResult]
+    results: list[BulkItemResult] = Field(
+        default_factory=list, max_length=LIST_MAX_ITEMS
+    )
 
 
 class RecordConflictRequest(BaseModel):
@@ -527,7 +644,7 @@ class PersistDeliverableRequest(BaseModel):
 class PersistFinalDocsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    deliverables: list[Deliverable]
+    deliverables: list[Deliverable] = Field(..., max_length=LIST_MAX_ITEMS)
 
 
 class FinalizeRunResponse(BaseModel):
@@ -541,7 +658,7 @@ class FinalizeRunResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    run_id: str
+    run_id: str = Field(..., max_length=SIZE_ID)
     passed: bool
     status: RunStatus
     finished_at: datetime
@@ -550,4 +667,4 @@ class FinalizeRunResponse(BaseModel):
     deliverable_count: int
     unresolved_conflict_count: int
     open_question_count: int
-    failure_reasons: list[str] = Field(default_factory=list)
+    failure_reasons: list[str] = Field(default_factory=list, max_length=LIST_MAX_TAGS)
