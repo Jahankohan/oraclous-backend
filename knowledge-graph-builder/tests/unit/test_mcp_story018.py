@@ -147,7 +147,7 @@ class TestListCommunities:
         client = _mock_client(get_return=_mock_response(200, communities_response))
 
         with patch.object(mcp_module, "_client", return_value=client):
-            result = await mcp_module.list_communities(graph_id="X", level=2)
+            await mcp_module.list_communities(graph_id="X", level=2)
 
         call_kwargs = client.get.call_args
         url = (
@@ -385,18 +385,20 @@ class TestChatExtensions:
 
 
 class TestToolCount:
-    """Regression: assert total registered MCP tool count is 13."""
+    """Regression: total registered MCP tool count never regresses below the STORY-018 floor of 13.
+    SPRINT-002 added 25 more (21 assessment + 4 registry); future stories add more still."""
 
     @pytest.mark.asyncio
-    async def test_total_tool_count_is_13(self):
-        """The MCP server must expose exactly 13 tools:
-        10 original + 3 new community tools from TASK-013.
-        (TASK-014 extends chat, not adding a new tool.)"""
+    async def test_total_tool_count_at_least_13(self):
+        """The MCP server must expose at least the 13 STORY-018-era tools (10 original + 3 community
+        from TASK-013). SPRINT-002 brought the running total to 38 and future sprints will add more,
+        so this assertion is a floor, not an equality."""
         tools = await mcp_module.mcp.list_tools()
         tool_names = [t.name for t in tools]
 
-        assert len(tools) == 13, (
-            f"Expected 13 tools, got {len(tools)}. Tools: {tool_names}"
+        assert len(tools) >= 13, (
+            f"Expected at least 13 tools (STORY-018 floor), got {len(tools)}. "
+            f"Tools: {tool_names}"
         )
 
     @pytest.mark.asyncio

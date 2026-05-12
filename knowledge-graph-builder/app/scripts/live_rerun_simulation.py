@@ -58,7 +58,6 @@ import sys
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -177,7 +176,7 @@ async def _patched_auth(graph_id: str):
         # verify_token ignores the value but the MCP _auth helper checks
         # truthiness before calling verify_token.
         prev_key = os.environ.get("ORACLOUS_API_KEY")
-        os.environ["ORACLOUS_API_KEY"] = "task-084-sim-key"
+        os.environ["ORACLOUS_API_KEY"] = "task-084-sim-key"  # pragma: allowlist secret
         try:
             yield principal
         finally:
@@ -297,7 +296,7 @@ async def _phase_record_findings(
     skipped_unknown_module = 0
     skipped_schema = 0
 
-    for ln, record in _iter_jsonl_records(evidence_path):
+    for _ln, record in _iter_jsonl_records(evidence_path):
         if "__parse_error__" in record:
             parse_errs += 1
             continue
@@ -327,14 +326,12 @@ async def _phase_record_findings(
     succeeded = 0
     failed = 0
     batches = 0
-    for mr_id, findings in per_module.items():
+    for _mr_id, findings in per_module.items():
         # Chunk into BULK_BATCH_LIMIT-sized pieces to stay under the
         # LIST_MAX_ITEMS Pydantic bound on RecordFindingBulkRequest.
         for i in range(0, len(findings), BULK_BATCH_LIMIT):
             chunk = findings[i : i + BULK_BATCH_LIMIT]
-            resp = await record_finding_bulk(
-                run_id=run_id, body={"findings": chunk}
-            )
+            resp = await record_finding_bulk(run_id=run_id, body={"findings": chunk})
             _check_ok("assessment.record_finding_bulk", resp)
             batches += 1
             succeeded += int(resp.get("succeeded", 0))
@@ -379,7 +376,7 @@ async def _phase_record_conflicts(
         return 0
 
     created = 0
-    for ln, record in _iter_jsonl_records(conflicts_path):
+    for _ln, record in _iter_jsonl_records(conflicts_path):
         if "__parse_error__" in record:
             continue
         cf_id = record.get("id") or f"cf-{uuid.uuid4().hex[:8]}"
@@ -395,7 +392,9 @@ async def _phase_record_conflicts(
                 "status": "resolved"
                 if str(record.get("resolution", "")).upper() == "RESOLVED"
                 else "open",
-                "resolution": record.get("resolution") if record.get("resolution") else None,
+                "resolution": record.get("resolution")
+                if record.get("resolution")
+                else None,
                 "synthesis_note": record.get("synthesis_note"),
                 "involved_finding_ids": list(record.get("evidence_ids") or [])[:50],
             }
@@ -554,7 +553,7 @@ async def _phase_persist_deliverables(
             f"</title></head><body><h1>{label}</h1>"
             f"<p>Final doc {n} of 5 synthesized for the simulation. "
             f"Real run produces a multi-MB HTML body via /docify.</p></body></html>"
-        ).encode("utf-8")
+        ).encode()
         from app.schemas.assessment_schemas import Deliverable
 
         deliverable = Deliverable(
@@ -617,7 +616,7 @@ async def _drain_events_for(
         while True:
             try:
                 event = await asyncio.wait_for(iterator.__anext__(), timeout=timeout_s)
-            except (TimeoutError, asyncio.TimeoutError):
+            except TimeoutError:
                 break
             except StopAsyncIteration:
                 break
@@ -632,9 +631,7 @@ async def _drain_events_for(
 # ---------------------------------------------------------------------------
 
 
-async def _phase_readback(
-    *, run_id: str, graph_id: str
-) -> dict[str, Any]:
+async def _phase_readback(*, run_id: str, graph_id: str) -> dict[str, Any]:
     detail = _check_ok("assessment.get_run", await get_run(run_id=run_id))
 
     wave_status = _check_ok(
@@ -849,9 +846,7 @@ async def run_simulation(args: argparse.Namespace) -> int:
             "wave_1_done": readback["wave_1_status"].get("done"),
             "wave_1_total": readback["wave_1_status"].get("total"),
             "conflict_count_seen_via_list": readback["conflict_count_seen"],
-            "open_question_count_seen_via_list": readback[
-                "open_question_count_seen"
-            ],
+            "open_question_count_seen_via_list": readback["open_question_count_seen"],
             "deliverable_count_seen_via_list": readback["deliverable_count_seen"],
             "final_doc_resolved": readback["final_doc_resolved"],
         },
