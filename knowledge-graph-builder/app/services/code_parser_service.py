@@ -1217,7 +1217,9 @@ def write_code_graph_sync(
             {"rows": params},
         )
 
-    # 2. Module nodes
+    # 2. CodeModule nodes (renamed from :Module per TASK-075 / ADR-015 — the
+    # assessment substrate owns the unqualified `:Module` label; the
+    # code-parser uses `:CodeModule` to avoid the namespace collision.)
     modules = [s for s in symbols if s.symbol_type == "Module" and s.raw_imports]
     for batch in _chunks(modules, batch_size):
         params = [
@@ -1227,7 +1229,7 @@ def write_code_graph_sync(
         session.run(
             """
             UNWIND $rows AS row
-            MERGE (m:Module {graph_id: row.graph_id, name: row.name})
+            MERGE (m:CodeModule {graph_id: row.graph_id, name: row.name})
             ON CREATE SET m.language = row.language
             """,
             {"rows": params},
@@ -1479,7 +1481,7 @@ def write_code_graph_sync(
                 """
                 UNWIND $rows AS row
                 MATCH (src:File {graph_id: $graph_id, path: row.source_file})
-                MATCH (tgt:Module {graph_id: $graph_id, name: row.target})
+                MATCH (tgt:CodeModule {graph_id: $graph_id, name: row.target})
                 MERGE (src)-[:IMPORTS {line_number: row.line_number, alias: row.alias,
                                         is_relative: row.is_relative}]->(tgt)
                 """,
@@ -1563,7 +1565,10 @@ _SCHEMA_STATEMENTS = [
     "CREATE CONSTRAINT file_unique     IF NOT EXISTS FOR (f:File)       REQUIRE (f.graph_id, f.path)           IS UNIQUE",
     "CREATE CONSTRAINT function_unique IF NOT EXISTS FOR (f:Function)   REQUIRE (f.graph_id, f.qualified_name) IS UNIQUE",
     "CREATE CONSTRAINT class_unique    IF NOT EXISTS FOR (c:Class)      REQUIRE (c.graph_id, c.qualified_name) IS UNIQUE",
-    "CREATE CONSTRAINT module_unique   IF NOT EXISTS FOR (m:Module)     REQUIRE (m.graph_id, m.name)           IS UNIQUE",
+    # `:CodeModule` (renamed from `:Module` per TASK-075 / ADR-015). The
+    # assessment substrate owns the unqualified `:Module` label; the
+    # code-parser uses `:CodeModule` to avoid the namespace collision.
+    "CREATE CONSTRAINT code_module_unique IF NOT EXISTS FOR (m:CodeModule) REQUIRE (m.graph_id, m.name)           IS UNIQUE",
     "CREATE CONSTRAINT dep_unique      IF NOT EXISTS FOR (d:Dependency) REQUIRE (d.graph_id, d.name)           IS UNIQUE",
     # Indexes
     "CREATE INDEX file_graph_path   IF NOT EXISTS FOR (f:File)       ON (f.graph_id, f.path)",
@@ -1572,9 +1577,9 @@ _SCHEMA_STATEMENTS = [
     "CREATE INDEX func_graph_qname  IF NOT EXISTS FOR (f:Function)   ON (f.graph_id, f.qualified_name)",
     "CREATE INDEX var_graph_name    IF NOT EXISTS FOR (v:Variable)   ON (v.graph_id, v.name)",
     "CREATE INDEX dep_graph_name    IF NOT EXISTS FOR (d:Dependency) ON (d.graph_id, d.name)",
-    # Full-text index
+    # Full-text index — covers `:CodeModule` (renamed from `:Module`).
     """CREATE FULLTEXT INDEX code_symbol_search IF NOT EXISTS
-       FOR (n:Function|Class|Variable|Module)
+       FOR (n:Function|Class|Variable|CodeModule)
        ON EACH [n.name, n.qualified_name, n.docstring]""",
     # Vector indexes
     """CREATE VECTOR INDEX function_embedding IF NOT EXISTS
@@ -1586,8 +1591,91 @@ _SCHEMA_STATEMENTS = [
 ]
 
 
+# Path to the canonical TASK-075 rename migration file. Applied before the
+# `_SCHEMA_STATEMENTS` so that any existing `:Module` rows owned by the
+# code-parser are promoted to `:CodeModule` BEFORE the new constraint
+# declarations land — keeping the boot path idempotent on a database that
+# already carries pre-rename code-parser data.
+_RENAME_MIGRATION_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "cypher"
+    / "migrations"
+    / "2026-05-13_rename_module_to_codemodule.cypher"
+)
+
+
+def _split_cypher_statements(cypher: str) -> list[str]:
+    """Split a multi-statement `.cypher` file on bare `;` terminators.
+
+    Mirrors the logic in `app.db.assessment_schema_init._split_statements`
+    so the two runners behave identically:
+
+    - `//` line comments are stripped.
+    - Blank lines do not start a new statement but are preserved inside one.
+    - A statement ends on a line whose trimmed text ends with `;`.
+    - The terminating `;` is removed from each statement.
+    """
+    statements: list[str] = []
+    current: list[str] = []
+    for raw_line in cypher.splitlines():
+        stripped = raw_line.split("//", 1)[0].rstrip()
+        if not stripped.strip():
+            if current:
+                current.append("")
+            continue
+        current.append(stripped)
+        if stripped.endswith(";"):
+            stmt = "\n".join(current).rstrip()
+            assert stmt.endswith(";")
+            stmt = stmt[:-1].strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+    if current and "\n".join(current).strip():
+        statements.append("\n".join(current).strip())
+    return statements
+
+
+def _load_rename_migration_statements() -> list[str]:
+    """Load the TASK-075 rename migration. Returns an empty list if missing
+    (defensive — boot must not fail in unusual filesystem layouts)."""
+    if not _RENAME_MIGRATION_PATH.is_file():
+        logger.warning(
+            "TASK-075 rename migration file not found at %s — skipping",
+            _RENAME_MIGRATION_PATH,
+        )
+        return []
+    return _split_cypher_statements(
+        _RENAME_MIGRATION_PATH.read_text(encoding="utf-8")
+    )
+
+
 async def ensure_code_schema(async_driver: Any) -> None:
-    """Apply all code KG constraints and indexes (idempotent)."""
+    """Apply all code KG constraints and indexes (idempotent).
+
+    Order matters:
+
+      1. Apply the TASK-075 `:Module` → `:CodeModule` rename migration so any
+         pre-existing code-parser data lands on the new label before the
+         new constraint declarations are applied.
+      2. Apply the standing `_SCHEMA_STATEMENTS` (constraints + indexes).
+
+    Both phases are idempotent.
+    """
+    # Phase 1 — rename migration (TASK-075). Drops the colliding constraint,
+    # drops the colliding fulltext index, promotes `:Module` rows owned by
+    # the code-parser to `:CodeModule`, then re-declares the constraint and
+    # fulltext index on `:CodeModule`. Subsequent re-runs are no-ops.
+    for stmt in _load_rename_migration_statements():
+        try:
+            await async_driver.execute_query(stmt, database_=settings.NEO4J_DATABASE)
+        except Exception as e:
+            logger.warning(
+                f"Code KG rename-migration statement warning "
+                f"(starting {stmt.splitlines()[0][:80]!r}): {e}"
+            )
+
+    # Phase 2 — standing schema (constraints + indexes on the new labels).
     for stmt in _SCHEMA_STATEMENTS:
         try:
             await async_driver.execute_query(stmt, database_=settings.NEO4J_DATABASE)
