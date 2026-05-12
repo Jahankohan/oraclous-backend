@@ -37,6 +37,7 @@ from app.schemas.assessment_schemas import (
     Deliverable,
     Finding,
     RegistryItem,
+    Source,
     Subject,
     UnresolvedQuestion,
     UpdateModuleRunRequest,
@@ -721,6 +722,360 @@ class TestSourceCatalogMerge:
         assert len(edge.records) == 1
         assert edge.records[0]["quote"] == "Article 6"
         assert edge.records[0]["s_graph_id"] == ASSESSMENTS_CATALOG_GRAPH_ID
+
+
+    async def test_finding_with_nested_source_populates_catalog_row(
+        self, svc: AssessmentService, neo4j_test_driver: AsyncDriver
+    ):
+        """TASK-077: a Finding with a nested `source` block writes URL / name /
+        type / publication_date / fetch_date / language into the catalog row.
+
+        This closes the MEDIUM QA finding from TASK-072: previously the catalog
+        `:Source` row only had `source_id` so cross-run search by URL was
+        impossible. With the threading the catalog row carries the full Source
+        shape on first observation.
+        """
+        source_id = f"src-test-{_SESSION}-osdm"
+
+        req = CreateRunRequest(
+            template_slug=_TEMPLATE_SLUG,
+            subject=Subject(
+                subject_id=f"subj-{_SESSION}-src-nest",
+                graph_id=_GID_A,
+                slug="src-nest-subj",
+                name="SrcNest",
+            ),
+        )
+        run = await svc.create_run(_GID_A, req)
+        mr_id = run.module_run_ids[0]
+
+        finding = Finding(
+            finding_id=f"ev-{_SESSION}-src-nest-1",
+            graph_id=_GID_A,
+            run_id=run.run_id,
+            module_run_id=mr_id,
+            claim="OSDM standard governs cross-operator rail offers",
+            source_id=source_id,
+            source_quote="OSDM section 3.2",
+            source=Source(
+                source_id=source_id,
+                type="standard",
+                url_normalized="https://osdm.io/spec/v3.2.html",
+                name="OSDM 3.2 Specification",
+                publication_date="2024-06-15",
+                fetch_date="2026-05-06",
+                language="en",
+            ),
+        )
+        bulk = await svc.record_finding_bulk(_GID_A, run.run_id, mr_id, [finding])
+        assert bulk.succeeded == 1, bulk.results
+
+        # The catalog row now carries the full Source shape, not just source_id.
+        rec = await neo4j_test_driver.execute_query(
+            """
+            MATCH (s:Source:__Platform__ {source_id: $sid})
+            RETURN s.graph_id         AS graph_id,
+                   s.type             AS type,
+                   s.url_normalized   AS url_normalized,
+                   s.name             AS name,
+                   s.publication_date AS publication_date,
+                   s.fetch_date       AS fetch_date,
+                   s.language         AS language
+            """,
+            {"sid": source_id},
+        )
+        assert len(rec.records) == 1
+        row = rec.records[0]
+        assert row["graph_id"] == ASSESSMENTS_CATALOG_GRAPH_ID
+        assert row["type"] == "standard"
+        assert row["url_normalized"] == "https://osdm.io/spec/v3.2.html"
+        assert row["name"] == "OSDM 3.2 Specification"
+        assert row["publication_date"] == "2024-06-15"
+        assert row["fetch_date"] == "2026-05-06"
+        assert row["language"] == "en"
+
+    async def test_source_merge_idempotent_preserves_name_and_url(
+        self, svc: AssessmentService, neo4j_test_driver: AsyncDriver
+    ):
+        """TASK-077: re-MERGE on the same `source_id` must NOT overwrite the
+        identity-bearing fields (`url_normalized`, `name`, `type`, `language`).
+
+        Without this guarantee a second observation with a typo'd name would
+        silently mutate the catalog row, breaking dedup on URL.
+        """
+        source_id = f"src-test-{_SESSION}-idem"
+
+        req = CreateRunRequest(
+            template_slug=_TEMPLATE_SLUG,
+            subject=Subject(
+                subject_id=f"subj-{_SESSION}-idem",
+                graph_id=_GID_A,
+                slug="idem-subj",
+                name="IdemSubj",
+            ),
+        )
+        run = await svc.create_run(_GID_A, req)
+        mr_id = run.module_run_ids[0]
+
+        # First observation: rich Source.
+        first = Finding(
+            finding_id=f"ev-{_SESSION}-idem-1",
+            graph_id=_GID_A,
+            run_id=run.run_id,
+            module_run_id=mr_id,
+            claim="First observation",
+            source_id=source_id,
+            source=Source(
+                source_id=source_id,
+                type="article",
+                url_normalized="https://example.com/article",
+                name="Original Name",
+                publication_date="2024-01-01",
+                fetch_date="2026-05-01",
+                language="en",
+            ),
+        )
+        bulk1 = await svc.record_finding_bulk(_GID_A, run.run_id, mr_id, [first])
+        assert bulk1.succeeded == 1, bulk1.results
+
+        # Second observation: same source_id, different name + URL + newer
+        # publication_date + newer fetch_date.
+        second = Finding(
+            finding_id=f"ev-{_SESSION}-idem-2",
+            graph_id=_GID_A,
+            run_id=run.run_id,
+            module_run_id=mr_id,
+            claim="Second observation",
+            source_id=source_id,
+            source=Source(
+                source_id=source_id,
+                type="paper",  # would overwrite if not preserved
+                url_normalized="https://example.com/wrong-url",  # would overwrite
+                name="Mutated Name",  # would overwrite
+                publication_date="2025-03-15",  # newer — should win
+                fetch_date="2026-05-10",  # newer — should refresh
+                language="fr",  # would overwrite
+            ),
+        )
+        bulk2 = await svc.record_finding_bulk(_GID_A, run.run_id, mr_id, [second])
+        assert bulk2.succeeded == 1, bulk2.results
+
+        rec = await neo4j_test_driver.execute_query(
+            """
+            MATCH (s:Source:__Platform__ {source_id: $sid})
+            RETURN s.type             AS type,
+                   s.url_normalized   AS url_normalized,
+                   s.name             AS name,
+                   s.publication_date AS publication_date,
+                   s.fetch_date       AS fetch_date,
+                   s.language         AS language
+            """,
+            {"sid": source_id},
+        )
+        assert len(rec.records) == 1
+        row = rec.records[0]
+        # Identity fields preserved.
+        assert row["url_normalized"] == "https://example.com/article"
+        assert row["name"] == "Original Name"
+        assert row["type"] == "article"
+        assert row["language"] == "en"
+        # Refresh fields updated.
+        assert row["publication_date"] == "2025-03-15"  # newer wins
+        assert row["fetch_date"] == "2026-05-10"  # always refresh
+
+    async def test_source_merge_older_publication_date_does_not_overwrite(
+        self, svc: AssessmentService, neo4j_test_driver: AsyncDriver
+    ):
+        """TASK-077: on re-MERGE, an OLDER `publication_date` must not clobber
+        a newer one — newer-wins is the documented policy.
+        """
+        source_id = f"src-test-{_SESSION}-pubdate"
+
+        req = CreateRunRequest(
+            template_slug=_TEMPLATE_SLUG,
+            subject=Subject(
+                subject_id=f"subj-{_SESSION}-pubdate",
+                graph_id=_GID_A,
+                slug="pubdate-subj",
+                name="PubDate",
+            ),
+        )
+        run = await svc.create_run(_GID_A, req)
+        mr_id = run.module_run_ids[0]
+
+        # First observation: 2025-06-01.
+        first = Finding(
+            finding_id=f"ev-{_SESSION}-pubdate-1",
+            graph_id=_GID_A,
+            run_id=run.run_id,
+            module_run_id=mr_id,
+            claim="First",
+            source_id=source_id,
+            source=Source(
+                source_id=source_id,
+                url_normalized="https://example.com/pub",
+                name="Pub",
+                publication_date="2025-06-01",
+                fetch_date="2026-05-01",
+            ),
+        )
+        bulk1 = await svc.record_finding_bulk(_GID_A, run.run_id, mr_id, [first])
+        assert bulk1.succeeded == 1
+
+        # Second observation: older publication_date.
+        second = Finding(
+            finding_id=f"ev-{_SESSION}-pubdate-2",
+            graph_id=_GID_A,
+            run_id=run.run_id,
+            module_run_id=mr_id,
+            claim="Second",
+            source_id=source_id,
+            source=Source(
+                source_id=source_id,
+                url_normalized="https://example.com/pub",
+                name="Pub",
+                publication_date="2024-01-01",  # OLDER — should be ignored
+                fetch_date="2026-05-12",
+            ),
+        )
+        bulk2 = await svc.record_finding_bulk(_GID_A, run.run_id, mr_id, [second])
+        assert bulk2.succeeded == 1
+
+        rec = await neo4j_test_driver.execute_query(
+            """
+            MATCH (s:Source:__Platform__ {source_id: $sid})
+            RETURN s.publication_date AS publication_date,
+                   s.fetch_date       AS fetch_date
+            """,
+            {"sid": source_id},
+        )
+        assert len(rec.records) == 1
+        row = rec.records[0]
+        # publication_date stayed at the newer 2025-06-01 (older was rejected).
+        assert row["publication_date"] == "2025-06-01"
+        # fetch_date always refreshes.
+        assert row["fetch_date"] == "2026-05-12"
+
+    async def test_legacy_source_id_only_call_still_works(
+        self, svc: AssessmentService, neo4j_test_driver: AsyncDriver
+    ):
+        """TASK-077: callers that supply only `source_id` (no nested `source`)
+        keep working — the catalog row is created with just `source_id` /
+        `graph_id` and the rich fields stay NULL until a later observation
+        threads the full Source through.
+        """
+        source_id = f"src-test-{_SESSION}-legacy"
+
+        req = CreateRunRequest(
+            template_slug=_TEMPLATE_SLUG,
+            subject=Subject(
+                subject_id=f"subj-{_SESSION}-legacy",
+                graph_id=_GID_A,
+                slug="legacy-subj",
+                name="Legacy",
+            ),
+        )
+        run = await svc.create_run(_GID_A, req)
+        mr_id = run.module_run_ids[0]
+
+        # Legacy shape: only source_id, no nested source block.
+        finding = Finding(
+            finding_id=f"ev-{_SESSION}-legacy-1",
+            graph_id=_GID_A,
+            run_id=run.run_id,
+            module_run_id=mr_id,
+            claim="Legacy call",
+            source_id=source_id,
+        )
+        bulk = await svc.record_finding_bulk(_GID_A, run.run_id, mr_id, [finding])
+        assert bulk.succeeded == 1, bulk.results
+
+        rec = await neo4j_test_driver.execute_query(
+            """
+            MATCH (s:Source:__Platform__ {source_id: $sid})
+            RETURN s.graph_id         AS graph_id,
+                   s.url_normalized   AS url_normalized,
+                   s.name             AS name,
+                   s.fetch_date       AS fetch_date
+            """,
+            {"sid": source_id},
+        )
+        assert len(rec.records) == 1
+        row = rec.records[0]
+        assert row["graph_id"] == ASSESSMENTS_CATALOG_GRAPH_ID
+        # Legacy callers leave these NULL — by design.
+        assert row["url_normalized"] is None
+        assert row["name"] is None
+        assert row["fetch_date"] is None
+
+        # A subsequent observation with the full Source backfills the NULLs
+        # (the ON MATCH SET coalesce picks the supplied non-NULL).
+        finding2 = Finding(
+            finding_id=f"ev-{_SESSION}-legacy-2",
+            graph_id=_GID_A,
+            run_id=run.run_id,
+            module_run_id=mr_id,
+            claim="Backfill",
+            source_id=source_id,
+            source=Source(
+                source_id=source_id,
+                url_normalized="https://example.com/legacy",
+                name="Legacy Source",
+                fetch_date="2026-05-12",
+            ),
+        )
+        bulk2 = await svc.record_finding_bulk(_GID_A, run.run_id, mr_id, [finding2])
+        assert bulk2.succeeded == 1
+
+        rec2 = await neo4j_test_driver.execute_query(
+            """
+            MATCH (s:Source:__Platform__ {source_id: $sid})
+            RETURN s.url_normalized   AS url_normalized,
+                   s.name             AS name,
+                   s.fetch_date       AS fetch_date
+            """,
+            {"sid": source_id},
+        )
+        row2 = rec2.records[0]
+        assert row2["url_normalized"] == "https://example.com/legacy"
+        assert row2["name"] == "Legacy Source"
+        assert row2["fetch_date"] == "2026-05-12"
+
+    async def test_finding_source_id_mismatch_is_rejected(self, svc: AssessmentService):
+        """TASK-077: a nested `source.source_id` that disagrees with the
+        finding's top-level `source_id` is a caller bug — the service rejects
+        the write rather than silently picking one.
+        """
+        req = CreateRunRequest(
+            template_slug=_TEMPLATE_SLUG,
+            subject=Subject(
+                subject_id=f"subj-{_SESSION}-mismatch",
+                graph_id=_GID_A,
+                slug="mismatch-subj",
+                name="Mismatch",
+            ),
+        )
+        run = await svc.create_run(_GID_A, req)
+        mr_id = run.module_run_ids[0]
+
+        finding = Finding(
+            finding_id=f"ev-{_SESSION}-mismatch-1",
+            graph_id=_GID_A,
+            run_id=run.run_id,
+            module_run_id=mr_id,
+            claim="Mismatch",
+            source_id=f"src-test-{_SESSION}-A",
+            source=Source(
+                source_id=f"src-test-{_SESSION}-B",
+                url_normalized="https://example.com/x",
+            ),
+        )
+        bulk = await svc.record_finding_bulk(_GID_A, run.run_id, mr_id, [finding])
+        # Per-record failure surfaces via BulkResponse (per-record success
+        # semantics — see STORY-026 Open Question #4).
+        assert bulk.failed == 1
+        assert bulk.succeeded == 0
+        assert "does not match" in (bulk.results[0].error or "")
 
 
 # ── Registry routing (ADR-019) ────────────────────────────────────────────────

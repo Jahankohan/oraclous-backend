@@ -29,6 +29,7 @@ from app.schemas.assessment_schemas import (
     Deliverable,
     Finding,
     RegistryItem,
+    Source,
     Subject,
     UnresolvedQuestion,
     UpdateModuleRunRequest,
@@ -408,6 +409,136 @@ class TestRecordFindingBulk:
         ]
         with pytest.raises(ValueError, match="ModuleRun not found"):
             await svc.record_finding_bulk("tenant-A", "run-1", "mr-missing", findings)
+
+
+    async def test_nested_source_threads_fields_to_catalog_merge(self):
+        """TASK-077: when a Finding carries a nested `source` block the service
+        passes the rich fields (url_normalized/name/type/dates/language) to the
+        `:Source` MERGE in the catalog graph, not just the bare `source_id`.
+
+        We assert on the Cypher params dict for the Source MERGE call so we
+        can verify each field arrives at the right key.
+        """
+        # Call order: parent → Finding MERGE → Source MERGE → CITES → refresh.
+        driver = _make_driver(
+            record_sequences=[
+                [_rec(id="mr-1")],
+                [_rec(created=True)],
+                [],
+                [],
+                [],
+            ]
+        )
+        svc = AssessmentService(driver)
+        finding = Finding(
+            finding_id="ev-src-thread",
+            graph_id="tenant-A",
+            run_id="run-1",
+            module_run_id="mr-1",
+            claim="threaded",
+            source_id="src-osdm",
+            source=Source(
+                source_id="src-osdm",
+                type="standard",
+                url_normalized="https://osdm.io/spec",
+                name="OSDM",
+                publication_date="2024-06-15",
+                fetch_date="2026-05-12",
+                language="en",
+            ),
+        )
+        resp = await svc.record_finding_bulk("tenant-A", "run-1", "mr-1", [finding])
+        assert resp.succeeded == 1
+
+        # call_args_list[2] is the Source MERGE.
+        source_call = driver.execute_query.call_args_list[2]
+        cypher = source_call.args[0]
+        params = source_call.args[1]
+        # Verify the Cypher carries an ON CREATE SET / ON MATCH SET split.
+        assert "ON CREATE SET" in cypher
+        assert "ON MATCH SET" in cypher
+        assert "publication_date" in cypher
+        # Verify every Source field flowed through.
+        assert params["source_id"] == "src-osdm"
+        assert params["catalog_graph_id"] == ASSESSMENTS_CATALOG_GRAPH_ID
+        assert params["type"] == "standard"
+        assert params["url_normalized"] == "https://osdm.io/spec"
+        assert params["name"] == "OSDM"
+        assert params["publication_date"] == "2024-06-15"
+        assert params["fetch_date"] == "2026-05-12"
+        assert params["language"] == "en"
+
+    async def test_legacy_source_id_only_passes_null_fields(self):
+        """TASK-077: legacy callers (only `source_id`, no nested `source`) still
+        get a Source MERGE — but with all rich fields set to None.
+        Backwards-compat path stays alive.
+        """
+        driver = _make_driver(
+            record_sequences=[
+                [_rec(id="mr-1")],
+                [_rec(created=True)],
+                [],
+                [],
+                [],
+            ]
+        )
+        svc = AssessmentService(driver)
+        finding = Finding(
+            finding_id="ev-legacy",
+            graph_id="tenant-A",
+            run_id="run-1",
+            module_run_id="mr-1",
+            claim="legacy",
+            source_id="src-legacy",
+        )
+        resp = await svc.record_finding_bulk("tenant-A", "run-1", "mr-1", [finding])
+        assert resp.succeeded == 1
+
+        source_call = driver.execute_query.call_args_list[2]
+        params = source_call.args[1]
+        assert params["source_id"] == "src-legacy"
+        for k in (
+            "type",
+            "url_normalized",
+            "name",
+            "publication_date",
+            "fetch_date",
+            "language",
+        ):
+            assert params[k] is None, (
+                f"expected {k}=None for legacy call, got {params[k]!r}"
+            )
+
+    async def test_finding_source_id_mismatch_is_reported_as_per_record_failure(self):
+        """TASK-077: if a caller supplies a nested `source.source_id` that
+        disagrees with the finding's top-level `source_id`, the service rejects
+        the write rather than silently picking one. Per-record failure
+        semantics — the bulk response carries it as `success=False`.
+        """
+        driver = _make_driver(
+            record_sequences=[
+                [_rec(id="mr-1")],
+                [_rec(created=True)],
+                [],  # refresh
+            ]
+        )
+        svc = AssessmentService(driver)
+        finding = Finding(
+            finding_id="ev-mismatch",
+            graph_id="tenant-A",
+            run_id="run-1",
+            module_run_id="mr-1",
+            claim="mismatch",
+            source_id="src-A",
+            source=Source(
+                source_id="src-B",  # disagrees with source_id above
+                url_normalized="https://example.com/x",
+            ),
+        )
+        resp = await svc.record_finding_bulk("tenant-A", "run-1", "mr-1", [finding])
+        assert resp.failed == 1
+        assert resp.succeeded == 0
+        assert "does not match" in (resp.results[0].error or "")
 
 
 # ── record_conflict ───────────────────────────────────────────────────────────
