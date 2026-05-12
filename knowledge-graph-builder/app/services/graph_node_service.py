@@ -57,9 +57,8 @@ class GraphNodeService:
         # (e.g. multihop enrichment in chat_service). The composite rel_temporal_idx
         # requires graph_id as the leading key and is not used by the planner in
         # those traversal patterns.
-        "CREATE INDEX rel_valid_from_idx IF NOT EXISTS "
-        "FOR ()-[r]-() ON (r.valid_from)",
-        "CREATE INDEX rel_valid_to_idx IF NOT EXISTS " "FOR ()-[r]-() ON (r.valid_to)",
+        "CREATE INDEX rel_valid_from_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_from)",
+        "CREATE INDEX rel_valid_to_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_to)",
         # __Contradiction__ label added at schema init (not ad hoc per CTO review)
         "CREATE INDEX contradiction_graph_idx IF NOT EXISTS "
         "FOR (c:__Contradiction__) ON (c.graph_id, c.detected_at)",

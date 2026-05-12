@@ -7,7 +7,8 @@ Updated to use dual driver architecture without @lru_cache for stateful connecti
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Coroutine
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, Request, status
 from neo4j import AsyncDriver, Driver
@@ -276,9 +277,9 @@ async def check_openai_health(
 
 
 async def get_tenant_rate_limiter(
-    request: "Request",
+    request: Request,
     endpoint_type: str = "read",
-) -> "TokenBucketRateLimiter | None":
+) -> TokenBucketRateLimiter | None:
     """
     FastAPI dependency that returns a ``TokenBucketRateLimiter`` for the
     authenticated tenant on the current request.
@@ -319,7 +320,9 @@ async def get_tenant_rate_limiter(
 
         from app.core.config import settings
 
-        redis_client = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        redis_client = await aioredis.from_url(
+            settings.REDIS_URL, decode_responses=True
+        )
     except Exception as exc:
         logger.warning("Cannot create Redis client for rate limiter: %s", exc)
         return None
@@ -335,17 +338,17 @@ async def get_tenant_rate_limiter(
     )
 
 
-def get_read_rate_limiter(request: "Request") -> "Coroutine":
+def get_read_rate_limiter(request: Request) -> Coroutine:
     """Convenience wrapper: read-category per-tenant rate limiter."""
     return get_tenant_rate_limiter(request, "read")
 
 
-def get_write_rate_limiter(request: "Request") -> "Coroutine":
+def get_write_rate_limiter(request: Request) -> Coroutine:
     """Convenience wrapper: write-category per-tenant rate limiter."""
     return get_tenant_rate_limiter(request, "write")
 
 
-def get_admin_rate_limiter(request: "Request") -> "Coroutine":
+def get_admin_rate_limiter(request: Request) -> Coroutine:
     """Convenience wrapper: admin-category per-tenant rate limiter."""
     return get_tenant_rate_limiter(request, "admin")
 

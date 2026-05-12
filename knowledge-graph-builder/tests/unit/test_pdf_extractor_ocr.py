@@ -5,15 +5,14 @@ All PyMuPDF, pytesseract, and filesystem calls are mocked so no real PDFs or
 Tesseract installation are required.
 """
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers — build minimal fitz / pytesseract mocks
 # ---------------------------------------------------------------------------
+
 
 def _make_page(text: str, images: list | None = None):
     """Return a mock PyMuPDF page object."""
@@ -41,6 +40,7 @@ def _make_doc(pages: list, page_count: int | None = None):
 # ---------------------------------------------------------------------------
 # Patches applied to every test in this module
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def patch_filesystem(tmp_path, monkeypatch):
@@ -74,6 +74,7 @@ def patch_filesystem(tmp_path, monkeypatch):
 # Test 1 — short text → OCR called, ocr_used: True in metadata
 # ---------------------------------------------------------------------------
 
+
 def test_short_page_triggers_ocr():
     """When PyMuPDF returns <100 chars, pytesseract.image_to_string is called."""
     short_text = "A" * 10  # well below threshold
@@ -105,6 +106,7 @@ def test_short_page_triggers_ocr():
 # Test 2 — long text → OCR NOT called
 # ---------------------------------------------------------------------------
 
+
 def test_long_page_skips_ocr():
     """When PyMuPDF returns ≥100 chars, pytesseract must not be called."""
     long_text = "B" * 200  # above threshold
@@ -130,6 +132,7 @@ def test_long_page_skips_ocr():
 # ---------------------------------------------------------------------------
 # Test 3 — short text + embedded images → likely_diagram: True
 # ---------------------------------------------------------------------------
+
 
 def test_short_text_with_images_flags_likely_diagram():
     """
@@ -163,6 +166,7 @@ def test_short_text_with_images_flags_likely_diagram():
 # Test 4 — long text page with images → NOT flagged as likely_diagram
 # ---------------------------------------------------------------------------
 
+
 def test_long_text_with_images_not_flagged_as_diagram():
     """A page with ≥100 chars is never flagged as a diagram, even with images."""
     long_text = "C" * 200
@@ -188,6 +192,7 @@ def test_long_text_with_images_not_flagged_as_diagram():
 # ---------------------------------------------------------------------------
 # Test 5 — pytesseract ImportError → graceful skip, no exception raised
 # ---------------------------------------------------------------------------
+
 
 def test_ocr_unavailable_skips_gracefully():
     """
@@ -215,6 +220,7 @@ def test_ocr_unavailable_skips_gracefully():
 # ---------------------------------------------------------------------------
 # Test 6 — OCR exception on a page → graceful skip, processing continues
 # ---------------------------------------------------------------------------
+
 
 def test_ocr_exception_on_page_is_swallowed():
     """
@@ -246,6 +252,7 @@ def test_ocr_exception_on_page_is_swallowed():
 # ---------------------------------------------------------------------------
 # Test 7 — pages key present in result and contains correct structure
 # ---------------------------------------------------------------------------
+
 
 def test_result_includes_pages_metadata():
     """extract_pdf always returns a 'pages' list with per-page dicts."""

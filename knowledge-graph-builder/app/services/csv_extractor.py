@@ -6,7 +6,6 @@ Python stdlib only (csv, io). No pandas or external dependencies.
 """
 
 import csv
-import io
 from datetime import date
 from pathlib import Path
 from typing import Any

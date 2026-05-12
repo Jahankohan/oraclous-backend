@@ -1,9 +1,8 @@
-from logging.config import fileConfig
-import sys
 import os
+import sys
+from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
@@ -20,7 +19,9 @@ config = context.config
 # Override with environment variable if available
 if not config.get_main_option("sqlalchemy.url"):
     # Use synchronous PostgreSQL URL for migrations
-    database_url = os.getenv("POSTGRES_URL", "postgresql://postgres:password@postgres:5432/kgbuilder")
+    database_url = os.getenv(
+        "POSTGRES_URL", "postgresql://postgres:password@postgres:5432/kgbuilder"
+    )
     # Convert asyncpg URL to psycopg2 URL for migrations
     if "asyncpg" in database_url:
         database_url = database_url.replace("+asyncpg", "")
@@ -79,9 +80,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()

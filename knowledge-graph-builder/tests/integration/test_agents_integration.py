@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,6 +23,7 @@ import pytest_asyncio
 
 try:
     from neo4j import AsyncDriver
+
     _NEO4J_AVAILABLE = True
 except ImportError:
     _NEO4J_AVAILABLE = False
@@ -45,11 +45,13 @@ pytestmark = pytest.mark.skipif(
 @pytest_asyncio.fixture(autouse=True)
 async def _cleanup(neo4j_test_driver: AsyncDriver):
     """Delete all test nodes before and after each test."""
+
     async def _wipe():
         for gid in (_GID_A, _GID_B):
             await neo4j_test_driver.execute_query(
                 "MATCH (n {graph_id: $gid}) DETACH DELETE n", {"gid": gid}
             )
+
     await _wipe()
     yield
     await _wipe()
@@ -57,8 +59,8 @@ async def _cleanup(neo4j_test_driver: AsyncDriver):
 
 @pytest.fixture(autouse=True)
 def _override_auth(async_client):
-    from app.main import app
     from app.api.dependencies import get_current_user_id
+    from app.main import app
 
     app.dependency_overrides[get_current_user_id] = lambda: _USER
     yield
@@ -68,8 +70,8 @@ def _override_auth(async_client):
 @pytest.fixture(autouse=True)
 def _override_agent_service(async_client, neo4j_test_driver: AsyncDriver):
     import app.api.v1.endpoints.agents as _agents_mod
-    from app.main import app
     from app.api.v1.endpoints.agents import _agent_service
+    from app.main import app
     from app.services.agent_service import AgentService
 
     app.dependency_overrides[_agent_service] = lambda: AgentService(neo4j_test_driver)
@@ -101,7 +103,7 @@ def _llm_mock(responses: list[str]) -> MagicMock:
 
 
 _AGENT_URL = "/api/v1/api/v1/graphs/{gid}/agents"
-_CHAT_URL  = "/api/v1/api/v1/graphs/{gid}/agents/{aid}/chat"
+_CHAT_URL = "/api/v1/api/v1/graphs/{gid}/agents/{aid}/chat"
 
 
 async def _create_agent(async_client, gid: str, **kwargs) -> str:
@@ -141,9 +143,7 @@ class TestAgentCRUDNeo4j:
         id2 = await _create_agent(async_client, _GID_A, name="ToDelete")
 
         with _mock_verify():
-            await async_client.delete(
-                f"/api/v1/api/v1/graphs/{_GID_A}/agents/{id2}"
-            )
+            await async_client.delete(f"/api/v1/api/v1/graphs/{_GID_A}/agents/{id2}")
             resp = await async_client.get(_AGENT_URL.format(gid=_GID_A))
 
         assert resp.status_code == 200
@@ -156,7 +156,9 @@ class TestAgentCRUDNeo4j:
     ):
         agent_id = await _create_agent(async_client, _GID_A)
         with _mock_verify():
-            await async_client.delete(f"/api/v1/api/v1/graphs/{_GID_A}/agents/{agent_id}")
+            await async_client.delete(
+                f"/api/v1/api/v1/graphs/{_GID_A}/agents/{agent_id}"
+            )
 
         result = await neo4j_test_driver.execute_query(
             "MATCH (a:Agent {agent_id: $aid}) RETURN a.deactivated_at AS ts",
@@ -173,7 +175,9 @@ class TestDeactivatedAgent:
         agent_id = await _create_agent(async_client, _GID_A)
 
         with _mock_verify():
-            await async_client.delete(f"/api/v1/api/v1/graphs/{_GID_A}/agents/{agent_id}")
+            await async_client.delete(
+                f"/api/v1/api/v1/graphs/{_GID_A}/agents/{agent_id}"
+            )
             resp = await async_client.post(
                 _CHAT_URL.format(gid=_GID_A, aid=agent_id),
                 json={"message": "hello"},
@@ -185,10 +189,9 @@ class TestDeactivatedAgent:
 
 
 class TestToolAllowlist:
-    async def test_permitted_tool_does_not_raise(
-        self, neo4j_test_driver: AsyncDriver
-    ):
+    async def test_permitted_tool_does_not_raise(self, neo4j_test_driver: AsyncDriver):
         from app.services.agent_tools import AgentToolkit
+
         tk = AgentToolkit(neo4j_test_driver, allowed_tools=["degree_centrality"])
         # Empty graph — returns empty list, not error
         result = await tk.degree_centrality(_GID_A, "NonExistentLabel", top_n=5)
@@ -196,6 +199,7 @@ class TestToolAllowlist:
 
     async def test_unpermitted_tool_raises(self, neo4j_test_driver: AsyncDriver):
         from app.services.agent_tools import AgentToolkit, ToolNotPermittedError
+
         tk = AgentToolkit(neo4j_test_driver, allowed_tools=["graph_search"])
         with pytest.raises(ToolNotPermittedError) as exc_info:
             await tk.degree_centrality(_GID_A, "Person")
@@ -205,18 +209,35 @@ class TestToolAllowlist:
         self, neo4j_test_driver: AsyncDriver
     ):
         from app.services.agent_tools import AgentToolkit, ToolNotPermittedError
+
         tk = AgentToolkit(neo4j_test_driver, allowed_tools=[])
-        for name in ["community_members", "neighbors", "degree_centrality",
-                     "shortest_path", "taint_trace", "temporal_slice"]:
+        for name in [
+            "community_members",
+            "neighbors",
+            "degree_centrality",
+            "shortest_path",
+            "taint_trace",
+            "temporal_slice",
+        ]:
             with pytest.raises(ToolNotPermittedError):
                 method = getattr(tk, name)
                 # Provide minimal args just to reach the _require() check
-                await method(_GID_A, **({"community_id": "x"} if name == "community_members"
-                                        else {"node_id": "x"} if name == "neighbors"
-                                        else {"node_label": "X"} if name == "degree_centrality"
-                                        else {"node_label": "X", "at_time": 0} if name == "temporal_slice"
-                                        else {"from_qname": "a", "to_qname": "b"} if name == "shortest_path"
-                                        else {"source_qname": "x"}))
+                await method(
+                    _GID_A,
+                    **(
+                        {"community_id": "x"}
+                        if name == "community_members"
+                        else {"node_id": "x"}
+                        if name == "neighbors"
+                        else {"node_label": "X"}
+                        if name == "degree_centrality"
+                        else {"node_label": "X", "at_time": 0}
+                        if name == "temporal_slice"
+                        else {"from_qname": "a", "to_qname": "b"}
+                        if name == "shortest_path"
+                        else {"source_qname": "x"}
+                    ),
+                )
 
 
 # ── 4. Cross-tenant isolation ─────────────────────────────────────────────────
@@ -236,6 +257,7 @@ class TestCrossTenantIsolation:
             {"gA": _GID_A, "gB": _GID_B},
         )
         from app.services.agent_tools import AgentToolkit
+
         tk = AgentToolkit(neo4j_test_driver, allowed_tools=["temporal_slice"])
         nodes = await tk.temporal_slice(_GID_A, "IsolEntity", at_time=1)
 
@@ -259,12 +281,12 @@ class TestCrossTenantIsolation:
             {"gA": _GID_A, "gB": _GID_B},
         )
         from app.services.agent_tools import AgentToolkit
+
         tk = AgentToolkit(neo4j_test_driver, allowed_tools=["degree_centrality"])
         nodes = await tk.degree_centrality(_GID_A, "IsolPerson", top_n=10)
 
         ids = {n.id for n in nodes}
-        assert all(nid.startswith("pA") for nid in ids), \
-            f"Cross-tenant leak: {ids}"
+        assert all(nid.startswith("pA") for nid in ids), f"Cross-tenant leak: {ids}"
         assert "pB1" not in ids
 
     async def test_shortest_path_all_nodes_in_same_graph(
@@ -281,6 +303,7 @@ class TestCrossTenantIsolation:
             {"gA": _GID_A},
         )
         from app.services.agent_tools import AgentToolkit
+
         tk = AgentToolkit(neo4j_test_driver, allowed_tools=["shortest_path"])
         result = await tk.shortest_path(_GID_A, "A::start", "A::end")
         assert result is not None
@@ -334,13 +357,19 @@ class TestChatProvenance:
             {"gid": _GID_A},
         )
         agent_id = await _create_agent(
-            async_client, _GID_A,
+            async_client,
+            _GID_A,
             reasoning_mode="research",
             tools=["degree_centrality"],
         )
 
         react_responses = [
-            json.dumps({"action": "degree_centrality", "args": {"node_label": "ResPerson", "top_n": 5}}),
+            json.dumps(
+                {
+                    "action": "degree_centrality",
+                    "args": {"node_label": "ResPerson", "top_n": 5},
+                }
+            ),
             json.dumps({"action": "answer", "text": "Done."}),
         ]
         with _mock_verify():
@@ -387,13 +416,19 @@ class TestChatProvenance:
             {"gA": _GID_A},
         )
         agent_id = await _create_agent(
-            async_client, _GID_A,
+            async_client,
+            _GID_A,
             reasoning_mode="research",
             tools=["degree_centrality"],
         )
 
         react_responses = [
-            json.dumps({"action": "degree_centrality", "args": {"node_label": "ProvPerson", "top_n": 10}}),
+            json.dumps(
+                {
+                    "action": "degree_centrality",
+                    "args": {"node_label": "ProvPerson", "top_n": 10},
+                }
+            ),
             json.dumps({"action": "answer", "text": "Checked."}),
         ]
         with _mock_verify():
@@ -415,8 +450,9 @@ class TestChatProvenance:
         assert prov["total_nodes_traversed"] > 0
         # All returned nodes must be from graph-A (verified via ID prefix)
         for node in prov["nodes"]:
-            assert node["id"].startswith("pp_A"), \
+            assert node["id"].startswith("pp_A"), (
                 f"Cross-tenant leak in provenance: {node['id']}"
+            )
 
 
 # ── 6. Conversational mode — session history ──────────────────────────────────
@@ -444,6 +480,7 @@ class TestConversationalSession:
 
     async def test_second_turn_includes_history(self, async_client):
         from app.services.agent_executor import _sessions
+
         _sessions.clear()
 
         agent_id = await _create_agent(
@@ -469,6 +506,8 @@ class TestConversationalSession:
                     )
 
         # Second LLM call should include prior assistant message in messages list
-        second_call_messages = llm.chat.completions.create.call_args_list[1][1]["messages"]
+        second_call_messages = llm.chat.completions.create.call_args_list[1][1][
+            "messages"
+        ]
         roles = [m["role"] for m in second_call_messages]
         assert "assistant" in roles, "Session history not injected in second turn"

@@ -15,7 +15,8 @@ conversational  Full session history injected; warm tone system prompt suffix
 """
 
 import json
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 from uuid import uuid4
 
 from neo4j import AsyncDriver
@@ -26,7 +27,10 @@ from app.core.logging import get_logger
 from app.schemas.agent_schemas import AgentChatResponse, NodeResult, PathResult
 from app.services.agent_service import AgentService
 from app.services.agent_tools import AgentToolkit, ToolNotPermittedError
-from app.services.credential_broker_client import CredentialBrokerClient, CredentialBrokerError
+from app.services.credential_broker_client import (
+    CredentialBrokerClient,
+    CredentialBrokerError,
+)
 from app.services.llm_client_factory import LLMClientFactory
 from app.services.llm_config_service import LLMConfigService
 from app.services.provenance import ProvenanceCollector
@@ -160,10 +164,13 @@ class AgentExecutor:
     async def _call_llm(
         self, messages: list[dict], system_prompt: str | None = None
     ) -> str:
-        sp = system_prompt or self._agent.get("system_prompt", "You are a helpful assistant.")
+        sp = system_prompt or self._agent.get(
+            "system_prompt", "You are a helpful assistant."
+        )
 
         try:
             from anthropic import AsyncAnthropic
+
             _is_anthropic = isinstance(self._llm, AsyncAnthropic)
         except ImportError:
             _is_anthropic = False
@@ -193,10 +200,13 @@ class AgentExecutor:
         Phase 1: direct mode only. For Anthropic uses the streaming context manager;
         for OpenAI-compatible uses stream=True. Non-direct modes use run() instead.
         """
-        sp = system_prompt or self._agent.get("system_prompt", "You are a helpful assistant.")
+        sp = system_prompt or self._agent.get(
+            "system_prompt", "You are a helpful assistant."
+        )
 
         try:
             from anthropic import AsyncAnthropic
+
             _is_anthropic = isinstance(self._llm, AsyncAnthropic)
         except ImportError:
             _is_anthropic = False
@@ -252,7 +262,9 @@ class AgentExecutor:
                 full_response += token
                 yield token, None
 
-            prov.nodes_used_in_response = _extract_cited_nodes(full_response, prov._nodes)
+            prov.nodes_used_in_response = _extract_cited_nodes(
+                full_response, prov._nodes
+            )
             yield None, prov.to_payload()
         else:
             # Non-direct modes: collect full response then yield once
@@ -320,7 +332,10 @@ class AgentExecutor:
                 nodes = await self._dispatch(action, args, prov)
             except (ToolNotPermittedError, TypeError) as exc:
                 messages.append(
-                    {"role": "user", "content": f"Tool error: {exc}. Try a different tool."}
+                    {
+                        "role": "user",
+                        "content": f"Tool error: {exc}. Try a different tool.",
+                    }
                 )
                 continue
 
@@ -331,7 +346,10 @@ class AgentExecutor:
 
         # Iteration cap reached — generate final answer with accumulated context
         messages.append(
-            {"role": "user", "content": "Please provide your final answer based on the information gathered so far."}
+            {
+                "role": "user",
+                "content": "Please provide your final answer based on the information gathered so far.",
+            }
         )
         return await self._call_llm(messages, system_prompt=system)
 
@@ -342,11 +360,15 @@ class AgentExecutor:
             context = _format_nodes(nodes)
 
         user_content = (
-            f"Context:\n{context}\n\nQuestion: {message}\n\n"
-            "Think step by step before giving your final answer.\n\n"
-            "Reasoning:\n"
-        ) if context else (
-            f"{message}\n\nThink step by step before giving your final answer.\n\nReasoning:\n"
+            (
+                f"Context:\n{context}\n\nQuestion: {message}\n\n"
+                "Think step by step before giving your final answer.\n\n"
+                "Reasoning:\n"
+            )
+            if context
+            else (
+                f"{message}\n\nThink step by step before giving your final answer.\n\nReasoning:\n"
+            )
         )
         return await self._call_llm([{"role": "user", "content": user_content}])
 

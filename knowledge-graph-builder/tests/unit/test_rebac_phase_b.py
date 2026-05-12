@@ -219,9 +219,9 @@ class TestPermissionCheckPhaseB:
 
         for call in session.run.call_args_list:
             query = call[0][0]
-            assert (
-                injection not in query
-            ), "Injection string must never appear in query text"
+            assert injection not in query, (
+                "Injection string must never appear in query text"
+            )
             assert "$user_id" in query or "$acceptable" in query or "graph_id" in query
 
     @pytest.mark.asyncio
@@ -327,7 +327,6 @@ class TestBootstrapGraphRoles:
 
 @pytest.mark.unit
 class TestRoleManagement:
-
     @pytest.mark.asyncio
     async def test_grant_role_runs_merge_query(self):
         """grant_role issues a single MERGE/SET query parameterized correctly."""
@@ -405,7 +404,6 @@ class TestRoleManagement:
 
 @pytest.mark.unit
 class TestListGraphMembers:
-
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_no_members(self):
         from app.services.rebac_service import ReBACService
@@ -436,7 +434,6 @@ class TestListGraphMembers:
 
 @pytest.mark.unit
 class TestSubGraphManagement:
-
     @pytest.mark.asyncio
     async def test_create_subgraph_returns_dict_with_required_keys(self):
         from app.services.rebac_service import ReBACService

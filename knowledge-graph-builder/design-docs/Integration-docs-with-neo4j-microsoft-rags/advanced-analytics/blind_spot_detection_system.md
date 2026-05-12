@@ -116,7 +116,7 @@ Raw Logs → Cleaning & Normalization → Pattern Recognition → Gap Candidate 
 ```
 Given this knowledge graph structure about [DOMAIN]:
 - Entities: [LIST]
-- Relationships: [LIST]  
+- Relationships: [LIST]
 - Coverage Areas: [SUMMARY]
 
 Identify potential blind spots by analyzing:

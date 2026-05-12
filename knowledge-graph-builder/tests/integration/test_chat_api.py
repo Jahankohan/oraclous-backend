@@ -111,7 +111,6 @@ def _patch_auth_and_ownership(user_id=None):
 
 
 class TestChatAPIIntegration:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_chat_returns_grounded_answer(self, async_client):

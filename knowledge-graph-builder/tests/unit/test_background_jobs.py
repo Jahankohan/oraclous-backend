@@ -325,7 +325,6 @@ class TestProcessIngestionJobStateTransitions:
             patch("app.services.background_jobs.GraphNodeService") as mock_gns_cls,
             patch("app.services.background_jobs.document_processor") as mock_doc_proc,
         ):
-
             mock_maker.return_value = mock_session
             mock_manager_cls.return_value = mock_neo4j
             mock_gns_cls.return_value = mock_graph_service
@@ -375,7 +374,6 @@ class TestProcessIngestionJobStateTransitions:
             ) as mock_manager_cls,
             patch("app.services.background_jobs.GraphNodeService") as mock_gns_cls,
         ):
-
             mock_maker.return_value = mock_session
             mock_manager_cls.return_value = mock_neo4j
             mock_gns_cls.return_value = mock_graph_service

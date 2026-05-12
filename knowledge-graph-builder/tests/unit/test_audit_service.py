@@ -1,9 +1,7 @@
 """Unit tests for audit_service.log_public_call (STORY-022 / TASK-044)."""
 
 import hashlib
-from unittest.mock import AsyncMock, MagicMock, call
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from app.services.audit_service import log_public_call
 
@@ -35,7 +33,10 @@ class TestLogPublicCall:
         await log_public_call(driver, "g1", "a1", "ab12", "question", response_text)
 
         _, params = driver.execute_query.call_args.args
-        assert params["response_hash"] == hashlib.sha256(response_text.encode()).hexdigest()
+        assert (
+            params["response_hash"]
+            == hashlib.sha256(response_text.encode()).hexdigest()
+        )
         assert response_text not in params.values()
 
     async def test_stores_key_last4_not_full_key(self):

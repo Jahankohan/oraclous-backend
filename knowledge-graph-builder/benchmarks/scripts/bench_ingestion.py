@@ -160,9 +160,14 @@ TARGET_DOCS_PER_MIN = 20
 
 def get_headers() -> dict[str, str]:
     if not ORACLOUS_API_KEY:
-        print("ERROR: ORACLOUS_API_KEY environment variable is not set.", file=sys.stderr)
+        print(
+            "ERROR: ORACLOUS_API_KEY environment variable is not set.", file=sys.stderr
+        )
         sys.exit(1)
-    return {"Authorization": f"Bearer {ORACLOUS_API_KEY}", "Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {ORACLOUS_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
 
 def fetch_wikipedia_summaries() -> list[dict]:
@@ -180,7 +185,9 @@ def fetch_wikipedia_summaries() -> list[dict]:
                     {
                         "title": data.get("title", title),
                         "content": data.get("extract", ""),
-                        "url": data.get("content_urls", {}).get("desktop", {}).get("page", ""),
+                        "url": data.get("content_urls", {})
+                        .get("desktop", {})
+                        .get("page", ""),
                         "wikipedia_title": title,
                     }
                 )
@@ -318,7 +325,9 @@ def main() -> None:
     failed_results = [r for r in per_doc_results if not r["success"]]
     elapsed_times = [r["elapsed_s"] for r in success_results]
 
-    docs_per_min = (len(success_results) / bench_elapsed) * 60 if bench_elapsed > 0 else 0
+    docs_per_min = (
+        (len(success_results) / bench_elapsed) * 60 if bench_elapsed > 0 else 0
+    )
     p50 = compute_percentile(elapsed_times, 50)
     p95 = compute_percentile(elapsed_times, 95)
     p99 = compute_percentile(elapsed_times, 99)
@@ -367,9 +376,13 @@ def main() -> None:
     print()
 
     if aggregate["target_met"]:
-        print(f"  TARGET >={TARGET_DOCS_PER_MIN} docs/min: PASS ({docs_per_min:.1f} docs/min)")
+        print(
+            f"  TARGET >={TARGET_DOCS_PER_MIN} docs/min: PASS ({docs_per_min:.1f} docs/min)"
+        )
     else:
-        print(f"  TARGET >={TARGET_DOCS_PER_MIN} docs/min: FAIL ({docs_per_min:.1f} docs/min)")
+        print(
+            f"  TARGET >={TARGET_DOCS_PER_MIN} docs/min: FAIL ({docs_per_min:.1f} docs/min)"
+        )
 
     print(f"\nResults written to: {out_path}")
 

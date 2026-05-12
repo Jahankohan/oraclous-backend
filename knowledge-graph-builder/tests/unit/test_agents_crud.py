@@ -11,9 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.schemas.agent_schemas import AgentCreate, AgentUpdate, RetrieverConfig
+from app.schemas.agent_schemas import AgentCreate, AgentUpdate
 from app.services.agent_service import AgentService
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -128,7 +127,17 @@ class TestAgentService:
 
     async def test_list_agents_returns_active_only(self):
         active = _make_agent_node(agent_id="a1", deactivated_at=None)
-        driver, result = _make_driver(records=[MagicMock(**{"__iter__": lambda s: iter(active.items()), "keys": lambda: active.keys(), **active})])
+        driver, result = _make_driver(
+            records=[
+                MagicMock(
+                    **{
+                        "__iter__": lambda s: iter(active.items()),
+                        "keys": lambda: active.keys(),
+                        **active,
+                    }
+                )
+            ]
+        )
         # Use dict-like records
         result.records = [active]
         svc = AgentService(driver)
@@ -178,8 +187,8 @@ class TestAgentEndpoints:
 
     @pytest.fixture(autouse=True)
     def _override_auth(self, async_client):
-        from app.main import app
         from app.api.dependencies import get_current_user_id
+        from app.main import app
 
         app.dependency_overrides[get_current_user_id] = lambda: _FAKE_USER_ID
         yield
@@ -194,6 +203,7 @@ class TestAgentEndpoints:
 
     def _clear_svc_override(self, key):
         from app.main import app
+
         app.dependency_overrides.pop(key, None)
 
     async def test_post_unknown_tool_returns_422(self, async_client):

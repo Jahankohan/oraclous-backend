@@ -16,9 +16,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -46,7 +45,9 @@ def test_app():
     # Register test-only routes that trigger each error condition
     @_app.get("/test/graph-not-found")
     async def _graph_not_found():
-        raise HTTPException(status_code=404, detail="Graph 'unknown-graph' does not exist")
+        raise HTTPException(
+            status_code=404, detail="Graph 'unknown-graph' does not exist"
+        )
 
     @_app.get("/test/permission-denied")
     async def _permission_denied():
@@ -323,7 +324,9 @@ class TestErrorCodeConsistency:
         ]
         for attr in attrs:
             code, _ = getattr(KGBError, attr)
-            assert code.startswith("KGB-"), f"{attr}: code '{code}' must start with KGB-"
+            assert code.startswith("KGB-"), (
+                f"{attr}: code '{code}' must start with KGB-"
+            )
 
     @pytest.mark.unit
     def test_error_codes_are_unique_no_collisions(self):

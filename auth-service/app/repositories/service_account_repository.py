@@ -3,6 +3,7 @@
 Handles create / validate / revoke for agent_service_account_keys table.
 Key generation happens here — raw key is returned ONCE at creation, never stored.
 """
+
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -102,7 +103,9 @@ class ServiceAccountRepository:
             candidates = result.scalars().all()
 
         for candidate in candidates:
-            if candidate.expires_at and candidate.expires_at < datetime.now(timezone.utc):
+            if candidate.expires_at and candidate.expires_at < datetime.now(
+                timezone.utc
+            ):
                 continue
             if _bcrypt_context.verify(api_key, candidate.key_hash):
                 return candidate.service_account_id

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Optional
 from uuid import UUID
@@ -100,8 +100,8 @@ class RelationshipProperties(BaseModel):
         out rather than raising so that ingestion is not blocked by a bad timestamp.
         """
         if isinstance(v, datetime):
-            _min = datetime(2020, 1, 1, tzinfo=timezone.utc)
-            _max = datetime.now(timezone.utc) + timedelta(hours=1)
+            _min = datetime(2020, 1, 1, tzinfo=UTC)
+            _max = datetime.now(UTC) + timedelta(hours=1)
             if v < _min or v > _max:
                 return None
         return v
@@ -147,8 +147,8 @@ class EntityNodeProperties(BaseModel):
         out rather than raising so that ingestion is not blocked by a bad timestamp.
         """
         if isinstance(v, datetime):
-            _min = datetime(2020, 1, 1, tzinfo=timezone.utc)
-            _max = datetime.now(timezone.utc) + timedelta(hours=1)
+            _min = datetime(2020, 1, 1, tzinfo=UTC)
+            _max = datetime.now(UTC) + timedelta(hours=1)
             if v < _min or v > _max:
                 return None
         return v

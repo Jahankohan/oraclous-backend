@@ -1,0 +1,1357 @@
+"""
+Assessment substrate write-path service (STORY-026, TASK-068).
+
+`AssessmentService` is the application-layer write surface for the assessment
+substrate. It backs the REST endpoints (TASK-069) and the MCP wrappers
+(SPRINT-002). Read methods land in SPRINT-002 — this file is write-only.
+
+Architectural rules honored (`oraclous-data-studio/CLAUDE.md`):
+
+1.  `graph_id` is a required parameter on every public method. Every Cypher
+    statement filters by it. Cross-tenant queries are impossible.
+2.  All Cypher is parameterized. No f-string interpolation of user input.
+3.  Every platform-managed `MERGE` adds the `:__Platform__` marker (ADR-015).
+4.  The catalog graph anchor uses `:Graph:__Rebac__` per the existing pattern
+    in `rebac_service.py` and `graph_node_service.py`.
+5.  Async driver (`neo4j_client.async_driver`) for all methods.
+6.  Idempotency: every write `MERGE`s on the natural id (run_id, finding_id,
+    etc.). Replay is safe.
+
+Tenancy notes (ADR-018 §Tenancy concession):
+
+-   `:AssessmentRun`, `:ModuleRun`, `:Finding`, `:Conflict`, `:Deliverable`,
+    `:UnresolvedQuestion`, `:Subject` live in the customer's tenant graph.
+-   `:AssessmentTemplate`, `:Module`, `:Source` live in the catalog graph
+    `__assessments_catalog__`.
+-   `(finding)-[:CITES]->(source)` crosses the namespace boundary by
+    `source_id` join in the API layer — never by Cypher MATCH across graphs.
+    This service therefore MERGEs the `:Source` in the catalog graph and
+    creates the `[:CITES]` edge as a separate statement scoped to the
+    tenant graph; the edge resolves the source by id at read time.
+
+Registry tenancy (ADR-019):
+
+-   `private` RegistryItem writes go to the owner's tenant graph.
+-   `curated` and `public` RegistryItem writes go to `__registry__`.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from neo4j import AsyncDriver
+
+from app.core.logging import get_logger
+from app.schemas.assessment_schemas import (
+    ASSESSMENTS_CATALOG_GRAPH_ID,
+    REGISTRY_CATALOG_GRAPH_ID,
+    BulkItemResult,
+    BulkResponse,
+    Conflict,
+    CreateRunRequest,
+    CreateRunResponse,
+    Deliverable,
+    FinalizeRunResponse,
+    Finding,
+    RegistryItem,
+    RunStatus,
+    Subject,
+    UnresolvedQuestion,
+    UpdateModuleRunRequest,
+)
+
+logger = get_logger(__name__)
+
+
+# =============================================================================
+# Typed errors — surfaced to the REST layer with structured HTTP status codes.
+# =============================================================================
+
+
+class RegistryOwnershipError(PermissionError):
+    """Raised when a RegistryItem write fails the ownership check (ADR-019).
+
+    Per TASK-073 Finding 1 (TASK-069): public/yanked items in `__registry__`
+    are owner-writable only. A non-owner attempting to overwrite a public item
+    triggers this error. The endpoint layer translates this to HTTP 403.
+
+    Curated items (admin-gated at the endpoint) are exempt from the ownership
+    check because platform admins legitimately update items owned by others.
+    """
+
+
+# =============================================================================
+# Citation-coverage gate thresholds — STORY-026 §Acceptance Criteria.
+# Tuned for the Eurail backfill (~600 direct findings, 23 module deliverables,
+# 5 final docs). A run that fails the gate moves to `status='failed'`.
+# =============================================================================
+
+MIN_DIRECT_FINDINGS_FOR_PASS = 1
+MIN_DELIVERABLES_FOR_PASS = 1
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _new_id(prefix: str) -> str:
+    """Generate a UUID4-based id with a short type prefix for readability."""
+    return f"{prefix}-{uuid.uuid4().hex}"
+
+
+def _to_neo_primitive(value: Any) -> Any:
+    """Coerce Python values to Neo4j-compatible primitives.
+
+    Lists, strings, numbers, bools, None, and ISO datetimes pass through.
+    Dicts get serialized to JSON so they can land as a single property value
+    (Neo4j 5 supports nested maps on properties but not on every storage
+    engine; using JSON keeps the migration target broad).
+    """
+    if isinstance(value, datetime):
+        # Strip tz to UTC ISO; Neo4j datetime() accepts the string.
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.isoformat()
+    if isinstance(value, dict):
+        import json
+
+        return json.dumps(value, separators=(",", ":"))
+    return value
+
+
+# =============================================================================
+# Service
+# =============================================================================
+
+
+class AssessmentService:
+    """Write-path service for assessment runs, findings, conflicts, deliverables.
+
+    The constructor takes an `AsyncDriver` so unit tests can pass a mock.
+    Production callers (REST endpoints in TASK-069) will inject
+    `neo4j_client.async_driver` via FastAPI Depends().
+    """
+
+    def __init__(self, driver: AsyncDriver):
+        self._driver = driver
+
+    # =========================================================================
+    # create_run
+    # =========================================================================
+
+    async def create_run(
+        self,
+        graph_id: str,
+        request: CreateRunRequest,
+        created_by: str | None = None,
+    ) -> CreateRunResponse:
+        """Bootstrap an `:AssessmentRun` + all `:ModuleRun` rows in `planned`.
+
+        Reads the template + modules from the catalog graph; writes the run
+        and `:ModuleRun`s in the tenant graph. MERGEs the `:Subject` in the
+        tenant graph (deduped by `slug`).
+
+        Idempotent on `request.run_id` when the caller supplies one — replay
+        returns the existing run with `already_existed=True`.
+        """
+        if not graph_id:
+            raise ValueError("graph_id is required")
+
+        # 1. Resolve template + modules from the catalog graph.
+        template_row = await self._fetch_template_by_slug(request.template_slug)
+        if template_row is None:
+            raise ValueError(
+                f"Assessment template not found: slug={request.template_slug!r} "
+                f"(catalog graph_id={ASSESSMENTS_CATALOG_GRAPH_ID!r})"
+            )
+        template_id: str = template_row["template_id"]
+
+        modules = await self._fetch_modules_for_template(template_id)
+        if not modules:
+            raise ValueError(
+                f"Template {request.template_slug!r} has no :Module rows in the catalog graph"
+            )
+
+        # 2. Idempotency probe — if the caller supplied a run_id and it already
+        #    exists in the tenant graph, short-circuit and return that run.
+        run_id = request.run_id or _new_id("run")
+        existing = await self._fetch_existing_run(graph_id, run_id)
+        if existing is not None:
+            module_run_ids = await self._fetch_module_run_ids(graph_id, run_id)
+            logger.info(
+                "create_run: idempotent replay graph_id=%s run_id=%s", graph_id, run_id
+            )
+            return CreateRunResponse(
+                run_id=run_id,
+                template_id=existing["template_id"],
+                subject_id=existing["subject_id"],
+                module_run_ids=module_run_ids,
+                status=existing["status"],
+                already_existed=True,
+            )
+
+        # 3. MERGE the Subject in the tenant graph (deduped by slug).
+        subject_id = await self._merge_subject_tenant(graph_id, request.subject)
+
+        # 4. CREATE the AssessmentRun.
+        started_at = _utcnow()
+        run_props = {
+            "run_id": run_id,
+            "graph_id": graph_id,
+            "template_id": template_id,
+            "subject_id": subject_id,
+            "status": "planned",
+            "started_at": started_at.isoformat(),
+            "orchestrator_last_seen": started_at.isoformat(),
+            "cli_flags": _to_neo_primitive(request.cli_flags),
+            "created_by": created_by or "",
+        }
+        # MERGE the :AssessmentRun. Per TASK-073 Finding 1 (cross-tenant MERGE
+        # collision): MERGE on `run_id` alone risks matching a foreign tenant's
+        # run because the migration declares a single-property UNIQUE constraint
+        # on `run_id`. The `WITH r WHERE r.graph_id = $graph_id` filter rejects
+        # any cross-tenant match before we touch the row. RuntimeError surfaces
+        # the collision to the caller (vs. silently creating orphan rows).
+        run_merge_result = await self._driver.execute_query(
+            """
+            MERGE (r:AssessmentRun:__Platform__ {run_id: $run_id})
+            ON CREATE SET
+                r.graph_id              = $graph_id,
+                r.template_id           = $template_id,
+                r.subject_id            = $subject_id,
+                r.status                = $status,
+                r.started_at            = datetime($started_at),
+                r.orchestrator_last_seen = datetime($orchestrator_last_seen),
+                r.cli_flags             = $cli_flags,
+                r.created_by            = $created_by
+            WITH r
+            WHERE r.graph_id = $graph_id
+            RETURN r.run_id AS id
+            """,
+            {
+                "run_id": run_props["run_id"],
+                "graph_id": run_props["graph_id"],
+                "template_id": run_props["template_id"],
+                "subject_id": run_props["subject_id"],
+                "status": run_props["status"],
+                "started_at": run_props["started_at"],
+                "orchestrator_last_seen": run_props["orchestrator_last_seen"],
+                "cli_flags": run_props["cli_flags"],
+                "created_by": run_props["created_by"],
+            },
+        )
+        if not run_merge_result.records:
+            raise RuntimeError(
+                f"AssessmentRun MERGE matched a foreign-tenant row for "
+                f"run_id={run_id!r} (graph_id={graph_id!r}). Refusing to "
+                f"attach :ModuleRun children to a cross-tenant run."
+            )
+
+        # 5. CREATE one :ModuleRun per :Module, all in status='planned'.
+        module_run_ids: list[str] = []
+        for mod in modules:
+            module_run_id = _new_id("mr")
+            module_run_ids.append(module_run_id)
+            # Per TASK-073 Finding 1: MERGE on `module_run_id` alone could match
+            # a foreign tenant's :ModuleRun. WHERE-after-MERGE filters that out
+            # before we attach the [:HAS_MODULE_RUN] edge.
+            await self._driver.execute_query(
+                """
+                MERGE (mr:ModuleRun:__Platform__ {module_run_id: $module_run_id})
+                ON CREATE SET
+                    mr.graph_id        = $graph_id,
+                    mr.run_id          = $run_id,
+                    mr.module_id       = $module_id,
+                    mr.wave            = $wave,
+                    mr.status          = 'planned',
+                    mr.evidence_count  = 0
+                WITH mr
+                WHERE mr.graph_id = $graph_id
+                MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+                MERGE (r)-[:HAS_MODULE_RUN]->(mr)
+                """,
+                {
+                    "module_run_id": module_run_id,
+                    "graph_id": graph_id,
+                    "run_id": run_id,
+                    "module_id": mod["module_id"],
+                    "wave": mod["wave"],
+                },
+            )
+
+        logger.info(
+            "create_run: graph_id=%s run_id=%s template=%s modules=%d",
+            graph_id,
+            run_id,
+            request.template_slug,
+            len(module_run_ids),
+        )
+        return CreateRunResponse(
+            run_id=run_id,
+            template_id=template_id,
+            subject_id=subject_id,
+            module_run_ids=module_run_ids,
+            status="planned",
+            already_existed=False,
+        )
+
+    async def _fetch_template_by_slug(self, slug: str) -> dict[str, Any] | None:
+        result = await self._driver.execute_query(
+            """
+            MATCH (t:AssessmentTemplate:__Platform__ {slug: $slug})
+            RETURN t.template_id AS template_id, t.slug AS slug
+            LIMIT 1
+            """,
+            {"slug": slug},
+        )
+        if not result.records:
+            return None
+        rec = result.records[0]
+        return {"template_id": rec["template_id"], "slug": rec["slug"]}
+
+    async def _fetch_modules_for_template(
+        self, template_id: str
+    ) -> list[dict[str, Any]]:
+        result = await self._driver.execute_query(
+            """
+            MATCH (t:AssessmentTemplate:__Platform__ {template_id: $template_id})
+                  -[:HAS_MODULE]->(m:Module:__Platform__)
+            RETURN m.module_id AS module_id, m.slug AS slug,
+                   m.wave AS wave, m.ordinal AS ordinal, m.kind AS kind
+            ORDER BY m.wave ASC, m.ordinal ASC
+            """,
+            {"template_id": template_id},
+        )
+        return [
+            {
+                "module_id": rec["module_id"],
+                "slug": rec["slug"],
+                "wave": rec["wave"],
+                "ordinal": rec["ordinal"],
+                "kind": rec["kind"],
+            }
+            for rec in result.records
+        ]
+
+    async def _fetch_existing_run(
+        self, graph_id: str, run_id: str
+    ) -> dict[str, Any] | None:
+        result = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            RETURN r.template_id AS template_id, r.subject_id AS subject_id, r.status AS status
+            LIMIT 1
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        if not result.records:
+            return None
+        rec = result.records[0]
+        return {
+            "template_id": rec["template_id"],
+            "subject_id": rec["subject_id"],
+            "status": rec["status"],
+        }
+
+    async def _fetch_module_run_ids(self, graph_id: str, run_id: str) -> list[str]:
+        result = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+                  -[:HAS_MODULE_RUN]->(mr:ModuleRun:__Platform__)
+            RETURN mr.module_run_id AS module_run_id
+            ORDER BY mr.wave ASC, mr.module_run_id ASC
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        return [rec["module_run_id"] for rec in result.records]
+
+    async def _merge_subject_tenant(self, graph_id: str, subject: Subject) -> str:
+        """MERGE the subject in the tenant graph, deduped by `slug`.
+
+        The subject.subject_id is treated as a *suggested* id — if a subject
+        with the same `slug` already exists in the tenant graph we reuse its
+        id, otherwise we create with the supplied id (or generate one).
+        """
+        subject_id = subject.subject_id or _new_id("subj")
+        result = await self._driver.execute_query(
+            """
+            MERGE (s:Subject:__Platform__ {graph_id: $graph_id, slug: $slug})
+            ON CREATE SET
+                s.subject_id    = $subject_id,
+                s.name          = $name,
+                s.vertical_slug = $vertical_slug,
+                s.domains       = $domains,
+                s.aliases       = $aliases
+            ON MATCH SET
+                s.name          = $name,
+                s.vertical_slug = coalesce($vertical_slug, s.vertical_slug),
+                s.domains       = $domains,
+                s.aliases       = $aliases
+            RETURN s.subject_id AS subject_id
+            """,
+            {
+                "graph_id": graph_id,
+                "slug": subject.slug,
+                "subject_id": subject_id,
+                "name": subject.name,
+                "vertical_slug": subject.vertical_slug,
+                "domains": subject.domains,
+                "aliases": subject.aliases,
+            },
+        )
+        return result.records[0]["subject_id"]
+
+    # =========================================================================
+    # update_module_run
+    # =========================================================================
+
+    async def update_module_run(
+        self,
+        graph_id: str,
+        run_id: str,
+        module_run_id: str,
+        update: UpdateModuleRunRequest,
+    ) -> bool:
+        """State-transition + heartbeat update for a `:ModuleRun`.
+
+        Allowed transitions (NOT enforced server-side in SPRINT-001 to keep
+        the surface flexible during orchestrator iteration; orchestrator-side
+        contract per STORY-026 §Coordination Model):
+
+            planned   → running, failed, cancelled
+            running   → finished, failed
+            finished  → (terminal)
+            failed    → (terminal; orchestrator may insert a NEW :ModuleRun for retry)
+            cancelled → (terminal)
+
+        Returns True iff the row existed and was updated.
+        """
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        if not run_id or not module_run_id:
+            raise ValueError("run_id and module_run_id are required")
+
+        set_clauses: list[str] = []
+        params: dict[str, Any] = {
+            "graph_id": graph_id,
+            "run_id": run_id,
+            "module_run_id": module_run_id,
+        }
+
+        if update.status is not None:
+            set_clauses.append("mr.status = $status")
+            params["status"] = update.status
+        if update.started_at is not None:
+            set_clauses.append("mr.started_at = datetime($started_at)")
+            params["started_at"] = update.started_at.isoformat()
+        if update.finished_at is not None:
+            set_clauses.append("mr.finished_at = datetime($finished_at)")
+            params["finished_at"] = update.finished_at.isoformat()
+        if update.last_heartbeat_at is not None:
+            set_clauses.append("mr.last_heartbeat_at = datetime($last_heartbeat_at)")
+            params["last_heartbeat_at"] = update.last_heartbeat_at.isoformat()
+        if update.evidence_count is not None:
+            set_clauses.append("mr.evidence_count = $evidence_count")
+            params["evidence_count"] = update.evidence_count
+        if update.deliverable_path is not None:
+            set_clauses.append("mr.deliverable_path = $deliverable_path")
+            params["deliverable_path"] = update.deliverable_path
+        if update.failure_reason is not None:
+            set_clauses.append("mr.failure_reason = $failure_reason")
+            params["failure_reason"] = update.failure_reason
+
+        if not set_clauses:
+            # No-op update — still verify the row exists so callers get a clear
+            # signal if they're operating on a deleted/missing module_run.
+            result = await self._driver.execute_query(
+                """
+                MATCH (mr:ModuleRun:__Platform__ {
+                    graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
+                })
+                RETURN mr.module_run_id AS id
+                """,
+                params,
+            )
+            return bool(result.records)
+
+        cypher = f"""
+            MATCH (mr:ModuleRun:__Platform__ {{
+                graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
+            }})
+            SET {", ".join(set_clauses)}
+            RETURN mr.module_run_id AS id
+            """
+        result = await self._driver.execute_query(cypher, params)
+        return bool(result.records)
+
+    async def heartbeat_run(self, graph_id: str, run_id: str) -> bool:
+        """Update `:AssessmentRun.orchestrator_last_seen` to now.
+
+        Resumability per STORY-026 §Acceptance Criteria. The orchestrator
+        calls this every 60s; the Celery reset agent uses it to detect
+        orphaned runs.
+        """
+        if not graph_id or not run_id:
+            raise ValueError("graph_id and run_id are required")
+        now = _utcnow().isoformat()
+        result = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            SET r.orchestrator_last_seen = datetime($now)
+            RETURN r.run_id AS id
+            """,
+            {"graph_id": graph_id, "run_id": run_id, "now": now},
+        )
+        return bool(result.records)
+
+    # =========================================================================
+    # record_finding_bulk
+    # =========================================================================
+
+    async def record_finding_bulk(
+        self,
+        graph_id: str,
+        run_id: str,
+        module_run_id: str,
+        findings: list[Finding],
+    ) -> BulkResponse:
+        """Write a batch of `:Finding` rows under one `:ModuleRun`.
+
+        Per-record success/failure semantics (STORY-026 Open Question #4
+        resolution): a malformed finding among 50 valid ones does not roll
+        back the batch. The response carries one `BulkItemResult` per input
+        in the same order so the caller can correlate by index or by id.
+
+        Each finding is MERGEd on `finding_id` for idempotent replay. The
+        `:Source` (if `source_id` is supplied) is MERGEd in the catalog
+        graph and the `[:CITES]` edge created in the tenant graph by
+        `source_id` reference (no cross-graph MATCH; see ADR-018 §Tenancy).
+        """
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        if not run_id or not module_run_id:
+            raise ValueError("run_id and module_run_id are required")
+
+        # Verify parent ModuleRun exists. Per-finding writes that would
+        # silently create orphan rows are a footgun.
+        parent_check = await self._driver.execute_query(
+            """
+            MATCH (mr:ModuleRun:__Platform__ {
+                graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
+            })
+            RETURN mr.module_run_id AS id
+            LIMIT 1
+            """,
+            {
+                "graph_id": graph_id,
+                "run_id": run_id,
+                "module_run_id": module_run_id,
+            },
+        )
+        if not parent_check.records:
+            raise ValueError(
+                f"ModuleRun not found: graph_id={graph_id!r} run_id={run_id!r} "
+                f"module_run_id={module_run_id!r}"
+            )
+
+        results: list[BulkItemResult] = []
+        succeeded = 0
+        failed = 0
+
+        for finding in findings:
+            try:
+                already_existed = await self._record_one_finding(
+                    graph_id, run_id, module_run_id, finding
+                )
+                results.append(
+                    BulkItemResult(
+                        id=finding.finding_id,
+                        success=True,
+                        already_existed=already_existed,
+                    )
+                )
+                succeeded += 1
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning(
+                    "record_finding_bulk: write failed graph_id=%s run_id=%s "
+                    "finding_id=%s err=%s",
+                    graph_id,
+                    run_id,
+                    finding.finding_id,
+                    exc,
+                )
+                results.append(
+                    BulkItemResult(
+                        id=finding.finding_id,
+                        success=False,
+                        error=str(exc),
+                    )
+                )
+                failed += 1
+
+        # Refresh the parent's evidence_count to match what's persisted.
+        await self._refresh_evidence_count(graph_id, run_id, module_run_id)
+
+        return BulkResponse(
+            total=len(findings),
+            succeeded=succeeded,
+            failed=failed,
+            results=results,
+        )
+
+    async def _record_one_finding(
+        self,
+        graph_id: str,
+        run_id: str,
+        module_run_id: str,
+        finding: Finding,
+    ) -> bool:
+        """Persist a single :Finding. Returns True if the row already existed."""
+        # 1. MERGE the Finding in the tenant graph.
+        # Per TASK-073 Finding 1: WHERE-after-MERGE filters out foreign-tenant
+        # rows so a cross-tenant `finding_id` collision can never produce a
+        # [:PRODUCED] edge from our :ModuleRun to a foreign-tenant :Finding,
+        # nor overwrite that foreign-tenant row's properties.
+        result = await self._driver.execute_query(
+            """
+            MERGE (f:Finding:__Platform__ {finding_id: $finding_id})
+            ON CREATE SET
+                f.graph_id              = $graph_id,
+                f.run_id                = $run_id,
+                f.module_run_id         = $module_run_id,
+                f.claim                 = $claim,
+                f.raw                   = $raw,
+                f.label                 = $label,
+                f.confidence            = $confidence,
+                f.dimensions            = $dimensions,
+                f.ai_adoption_relevance = $ai_adoption_relevance,
+                f.notes                 = $notes,
+                f.superseded_by         = $superseded_by,
+                f._created              = true
+            ON MATCH SET
+                f._created              = false
+            WITH f
+            WHERE f.graph_id = $graph_id
+            MATCH (mr:ModuleRun:__Platform__ {
+                graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
+            })
+            MERGE (mr)-[:PRODUCED]->(f)
+            RETURN f._created AS created
+            """,
+            {
+                "finding_id": finding.finding_id,
+                "graph_id": graph_id,
+                "run_id": run_id,
+                "module_run_id": module_run_id,
+                "claim": finding.claim,
+                "raw": finding.raw,
+                "label": finding.label,
+                "confidence": finding.confidence,
+                "dimensions": finding.dimensions,
+                "ai_adoption_relevance": finding.ai_adoption_relevance,
+                "notes": finding.notes,
+                "superseded_by": finding.superseded_by,
+            },
+        )
+        if not result.records:
+            # Per TASK-073 Finding 1: an empty result here also indicates that
+            # MERGE matched a foreign-tenant :Finding (filtered out by the
+            # post-MERGE WHERE clause). Either way the write is rejected.
+            raise RuntimeError(
+                f"Finding write returned no records for finding_id={finding.finding_id!r} "
+                f"(parent module_run missing OR cross-tenant finding_id collision)"
+            )
+        already_existed = not bool(result.records[0]["created"])
+
+        # 2. If the finding cites a source, MERGE the :Source in the catalog
+        # graph and create the [:CITES] edge in the tenant graph.
+        if finding.source_id:
+            await self._merge_source_catalog(finding.source_id)
+            await self._driver.execute_query(
+                """
+                MATCH (f:Finding:__Platform__ {finding_id: $finding_id})
+                // :Source lives in the catalog graph; we lookup by id only
+                // (no graph_id filter on the source side — the catalog
+                // graph_id is implicit by the source_id namespace).
+                MATCH (s:Source:__Platform__ {source_id: $source_id})
+                MERGE (f)-[c:CITES]->(s)
+                ON CREATE SET c.quote = $quote, c.locator = $locator
+                ON MATCH SET
+                    c.quote   = coalesce($quote, c.quote),
+                    c.locator = coalesce($locator, c.locator)
+                """,
+                {
+                    "finding_id": finding.finding_id,
+                    "source_id": finding.source_id,
+                    "quote": finding.source_quote,
+                    "locator": finding.source_locator,
+                },
+            )
+
+        return already_existed
+
+    async def _merge_source_catalog(self, source_id: str, **props: Any) -> None:
+        """MERGE a :Source in the catalog graph (`__assessments_catalog__`)."""
+        await self._driver.execute_query(
+            """
+            MERGE (s:Source:__Platform__ {source_id: $source_id})
+            ON CREATE SET
+                s.graph_id        = $catalog_graph_id,
+                s.type            = $type,
+                s.url_normalized  = $url_normalized,
+                s.name            = $name,
+                s.publication_date = $publication_date,
+                s.fetch_date      = $fetch_date,
+                s.language        = $language
+            """,
+            {
+                "source_id": source_id,
+                "catalog_graph_id": ASSESSMENTS_CATALOG_GRAPH_ID,
+                "type": props.get("type"),
+                "url_normalized": props.get("url_normalized"),
+                "name": props.get("name"),
+                "publication_date": props.get("publication_date"),
+                "fetch_date": props.get("fetch_date"),
+                "language": props.get("language"),
+            },
+        )
+
+    async def _refresh_evidence_count(
+        self, graph_id: str, run_id: str, module_run_id: str
+    ) -> None:
+        await self._driver.execute_query(
+            """
+            MATCH (mr:ModuleRun:__Platform__ {
+                graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
+            })-[:PRODUCED]->(f:Finding:__Platform__)
+            WITH mr, count(f) AS cnt
+            SET mr.evidence_count = cnt
+            """,
+            {
+                "graph_id": graph_id,
+                "run_id": run_id,
+                "module_run_id": module_run_id,
+            },
+        )
+
+    # =========================================================================
+    # record_conflict
+    # =========================================================================
+
+    async def record_conflict(
+        self, graph_id: str, run_id: str, conflict: Conflict
+    ) -> bool:
+        """MERGE a :Conflict + [:INVOLVES] edges to the participating findings.
+
+        Returns True iff the conflict node was newly created.
+        """
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        if conflict.run_id != run_id:
+            raise ValueError(
+                f"conflict.run_id={conflict.run_id!r} does not match run_id={run_id!r}"
+            )
+
+        # Per TASK-073 Finding 1: pre-MERGE existence probe + WHERE-after-MERGE.
+        # MERGE on `conflict_id` alone can match a foreign-tenant :Conflict and
+        # the ON MATCH SET clause would overwrite that tenant's topic/summary/
+        # status. The WHERE-after-MERGE guard prevents the ON MATCH SET on
+        # foreign rows because the MATCH/UPDATE pipeline is filtered before
+        # the SET runs. We split into a probe + scoped writes so we can keep
+        # the existing return contract.
+        existing_probe = await self._driver.execute_query(
+            """
+            MATCH (c:Conflict:__Platform__ {conflict_id: $conflict_id})
+            RETURN c.graph_id AS graph_id
+            LIMIT 1
+            """,
+            {"conflict_id": conflict.conflict_id},
+        )
+        if existing_probe.records:
+            other_gid = existing_probe.records[0]["graph_id"]
+            if other_gid != graph_id:
+                raise RuntimeError(
+                    f"Conflict {conflict.conflict_id!r} already exists in a "
+                    f"different tenant (graph_id={other_gid!r}); refusing to "
+                    f"merge cross-tenant"
+                )
+
+        result = await self._driver.execute_query(
+            """
+            MERGE (c:Conflict:__Platform__ {conflict_id: $conflict_id})
+            ON CREATE SET
+                c.graph_id        = $graph_id,
+                c.run_id          = $run_id,
+                c.topic           = $topic,
+                c.summary         = $summary,
+                c.status          = $status,
+                c.resolution      = $resolution,
+                c.synthesis_note  = $synthesis_note,
+                c._created        = true
+            ON MATCH SET
+                c.topic           = CASE WHEN c.graph_id = $graph_id THEN $topic ELSE c.topic END,
+                c.summary         = CASE WHEN c.graph_id = $graph_id THEN $summary ELSE c.summary END,
+                c.status          = CASE WHEN c.graph_id = $graph_id THEN $status ELSE c.status END,
+                c.resolution      = CASE WHEN c.graph_id = $graph_id THEN coalesce($resolution, c.resolution) ELSE c.resolution END,
+                c.synthesis_note  = CASE WHEN c.graph_id = $graph_id THEN coalesce($synthesis_note, c.synthesis_note) ELSE c.synthesis_note END,
+                c._created        = false
+            WITH c
+            WHERE c.graph_id = $graph_id
+            RETURN c._created AS created
+            """,
+            {
+                "conflict_id": conflict.conflict_id,
+                "graph_id": graph_id,
+                "run_id": run_id,
+                "topic": conflict.topic,
+                "summary": conflict.summary,
+                "status": conflict.status,
+                "resolution": conflict.resolution,
+                "synthesis_note": conflict.synthesis_note,
+            },
+        )
+        if not result.records:
+            # Cross-tenant collision — should have been caught by the probe
+            # above, but defense-in-depth: if a concurrent write inserted the
+            # row between probe and MERGE, the WHERE filters it out here too.
+            raise RuntimeError(
+                f"Conflict {conflict.conflict_id!r} MERGE rejected due to "
+                f"cross-tenant id collision (graph_id={graph_id!r})"
+            )
+        created = bool(result.records[0]["created"])
+
+        # Wire [:INVOLVES] edges to each participating finding (within the
+        # same tenant graph; conflicts do not span tenants).
+        for finding_id in conflict.involved_finding_ids:
+            await self._driver.execute_query(
+                """
+                MATCH (c:Conflict:__Platform__ {conflict_id: $conflict_id})
+                MATCH (f:Finding:__Platform__ {
+                    graph_id: $graph_id, finding_id: $finding_id
+                })
+                MERGE (c)-[:INVOLVES]->(f)
+                """,
+                {
+                    "conflict_id": conflict.conflict_id,
+                    "graph_id": graph_id,
+                    "finding_id": finding_id,
+                },
+            )
+
+        return created
+
+    # =========================================================================
+    # record_unresolved_question
+    # =========================================================================
+
+    async def record_unresolved_question(
+        self,
+        graph_id: str,
+        run_id: str,
+        module_run_id: str,
+        question: UnresolvedQuestion,
+    ) -> bool:
+        """MERGE an :UnresolvedQuestion and [:RAISED] edge from the ModuleRun.
+
+        Returns True iff newly created.
+        """
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        if question.run_id != run_id or question.module_run_id != module_run_id:
+            raise ValueError(
+                "question.run_id / question.module_run_id must match the args"
+            )
+
+        # Per TASK-073 Finding 1: pre-MERGE probe + race-safe CASE-guarded
+        # ON MATCH SET. MERGE on `question_id` alone could match a foreign-
+        # tenant :UnresolvedQuestion and overwrite its caller-controlled text/
+        # status. The probe rejects the obvious case; the CASE guards inside
+        # ON MATCH SET close the narrow race window between probe and MERGE.
+        existing_probe = await self._driver.execute_query(
+            """
+            MATCH (q:UnresolvedQuestion:__Platform__ {question_id: $question_id})
+            RETURN q.graph_id AS graph_id
+            LIMIT 1
+            """,
+            {"question_id": question.question_id},
+        )
+        if existing_probe.records:
+            other_gid = existing_probe.records[0]["graph_id"]
+            if other_gid != graph_id:
+                raise RuntimeError(
+                    f"UnresolvedQuestion {question.question_id!r} already exists in a "
+                    f"different tenant (graph_id={other_gid!r}); refusing to "
+                    f"merge cross-tenant"
+                )
+
+        result = await self._driver.execute_query(
+            """
+            MERGE (q:UnresolvedQuestion:__Platform__ {question_id: $question_id})
+            ON CREATE SET
+                q.graph_id          = $graph_id,
+                q.run_id            = $run_id,
+                q.module_run_id     = $module_run_id,
+                q.text              = $text,
+                q.suggested_module  = $suggested_module,
+                q.status            = $status,
+                q._created          = true
+            ON MATCH SET
+                q.text              = CASE WHEN q.graph_id = $graph_id THEN $text ELSE q.text END,
+                q.suggested_module  = CASE WHEN q.graph_id = $graph_id THEN coalesce($suggested_module, q.suggested_module) ELSE q.suggested_module END,
+                q.status            = CASE WHEN q.graph_id = $graph_id THEN $status ELSE q.status END,
+                q._created          = false
+            WITH q
+            WHERE q.graph_id = $graph_id
+            MATCH (mr:ModuleRun:__Platform__ {
+                graph_id: $graph_id, run_id: $run_id, module_run_id: $module_run_id
+            })
+            MERGE (mr)-[:RAISED]->(q)
+            RETURN q._created AS created
+            """,
+            {
+                "question_id": question.question_id,
+                "graph_id": graph_id,
+                "run_id": run_id,
+                "module_run_id": module_run_id,
+                "text": question.text,
+                "suggested_module": question.suggested_module,
+                "status": question.status,
+            },
+        )
+        return bool(result.records and result.records[0]["created"])
+
+    # =========================================================================
+    # persist_deliverable / persist_final_docs
+    # =========================================================================
+
+    async def persist_deliverable(
+        self,
+        graph_id: str,
+        run_id: str,
+        deliverable: Deliverable,
+    ) -> bool:
+        """MERGE a :Deliverable and its edges to the run (+ module_run if set).
+
+        SPRINT-001 stores `content_uri` as an opaque string and `content_inline`
+        as a property for small payloads. SPRINT-002 will introduce the Postgres
+        `:Blob` CAS keyed by `sha256`.
+
+        Returns True iff newly created.
+        """
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        if deliverable.run_id != run_id:
+            raise ValueError(
+                f"deliverable.run_id={deliverable.run_id!r} != run_id={run_id!r}"
+            )
+
+        # Per TASK-073 Finding 1: pre-MERGE probe + race-safe CASE-guarded
+        # ON MATCH SET. MERGE on `deliverable_id` alone could match a foreign-
+        # tenant :Deliverable and overwrite its kind/filename/content fields.
+        existing_probe = await self._driver.execute_query(
+            """
+            MATCH (d:Deliverable:__Platform__ {deliverable_id: $deliverable_id})
+            RETURN d.graph_id AS graph_id
+            LIMIT 1
+            """,
+            {"deliverable_id": deliverable.deliverable_id},
+        )
+        if existing_probe.records:
+            other_gid = existing_probe.records[0]["graph_id"]
+            if other_gid != graph_id:
+                raise RuntimeError(
+                    f"Deliverable {deliverable.deliverable_id!r} already exists in a "
+                    f"different tenant (graph_id={other_gid!r}); refusing to "
+                    f"merge cross-tenant"
+                )
+
+        result = await self._driver.execute_query(
+            """
+            MERGE (d:Deliverable:__Platform__ {deliverable_id: $deliverable_id})
+            ON CREATE SET
+                d.graph_id        = $graph_id,
+                d.run_id          = $run_id,
+                d.module_run_id   = $module_run_id,
+                d.kind            = $kind,
+                d.filename        = $filename,
+                d.ordinal         = $ordinal,
+                d.content_uri     = $content_uri,
+                d.content_inline  = $content_inline,
+                d.sha256          = $sha256,
+                d.word_count      = $word_count,
+                d._created        = true
+            ON MATCH SET
+                d.kind            = CASE WHEN d.graph_id = $graph_id THEN $kind ELSE d.kind END,
+                d.filename        = CASE WHEN d.graph_id = $graph_id THEN $filename ELSE d.filename END,
+                d.ordinal         = CASE WHEN d.graph_id = $graph_id THEN $ordinal ELSE d.ordinal END,
+                d.content_uri     = CASE WHEN d.graph_id = $graph_id THEN coalesce($content_uri, d.content_uri) ELSE d.content_uri END,
+                d.content_inline  = CASE WHEN d.graph_id = $graph_id THEN coalesce($content_inline, d.content_inline) ELSE d.content_inline END,
+                d.sha256          = CASE WHEN d.graph_id = $graph_id THEN coalesce($sha256, d.sha256) ELSE d.sha256 END,
+                d.word_count      = CASE WHEN d.graph_id = $graph_id THEN coalesce($word_count, d.word_count) ELSE d.word_count END,
+                d._created        = false
+            WITH d
+            WHERE d.graph_id = $graph_id
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            MERGE (r)-[:HAS_DELIVERABLE]->(d)
+            RETURN d._created AS created
+            """,
+            {
+                "deliverable_id": deliverable.deliverable_id,
+                "graph_id": graph_id,
+                "run_id": run_id,
+                "module_run_id": deliverable.module_run_id,
+                "kind": deliverable.kind,
+                "filename": deliverable.filename,
+                "ordinal": deliverable.ordinal,
+                "content_uri": deliverable.content_uri,
+                "content_inline": deliverable.content_inline,
+                "sha256": deliverable.sha256,
+                "word_count": deliverable.word_count,
+            },
+        )
+        created = bool(result.records and result.records[0]["created"])
+
+        # Wire the optional [:PRODUCED_BY] edge from deliverable to module_run.
+        if deliverable.module_run_id:
+            await self._driver.execute_query(
+                """
+                MATCH (d:Deliverable:__Platform__ {deliverable_id: $deliverable_id})
+                MATCH (mr:ModuleRun:__Platform__ {
+                    graph_id: $graph_id,
+                    run_id: $run_id,
+                    module_run_id: $module_run_id
+                })
+                MERGE (mr)-[:PRODUCED_DELIVERABLE]->(d)
+                """,
+                {
+                    "deliverable_id": deliverable.deliverable_id,
+                    "graph_id": graph_id,
+                    "run_id": run_id,
+                    "module_run_id": deliverable.module_run_id,
+                },
+            )
+
+        return created
+
+    async def persist_final_docs(
+        self,
+        graph_id: str,
+        run_id: str,
+        deliverables: list[Deliverable],
+    ) -> BulkResponse:
+        """Bulk-persist a final 5-doc set (intro + 4 sections, typically).
+
+        Same per-record success/failure shape as `record_finding_bulk`.
+        """
+        if not graph_id:
+            raise ValueError("graph_id is required")
+        results: list[BulkItemResult] = []
+        succeeded = 0
+        failed = 0
+        for d in deliverables:
+            try:
+                created = await self.persist_deliverable(graph_id, run_id, d)
+                results.append(
+                    BulkItemResult(
+                        id=d.deliverable_id,
+                        success=True,
+                        already_existed=not created,
+                    )
+                )
+                succeeded += 1
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning(
+                    "persist_final_docs: write failed run_id=%s deliverable_id=%s err=%s",
+                    run_id,
+                    d.deliverable_id,
+                    exc,
+                )
+                results.append(
+                    BulkItemResult(id=d.deliverable_id, success=False, error=str(exc))
+                )
+                failed += 1
+        return BulkResponse(
+            total=len(deliverables),
+            succeeded=succeeded,
+            failed=failed,
+            results=results,
+        )
+
+    # =========================================================================
+    # finalize_run
+    # =========================================================================
+
+    async def finalize_run(self, graph_id: str, run_id: str) -> FinalizeRunResponse:
+        """Server-side citation-coverage gate (STORY-026 §Critical Cypher).
+
+        Counts the persisted artifacts and decides whether the run passes:
+
+        - At least `MIN_DIRECT_FINDINGS_FOR_PASS` :Finding{label:'DIRECT'} rows
+          attached to non-failed :ModuleRuns
+        - At least `MIN_DELIVERABLES_FOR_PASS` :Deliverable rows
+
+        Sets `:AssessmentRun.status` to `finished` on pass, `failed` on fail,
+        and writes `finished_at` in both cases.
+        """
+        if not graph_id or not run_id:
+            raise ValueError("graph_id and run_id are required")
+
+        # 1. Counts. Per STORY-026 acceptance criteria, findings under FAILED
+        # module_runs are excluded from the gate (but kept for audit).
+        counts_result = await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            OPTIONAL MATCH (r)-[:HAS_MODULE_RUN]->(mr:ModuleRun:__Platform__)
+                           -[:PRODUCED]->(f:Finding:__Platform__)
+                           WHERE mr.status <> 'failed'
+            WITH r,
+                 sum(CASE WHEN f.label = 'DIRECT' THEN 1 ELSE 0 END) AS direct_count,
+                 sum(CASE WHEN f.label = 'INFERRED' THEN 1 ELSE 0 END) AS inferred_count
+            OPTIONAL MATCH (r)-[:HAS_DELIVERABLE]->(d:Deliverable:__Platform__)
+            WITH r, direct_count, inferred_count, count(d) AS deliverable_count
+            OPTIONAL MATCH (c:Conflict:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+                           WHERE c.status = 'open'
+            WITH r, direct_count, inferred_count, deliverable_count,
+                 count(c) AS unresolved_conflict_count
+            OPTIONAL MATCH (q:UnresolvedQuestion:__Platform__ {
+                              graph_id: $graph_id, run_id: $run_id})
+                           WHERE q.status = 'open'
+            RETURN
+                direct_count            AS direct_count,
+                inferred_count          AS inferred_count,
+                deliverable_count       AS deliverable_count,
+                unresolved_conflict_count AS unresolved_conflict_count,
+                count(q)                AS open_question_count
+            """,
+            {"graph_id": graph_id, "run_id": run_id},
+        )
+        if not counts_result.records:
+            raise ValueError(
+                f"AssessmentRun not found: graph_id={graph_id!r} run_id={run_id!r}"
+            )
+        rec = counts_result.records[0]
+        direct = int(rec["direct_count"] or 0)
+        inferred = int(rec["inferred_count"] or 0)
+        deliverable = int(rec["deliverable_count"] or 0)
+        unresolved_conflicts = int(rec["unresolved_conflict_count"] or 0)
+        open_questions = int(rec["open_question_count"] or 0)
+
+        # 2. Gate decision.
+        failure_reasons: list[str] = []
+        if direct < MIN_DIRECT_FINDINGS_FOR_PASS:
+            failure_reasons.append(
+                f"insufficient_direct_findings (have {direct}, "
+                f"need {MIN_DIRECT_FINDINGS_FOR_PASS})"
+            )
+        if deliverable < MIN_DELIVERABLES_FOR_PASS:
+            failure_reasons.append(
+                f"insufficient_deliverables (have {deliverable}, "
+                f"need {MIN_DELIVERABLES_FOR_PASS})"
+            )
+        passed = not failure_reasons
+        final_status: RunStatus = "finished" if passed else "failed"
+        finished_at = _utcnow()
+
+        # 3. Persist final state on the run.
+        await self._driver.execute_query(
+            """
+            MATCH (r:AssessmentRun:__Platform__ {graph_id: $graph_id, run_id: $run_id})
+            SET r.status         = $status,
+                r.finished_at    = datetime($finished_at),
+                r.failure_reason = $failure_reason
+            """,
+            {
+                "graph_id": graph_id,
+                "run_id": run_id,
+                "status": final_status,
+                "finished_at": finished_at.isoformat(),
+                "failure_reason": "; ".join(failure_reasons)
+                if failure_reasons
+                else None,
+            },
+        )
+
+        logger.info(
+            "finalize_run: graph_id=%s run_id=%s passed=%s direct=%d inferred=%d "
+            "deliverable=%d unresolved_conflicts=%d open_questions=%d",
+            graph_id,
+            run_id,
+            passed,
+            direct,
+            inferred,
+            deliverable,
+            unresolved_conflicts,
+            open_questions,
+        )
+
+        return FinalizeRunResponse(
+            run_id=run_id,
+            passed=passed,
+            status=final_status,
+            finished_at=finished_at,
+            direct_finding_count=direct,
+            inferred_finding_count=inferred,
+            deliverable_count=deliverable,
+            unresolved_conflict_count=unresolved_conflicts,
+            open_question_count=open_questions,
+            failure_reasons=failure_reasons,
+        )
+
+    # =========================================================================
+    # Registry (ADR-019) — write-side only; reads land in SPRINT-002.
+    # =========================================================================
+
+    @staticmethod
+    def _registry_target_graph_id(
+        item: RegistryItem, owner_tenant_graph_id: str | None
+    ) -> str:
+        """Decide which graph the RegistryItem write lands in (ADR-019).
+
+        - private  → owner's tenant graph_id (caller must supply `owner_tenant_graph_id`)
+        - public   → __registry__
+        - curated  → __registry__
+        - yanked   → wherever the item already lives (treated like public for new writes)
+        """
+        if item.visibility == "private":
+            if not owner_tenant_graph_id:
+                raise ValueError(
+                    "owner_tenant_graph_id is required for private RegistryItem writes"
+                )
+            return owner_tenant_graph_id
+        return REGISTRY_CATALOG_GRAPH_ID
+
+    async def persist_registry_item(
+        self,
+        item: RegistryItem,
+        owner_tenant_graph_id: str | None = None,
+    ) -> bool:
+        """Write a RegistryItem to its visibility-appropriate graph (ADR-019).
+
+        Returns True iff newly created.
+
+        Per TASK-073 Finding 1 (TASK-069): public/yanked items are owner-only
+        on UPDATE — a non-owner attempting to overwrite an existing item
+        raises :class:`RegistryOwnershipError`. Curated writes (admin-gated at
+        the endpoint) are exempt, since platform admins legitimately update
+        items owned by others. Per TASK-073 Finding 1 (TASK-068): the MERGE
+        is scoped by `(graph_id, item_id)` semantics — a cross-tenant item_id
+        collision raises a clear error rather than silently overwriting.
+        """
+        target_graph_id = self._registry_target_graph_id(item, owner_tenant_graph_id)
+        # The item's `graph_id` field must match the visibility-resolved target.
+        if item.graph_id != target_graph_id:
+            raise ValueError(
+                f"RegistryItem.graph_id={item.graph_id!r} does not match "
+                f"visibility-resolved target={target_graph_id!r} "
+                f"(visibility={item.visibility!r})"
+            )
+
+        # Pre-MERGE existence + ownership + tenancy probe.
+        # Per TASK-073 Finding 1 (TASK-069): the endpoint's `verify_graph_access`
+        # gates "can write to the catalog" but not "can write *this* item".
+        # ADR-019 mandates owner-only writes for `public` and `yanked`. A
+        # non-owner attempting to update an existing item is rejected with
+        # `RegistryOwnershipError`, which the endpoint maps to HTTP 403.
+        existing_probe = await self._driver.execute_query(
+            """
+            MATCH (ri:RegistryItem:__Platform__ {item_id: $item_id})
+            RETURN ri.graph_id      AS graph_id,
+                   ri.owner_user_id AS owner_user_id,
+                   ri.visibility    AS visibility
+            LIMIT 1
+            """,
+            {"item_id": item.item_id},
+        )
+        if existing_probe.records:
+            rec = existing_probe.records[0]
+            existing_graph_id = rec["graph_id"]
+            existing_owner = rec["owner_user_id"]
+            existing_visibility = rec["visibility"]
+
+            # Tenant-isolation guard (TASK-073 Finding 1, TASK-068): the
+            # existing row must live in the same graph we're writing to.
+            # Otherwise this is a cross-tenant id collision attempt.
+            if existing_graph_id != target_graph_id:
+                raise RuntimeError(
+                    f"RegistryItem {item.item_id!r} already exists in a "
+                    f"different graph (existing graph_id={existing_graph_id!r}, "
+                    f"target={target_graph_id!r}); refusing to merge cross-tenant"
+                )
+
+            # Ownership guard (TASK-073 Finding 1, TASK-069): public/yanked
+            # writes are owner-only. Curated writes are admin-gated at the
+            # endpoint and may legitimately update non-owned items.
+            if item.visibility in ("public", "yanked") or existing_visibility in (
+                "public",
+                "yanked",
+            ):
+                # Only the owner of the existing item may update it.
+                if existing_owner and existing_owner != item.owner_user_id:
+                    raise RegistryOwnershipError(
+                        f"RegistryItem {item.item_id!r} is owned by another "
+                        f"user (existing owner_user_id={existing_owner!r}, "
+                        f"caller={item.owner_user_id!r}); only the owner may "
+                        f"update a public/yanked item (curated writes require "
+                        f"platform admin)"
+                    )
+
+        result = await self._driver.execute_query(
+            """
+            MERGE (ri:RegistryItem:__Platform__ {item_id: $item_id})
+            ON CREATE SET
+                ri.graph_id      = $graph_id,
+                ri.kind          = $kind,
+                ri.slug          = $slug,
+                ri.version       = $version,
+                ri.visibility    = $visibility,
+                ri.owner_user_id = $owner_user_id,
+                ri.name          = $name,
+                ri.description   = $description,
+                ri.content_uri   = $content_uri,
+                ri.sha256        = $sha256,
+                ri.created_at    = datetime($created_at),
+                ri.yanked_at     = $yanked_at,
+                ri._created      = true
+            ON MATCH SET
+                ri.name          = CASE WHEN ri.graph_id = $graph_id THEN $name ELSE ri.name END,
+                ri.description   = CASE WHEN ri.graph_id = $graph_id THEN coalesce($description, ri.description) ELSE ri.description END,
+                ri.content_uri   = CASE WHEN ri.graph_id = $graph_id THEN coalesce($content_uri, ri.content_uri) ELSE ri.content_uri END,
+                ri.sha256        = CASE WHEN ri.graph_id = $graph_id THEN coalesce($sha256, ri.sha256) ELSE ri.sha256 END,
+                ri.visibility    = CASE WHEN ri.graph_id = $graph_id THEN $visibility ELSE ri.visibility END,
+                ri.yanked_at     = CASE WHEN ri.graph_id = $graph_id THEN $yanked_at ELSE ri.yanked_at END,
+                ri._created      = false
+            WITH ri
+            WHERE ri.graph_id = $graph_id
+            RETURN ri._created AS created
+            """,
+            {
+                "item_id": item.item_id,
+                "graph_id": target_graph_id,
+                "kind": item.kind,
+                "slug": item.slug,
+                "version": item.version,
+                "visibility": item.visibility,
+                "owner_user_id": item.owner_user_id,
+                "name": item.name,
+                "description": item.description,
+                "content_uri": item.content_uri,
+                "sha256": item.sha256,
+                "created_at": (item.created_at or _utcnow()).isoformat(),
+                "yanked_at": item.yanked_at.isoformat() if item.yanked_at else None,
+            },
+        )
+        if not result.records:
+            # The probe should have caught the cross-tenant case, but a
+            # concurrent write could still race us here.
+            raise RuntimeError(
+                f"RegistryItem {item.item_id!r} MERGE rejected due to "
+                f"cross-tenant collision (target graph_id={target_graph_id!r})"
+            )
+        return bool(result.records[0]["created"])

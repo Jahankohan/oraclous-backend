@@ -24,7 +24,7 @@ Knowledge validation through fact-checking reduces hallucinations by checking mo
 
 Curriculum learning can effectively smooth the difficulty differences between different types of queries and greatly improve the results of difficult queries.
 
-**Innovative Framework**: 
+**Innovative Framework**:
 - Use your KG to automatically assess the **conceptual complexity** of training examples
 - Map relationships between simple and complex concepts
 - Create learning pathways that gradually introduce more sophisticated patterns
@@ -193,7 +193,7 @@ async def extract_from_documents(...):
     # Extract raw entities and chunks (NO embeddings)
     entities = await self._extract_raw_entities(...)
     chunks = await self._create_raw_chunks(...)
-    
+
     return graph_documents, chunks  # Raw data only
 ```
 
@@ -201,15 +201,15 @@ async def extract_from_documents(...):
 ```python
 # enhanced_graph_service.py - EMBEDDING + STORAGE
 async def store_complete_graph(self, graph_documents, chunks, graph_id):
-    
+
     # STEP 1: ENRICH with embeddings (BEFORE storage)
     enriched_docs = await self._add_embeddings_to_entities(graph_documents)
     enriched_chunks = await self._add_embeddings_to_chunks(chunks)
-    
+
     # STEP 2: STORE enriched data
     await self._store_entities_and_relationships(enriched_docs, graph_id)
     await self._store_chunks(enriched_chunks, graph_id)
-    
+
     # STEP 3: CREATE indexes (AFTER storage)
     await self._create_post_storage_indexes(graph_id)
 
@@ -224,7 +224,7 @@ async def _add_embeddings_to_entities(self, graph_documents):
     return graph_documents
 
 async def _add_embeddings_to_chunks(self, chunks):
-    """Add embeddings to chunks before storage"""  
+    """Add embeddings to chunks before storage"""
     for chunk in chunks:
         embedding = await embedding_service.embed_text(chunk["text"])
         chunk["embedding"] = embedding
@@ -245,7 +245,7 @@ async def create_vector_indexes(self, graph_id):
 | Module | Responsibility | Does NOT Do |
 |--------|----------------|-------------|
 | `entity_extractor.py` | Raw extraction only | ❌ Embeddings, ❌ Storage |
-| `embedding_service.py` | Text → Vector conversion | ❌ Storage, ❌ Indexing |  
+| `embedding_service.py` | Text → Vector conversion | ❌ Storage, ❌ Indexing |
 | `enhanced_graph_service.py` | **Embedding + Storage** | ❌ Raw extraction, ❌ Indexing |
 | `vector_service.py` | Index creation only | ❌ Embeddings, ❌ Storage |
 
@@ -254,24 +254,24 @@ async def create_vector_indexes(self, graph_id):
 ```python
 # background_jobs._run_extraction_async()
 async def _run_extraction_async(...):
-    
+
     # Phase 1: Raw extraction
     entity_graph_docs, raw_chunks = await entity_extractor.extract_from_documents(...)
-    
+
     # Phase 2 & 3: Embedding + Storage + Indexing (ALL IN ONE CALL)
     result = await enhanced_graph_service.store_complete_graph(
         graph_documents=entity_graph_docs,
         chunks=raw_chunks,
         graph_id=graph_id
     )
-    
+
     return result
 ```
 
 ## ✅ **Why This Makes Sense**
 
 1. **Single Transaction**: Embedding + Storage happens atomically
-2. **Data Integrity**: No half-embedded data in database  
+2. **Data Integrity**: No half-embedded data in database
 3. **Performance**: Batch embedding before batch storage
 4. **Clean Interfaces**: Each module has one clear responsibility
 5. **Error Handling**: If embedding fails, storage doesn't happen

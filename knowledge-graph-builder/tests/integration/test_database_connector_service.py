@@ -272,7 +272,6 @@ async def test_sync_without_credentials_records_auth_error(client: AsyncClient):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_sql_fk_produces_relationship():
-
     from app.core.neo4j_client import neo4j_client
     from app.services.database_connector_service import (
         ColumnMeta,
@@ -478,9 +477,9 @@ async def test_cdc_upsert_no_duplicates():
         "MATCH (e:__Entity__ {graph_id: $g, source_table: 'users'}) RETURN e",
         {"g": TEST_GRAPH_ID},
     )
-    assert (
-        len(entities) == 1
-    ), f"Expected 1 entity, got {len(entities)} (duplicate created)"
+    assert len(entities) == 1, (
+        f"Expected 1 entity, got {len(entities)} (duplicate created)"
+    )
 
 
 # ---------------------------------------------------------------------------

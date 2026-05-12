@@ -84,10 +84,10 @@ async def create_vector_indexes():
         for i, query in enumerate(index_queries):
             try:
                 await neo4j_client.execute_write_query(query)
-                logger.info(f"✅ Created vector index {i+1}/{len(index_queries)}")
+                logger.info(f"✅ Created vector index {i + 1}/{len(index_queries)}")
             except Exception as e:
                 logger.warning(
-                    f"⚠️ Vector index {i+1} creation failed (may already exist): {e}"
+                    f"⚠️ Vector index {i + 1} creation failed (may already exist): {e}"
                 )
 
         # Create fulltext indexes
@@ -95,10 +95,12 @@ async def create_vector_indexes():
         for i, query in enumerate(fulltext_queries):
             try:
                 await neo4j_client.execute_write_query(query)
-                logger.info(f"✅ Created fulltext index {i+1}/{len(fulltext_queries)}")
+                logger.info(
+                    f"✅ Created fulltext index {i + 1}/{len(fulltext_queries)}"
+                )
             except Exception as e:
                 logger.warning(
-                    f"⚠️ Fulltext index {i+1} creation failed (may already exist): {e}"
+                    f"⚠️ Fulltext index {i + 1} creation failed (may already exist): {e}"
                 )
 
         # List all indexes to verify

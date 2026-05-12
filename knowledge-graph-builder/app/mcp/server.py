@@ -63,8 +63,7 @@ def _api_key() -> str:
     key = os.environ.get("ORACLOUS_API_KEY", "")
     if not key:
         raise RuntimeError(
-            "ORACLOUS_API_KEY is not set. "
-            "Add it to your MCP client environment config."
+            "ORACLOUS_API_KEY is not set. Add it to your MCP client environment config."
         )
     return key
 
@@ -466,8 +465,7 @@ async def chat(
     if mode not in valid_modes:
         return {
             "error": (
-                f"Invalid mode {mode!r}. "
-                f"Choose from: {', '.join(sorted(valid_modes))}"
+                f"Invalid mode {mode!r}. Choose from: {', '.join(sorted(valid_modes))}"
             )
         }
 

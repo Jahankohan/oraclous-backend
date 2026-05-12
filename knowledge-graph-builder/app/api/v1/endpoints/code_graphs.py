@@ -120,7 +120,9 @@ async def code_ingest(
     await db.commit()
     await db.refresh(job)
 
-    job_result = await background_job_service.start_code_ingest_job(str(job.id), user_id)
+    job_result = await background_job_service.start_code_ingest_job(
+        str(job.id), user_id
+    )
     if job_result["status"] == "failed":
         logger.error(f"Failed to start code ingest job: {job_result['message']}")
         raise HTTPException(

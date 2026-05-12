@@ -3,6 +3,7 @@ from sqlalchemy import Column, String, Boolean, TIMESTAMP, func
 from datetime import datetime, timezone, timedelta
 import uuid
 
+
 class User(Base):
     __tablename__ = "users"
 
@@ -22,6 +23,9 @@ class User(Base):
 
     def set_verification_code(self):
         from random import randint
+
         code = randint(100000, 999999)
         self.verification_code = str(code)
-        self.verification_code_expiry = datetime.now(timezone.utc) + timedelta(minutes=60)
+        self.verification_code_expiry = datetime.now(timezone.utc) + timedelta(
+            minutes=60
+        )

@@ -13,7 +13,7 @@ Architecture invariants:
 from __future__ import annotations
 
 import re as _re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
@@ -183,11 +183,13 @@ def _rel_type_for_fk(
     # If bare is something meaningful and different from the table name,
     # build: BELONGS_TO_<TABLE_UPPER>
     target_upper = _to_pascal_case(fk_table).upper()
-    rel = f"BELONGS_TO"
+    rel = "BELONGS_TO"
     return rel
 
 
-def _junction_rel_type_from_name(table_name: str, from_table: str, to_table: str) -> str | None:
+def _junction_rel_type_from_name(
+    table_name: str, from_table: str, to_table: str
+) -> str | None:
     """Try to extract a verb from a junction table name.
 
     Returns an UPPER_SNAKE_CASE string if the name contains a recognisable verb,
@@ -202,7 +204,7 @@ def _junction_rel_type_from_name(table_name: str, from_table: str, to_table: str
     # Strip common junction table prefixes
     for prefix in ("t_", "rel_", "jn_", "jt_", "map_", "link_", "xref_", "assoc_"):
         if name_clean.startswith(prefix):
-            name_clean = name_clean[len(prefix):]
+            name_clean = name_clean[len(prefix) :]
 
     # Strip the two referenced table names from the junction name
     for ref in (from_table.lower(), to_table.lower()):
@@ -482,9 +484,7 @@ class SchemaMapper:
         fk_groups = _group_fk_columns(columns)
 
         if kind == "junction_table":
-            return self._build_junction_relationships(
-                table_name, fk_groups, pk_lookup
-            )
+            return self._build_junction_relationships(table_name, fk_groups, pk_lookup)
 
         # entity_table or self_ref_table — one rel per FK group
         rels: list[RelationshipMapping] = []

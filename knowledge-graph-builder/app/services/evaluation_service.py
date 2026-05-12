@@ -228,7 +228,7 @@ class EvaluationService:
         try:
             from ragas import EvaluationDataset, SingleTurnSample, evaluate
         except ImportError:
-            logger.error("ragas package not installed. " "Run: pip install ragas")
+            logger.error("ragas package not installed. Run: pip install ragas")
             return {name: None for name in metric_names}
 
         ragas_llm = _build_ragas_llm()

@@ -5,11 +5,11 @@
 ### 1. Database Schema Mismatch
 **Issue**: "Unconsumed column names: communities_count, similarity_relationships"
 **Root Cause**: The optimization code was trying to update columns that didn't exist in the database schema.
-**Fix**: 
+**Fix**:
 - Added `similarity_relationships` and `communities_count` columns to the `KnowledgeGraph` model
 - Created migration file: `alembic/versions/add_optimization_columns.py`
 
-### 2. Neo4j GDS Query Syntax Error  
+### 2. Neo4j GDS Query Syntax Error
 **Issue**: "Unexpected configuration keys: nodeQuery, relationshipQuery"
 **Root Cause**: Using deprecated syntax for `gds.graph.project` with `nodeQuery` and `relationshipQuery` parameters.
 **Fix**: Updated all GDS graph projection queries to use the correct `gds.graph.project.cypher` syntax:
@@ -24,7 +24,7 @@ CALL gds.graph.project(
     'graph_name',
     { Entity: {...} },
     { RELATIONSHIP: {...} },
-    { 
+    {
         nodeQuery: 'MATCH (n) WHERE n.graph_id = $graph_id RETURN id(n) AS id',
         relationshipQuery: 'MATCH (a)-[r]-(b) WHERE ... RETURN id(a) AS source, id(b) AS target'
     }
@@ -69,7 +69,7 @@ CALL gds.graph.project.cypher(
 ## Files Modified
 
 1. `app/models/graph.py` - Added database columns
-2. `app/services/analytics_service.py` - Fixed GDS syntax 
+2. `app/services/analytics_service.py` - Fixed GDS syntax
 3. `app/services/chat_service.py` - Fixed GDS syntax
 4. `app/services/background_jobs.py` - Fixed embedding service initialization
 5. `alembic/versions/add_optimization_columns.py` - Database migration

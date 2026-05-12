@@ -3,6 +3,7 @@ from typing import List
 from app.models.tool_definition import ToolDefinitionDB
 from sqlalchemy.ext.asyncio import AsyncSession
 
+
 class ToolDefinitionRepository:
     def __init__(self, db: AsyncSession):
         self.db = db

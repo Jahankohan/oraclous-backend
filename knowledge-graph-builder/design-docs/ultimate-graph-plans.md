@@ -1,22 +1,22 @@
 # Knowledge Graph Builder - Next Steps Backlog
 
 ## 🎯 **Current Status: ~80% Complete**
-✅ **Completed:** Entity extraction, schema evolution, embeddings, search, chat, background jobs  
-🔄 **In Progress:** Advanced graph intelligence system  
+✅ **Completed:** Entity extraction, schema evolution, embeddings, search, chat, background jobs
+🔄 **In Progress:** Advanced graph intelligence system
 ❌ **Missing:** Orchestrator integration, analytics dashboard, production polish
 
 ---
 
 ## 🔴 **Priority 1: Critical Quality Fixes (Week 1-2)**
 
-### **Issue #1: Chat Hallucination Prevention** 
+### **Issue #1: Chat Hallucination Prevention**
 **Status:** 🚀 **SOLUTION READY** - Advanced Graph Context System
 - **Action:** Deploy advanced chat service with graph-based reasoning
 - **Files:** `advanced_graph_context.py`, `enhanced_chat_service.py`, updated `chat.py`
 - **Test:** Verify responses only use graph data, never external knowledge
 - **Impact:** ⚠️ **Critical** - Prevents misinformation, ensures trustworthiness
 
-### **Issue #2: Enhanced Graph Modeling** 
+### **Issue #2: Enhanced Graph Modeling**
 **Status:** 📋 **Next Implementation**
 - **Problem:** Job titles stored as node properties instead of relationship properties
 - **Solution:** Relationship-focused extraction rules + property categorization
@@ -38,7 +38,7 @@
       @staticmethod
       def get_extractor(data_type: str):
           if data_type == "raw_text": return TextEntityExtractor()
-          elif data_type == "tabular": return TableEntityExtractor() 
+          elif data_type == "tabular": return TableEntityExtractor()
           elif data_type == "qa_pairs": return QAEntityExtractor()
           elif data_type == "relational": return RelationalEntityExtractor()
   ```
@@ -76,7 +76,7 @@
 - **Impact:** 🔴 **Critical** - Enables workflow integration
 - **Effort:** 1-2 weeks
 
-### **Analytics Dashboard** 
+### **Analytics Dashboard**
 - **Status:** ❌ **Missing** - Graph metrics, community detection, centrality analysis
 - **Impact:** 🟡 **High** - User insights and graph exploration
 - **Effort:** 2-3 weeks
@@ -101,7 +101,7 @@
 
 ### **Sprint 2 (Week 2): Fix Graph Modeling**
 ```bash
-✅ Priority: HIGH  
+✅ Priority: HIGH
 📁 Files: entity_extractor.py extraction rules
 🎯 Goal: Relationship-focused property modeling
 ⏱️ Effort: 3-5 days
@@ -113,7 +113,7 @@
 ✅ Priority: MEDIUM
 📁 Files: New request models, ingestion workflow
 🎯 Goal: Pre-ingestion instructions and preferences
-⏱️ Effort: 5-7 days  
+⏱️ Effort: 5-7 days
 🧪 Test: Custom instructions improve graph quality
 ```
 
@@ -145,7 +145,7 @@
 - ✅ Support for 4+ data types (text, tables, QA, relational)
 - ✅ User instructions improve graph quality by 25%+
 
-### **Performance Metrics**  
+### **Performance Metrics**
 - ✅ Chat responses: <2s for focused mode, <5s for comprehensive
 - ✅ Real-time progress updates for background jobs
 - ✅ WebSocket streaming for chat responses
@@ -162,8 +162,8 @@
 ### **High Risk Items**
 1. **Graph Algorithm Performance** - Community detection and PageRank on large graphs
    - *Mitigation*: Implement caching, limit to smaller graphs initially
-   
-2. **WebSocket Scalability** - Many concurrent streaming connections  
+
+2. **WebSocket Scalability** - Many concurrent streaming connections
    - *Mitigation*: Connection limits, Redis for state management
 
 3. **LLM API Costs** - Advanced reasoning uses more tokens
@@ -171,7 +171,7 @@
 
 ### **Dependencies**
 - **Neo4j Graph Data Science Library** - Required for community detection, PageRank
-- **WebSocket Infrastructure** - May need Redis for scaling  
+- **WebSocket Infrastructure** - May need Redis for scaling
 - **LLM Provider Stability** - OpenAI API reliability for advanced reasoning
 
 ---
@@ -180,7 +180,7 @@
 
 ### **Each Sprint Must Deliver:**
 - ✅ Working implementation with tests
-- ✅ Updated API documentation  
+- ✅ Updated API documentation
 - ✅ Performance benchmarks
 - ✅ User acceptance testing
 - ✅ Deployment to staging environment
@@ -194,6 +194,6 @@
 
 ---
 
-**📅 Estimated Timeline: 6-8 weeks to production-ready**  
-**👥 Team Recommendation: 2-3 developers for optimal pace**  
+**📅 Estimated Timeline: 6-8 weeks to production-ready**
+**👥 Team Recommendation: 2-3 developers for optimal pace**
 **💰 Estimated Effort: 240-320 development hours**

@@ -11,7 +11,9 @@ from app.schemas.community_schemas import Community
 class TestDeriveLabel:
     @pytest.mark.unit
     def test_uses_first_sentence_of_summary(self):
-        label = _derive_label("c-1", "Tech companies in the Bay Area. Includes startups and giants.")
+        label = _derive_label(
+            "c-1", "Tech companies in the Bay Area. Includes startups and giants."
+        )
         assert label == "Tech companies in the Bay Area"
 
     @pytest.mark.unit
@@ -37,7 +39,9 @@ class TestDeriveLabel:
 
     @pytest.mark.unit
     def test_handles_newline_terminator_in_summary(self):
-        label = _derive_label("c-1", "Title\nLong description that should not be in the label")
+        label = _derive_label(
+            "c-1", "Title\nLong description that should not be in the label"
+        )
         assert label == "Title"
 
 

@@ -16,7 +16,7 @@ Covers:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -27,9 +27,7 @@ from app.services.database_connector_service import (
     TableMeta,
 )
 from app.services.schema_mapper import (
-    GraphMappingRules,
     SchemaMapper,
-    _call_llm_for_rel_type,
     _classify_table_kind,
     _junction_rel_type_from_name,
     _rel_type_for_fk,
@@ -219,7 +217,9 @@ class TestJunctionRelTypeName:
     def test_meaningful_verb_extracted(self):
         # employee_project → strip 'employee' and 'project' → '' → no verb
         # But 'employee_works_project' → 'works'
-        result = _junction_rel_type_from_name("employee_works_project", "employee", "project")
+        result = _junction_rel_type_from_name(
+            "employee_works_project", "employee", "project"
+        )
         assert result == "WORKS"
 
     def test_no_verb_returns_none(self):
@@ -348,8 +348,12 @@ class TestSchemaMapperEntityTable:
 @pytest.mark.unit
 class TestSchemaMapperJunctionTable:
     def test_junction_two_fks(self):
-        emp = _table("employee", _col("id", is_pk=True), _col("name", data_type="varchar"))
-        proj = _table("project", _col("id", is_pk=True), _col("title", data_type="varchar"))
+        emp = _table(
+            "employee", _col("id", is_pk=True), _col("name", data_type="varchar")
+        )
+        proj = _table(
+            "project", _col("id", is_pk=True), _col("title", data_type="varchar")
+        )
         junc = _table(
             "employee_project",
             _col("employee_id", is_fk=True, fk_table="employee"),
@@ -359,7 +363,9 @@ class TestSchemaMapperJunctionTable:
         mapper = SchemaMapper()
         rules = mapper.map(snapshot, _CONNECTOR_ID, _GRAPH_ID)
 
-        junc_mapping = next(t for t in rules.tables if t.table_name == "employee_project")
+        junc_mapping = next(
+            t for t in rules.tables if t.table_name == "employee_project"
+        )
         assert junc_mapping.kind == "junction_table"
         assert len(junc_mapping.relationships) == 1
         rel = junc_mapping.relationships[0]
@@ -381,7 +387,9 @@ class TestSchemaMapperJunctionTable:
         mapper = SchemaMapper()
         rules = mapper.map(snapshot, _CONNECTOR_ID, _GRAPH_ID)
 
-        junc_mapping = next(t for t in rules.tables if t.table_name == "employee_project")
+        junc_mapping = next(
+            t for t in rules.tables if t.table_name == "employee_project"
+        )
         assert junc_mapping.kind == "junction_table"
         # Still exactly one relationship
         assert len(junc_mapping.relationships) == 1
@@ -430,7 +438,9 @@ class TestSchemaMapperSelfRef:
 class TestSchemaMapperCompositeFk:
     def test_composite_fk_grouped_as_single_relationship(self):
         """Two FK columns pointing to the same target table → one RelationshipMapping."""
-        order = _table("order", _col("id", is_pk=True), _col("total", data_type="decimal"))
+        order = _table(
+            "order", _col("id", is_pk=True), _col("total", data_type="decimal")
+        )
         # Composite FK: (billing_address_country, billing_address_city) both point to address
         # but since they have the same fk_table they are grouped into one RelationshipMapping
         order_detail = _table(
@@ -512,14 +522,14 @@ class TestSchemaMapperLlmNaming:
         snapshot = _make_snapshot(emp, proj, junc)
         mapper = SchemaMapper()
 
-        with patch(
-            "app.services.schema_mapper._call_llm_for_rel_type"
-        ) as mock_llm:
+        with patch("app.services.schema_mapper._call_llm_for_rel_type") as mock_llm:
             rules = mapper.map(snapshot, _CONNECTOR_ID, _GRAPH_ID)
 
         mock_llm.assert_not_called()
 
-        junc_mapping = next(t for t in rules.tables if t.table_name == "employee_works_project")
+        junc_mapping = next(
+            t for t in rules.tables if t.table_name == "employee_works_project"
+        )
         assert junc_mapping.relationships[0].rel_type == "WORKS"
 
     def test_llm_context_sent_correctly(self):
@@ -541,9 +551,9 @@ class TestSchemaMapperLlmNaming:
             mapper.map(snapshot, _CONNECTOR_ID, _GRAPH_ID)
 
         call_args = mock_llm.call_args
-        assert call_args[0][0] == "rel_012"       # junction table name
-        assert call_args[0][1] == "employee"       # from_table
-        assert call_args[0][2] == "project"        # to_table
+        assert call_args[0][0] == "rel_012"  # junction table name
+        assert call_args[0][1] == "employee"  # from_table
+        assert call_args[0][2] == "project"  # to_table
 
 
 @pytest.mark.unit
@@ -575,18 +585,14 @@ class TestSchemaMapperGraphIdPresence:
         assert len(rules.tables) == 2
 
     def test_connector_id_present(self):
-        snapshot = _make_snapshot(
-            _table("user", _col("id", is_pk=True))
-        )
+        snapshot = _make_snapshot(_table("user", _col("id", is_pk=True)))
         mapper = SchemaMapper()
         rules = mapper.map(snapshot, _CONNECTOR_ID, _GRAPH_ID)
 
         assert rules.connector_id == _CONNECTOR_ID
 
     def test_generated_at_is_iso_timestamp(self):
-        snapshot = _make_snapshot(
-            _table("user", _col("id", is_pk=True))
-        )
+        snapshot = _make_snapshot(_table("user", _col("id", is_pk=True)))
         mapper = SchemaMapper()
         rules = mapper.map(snapshot, _CONNECTOR_ID, _GRAPH_ID)
 
@@ -595,9 +601,7 @@ class TestSchemaMapperGraphIdPresence:
         assert parsed is not None
 
     def test_different_graph_ids_produce_different_rules(self):
-        snapshot = _make_snapshot(
-            _table("user", _col("id", is_pk=True))
-        )
+        snapshot = _make_snapshot(_table("user", _col("id", is_pk=True)))
         mapper = SchemaMapper()
         rules_a = mapper.map(snapshot, _CONNECTOR_ID, "graph-A")
         rules_b = mapper.map(snapshot, _CONNECTOR_ID, "graph-B")

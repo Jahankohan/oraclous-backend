@@ -1,0 +1,4 @@
+# Dev tools — installed locally, never into runtime images.
+# Install with: pip install -r requirements-dev.txt
+pre-commit==4.3.0
+detect-secrets==1.5.0

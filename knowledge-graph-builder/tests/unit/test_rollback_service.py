@@ -81,9 +81,9 @@ async def test_full_rollback_uses_invalidated_at():
     for call_args in mock_client.execute_query.call_args_list:
         query: str = call_args[0][0]
         params: dict = call_args[0][1]
-        assert (
-            "deleted_at" not in query
-        ), f"Query must use invalidated_at, not deleted_at: {query[:80]}"
+        assert "deleted_at" not in query, (
+            f"Query must use invalidated_at, not deleted_at: {query[:80]}"
+        )
         assert params.get("graph_id") == GRAPH_ID
 
 
@@ -129,7 +129,6 @@ async def test_rollback_creates_checkpoint_by_default():
         patch("app.services.rollback_service.snapshot_service") as mock_snap_svc,
         patch("app.services.rollback_service.neo4j_client") as mock_neo,
     ):
-
         mock_snap_svc.get_snapshot = AsyncMock(return_value=fake_snap)
         mock_snap_svc.create_snapshot = AsyncMock(return_value=fake_checkpoint)
         mock_neo.execute_query = AsyncMock(
@@ -166,7 +165,6 @@ async def test_rollback_skips_checkpoint_when_disabled():
         patch("app.services.rollback_service.snapshot_service") as mock_snap_svc,
         patch("app.services.rollback_service.neo4j_client") as mock_neo,
     ):
-
         mock_snap_svc.get_snapshot = AsyncMock(return_value=fake_snap)
         mock_neo.execute_query = AsyncMock(
             side_effect=[
@@ -241,7 +239,6 @@ async def test_create_rollback_job_mode_is_full():
         patch("app.services.rollback_service.uuid") as mock_uuid,
         patch.object(mock_db, "add") as _mock_add,
     ):
-
         mock_uuid.uuid4.return_value = fake_job.id
         mock_db.add = MagicMock()
         mock_db.commit = AsyncMock()

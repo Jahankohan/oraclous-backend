@@ -262,7 +262,9 @@ class MultiTenantKGWriter:
         """
         if raw is None:
             return None
-        cleaned = raw.replace("\x00", "").strip()[: MultiTenantKGWriter._MAX_INGESTION_SOURCE_LEN]
+        cleaned = raw.replace("\x00", "").strip()[
+            : MultiTenantKGWriter._MAX_INGESTION_SOURCE_LEN
+        ]
         return cleaned or None
 
     def __init__(
@@ -320,12 +322,15 @@ class MultiTenantKGWriter:
         if dropped_ids:
             logger.info(
                 "MultiTenantKGWriter: dropped %d empty-name entities for tenant %s, source=%s",
-                len(dropped_ids), self.graph_id, self.ingestion_source,
+                len(dropped_ids),
+                self.graph_id,
+                self.ingestion_source,
             )
             graph.nodes = kept_nodes
             # Drop relationships that would dangle on a removed node
             kept_rels = [
-                r for r in graph.relationships
+                r
+                for r in graph.relationships
                 if r.start_node_id not in dropped_ids
                 and r.end_node_id not in dropped_ids
             ]
@@ -385,7 +390,8 @@ class MultiTenantKGWriter:
             if collapsed:
                 logger.info(
                     "MultiTenantKGWriter: collapsed %d duplicate relationships into %d unique edges (weight = source-chunk count)",
-                    collapsed, len(deduped_rels),
+                    collapsed,
+                    len(deduped_rels),
                 )
             graph.relationships = deduped_rels
 

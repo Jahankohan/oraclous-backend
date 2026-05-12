@@ -72,11 +72,11 @@ from neo4j_graphrag.retrievers import VectorRetriever
 
 class MultiTenantRetriever(VectorRetriever):
     """Simple wrapper that adds graph_id filtering to any Neo4j retriever"""
-    
+
     def __init__(self, base_retriever, graph_id: str):
         self.base_retriever = base_retriever
         self.graph_id = graph_id
-    
+
     def get_search_results(self, query_vector=None, query_text=None, **kwargs):
         # Add graph_id filter to search
         kwargs['filters'] = {**(kwargs.get('filters', {})), 'graph_id': self.graph_id}
@@ -108,7 +108,7 @@ from neo4j_graphrag.generation import GraphRAG
 class GraphService:
     def __init__(self, neo4j_driver=Depends(get_neo4j_driver)):
         self.driver = neo4j_driver
-    
+
     async def search_graph(self, query: str, graph_id: str) -> dict:
         # Simple delegation to Neo4j GraphRAG with multi-tenant wrapper
         retriever = MultiTenantRetriever(
@@ -120,7 +120,7 @@ class GraphService:
 
 # BAD - Over-engineered service - DON'T DO THIS
 class GraphManagementOrchestrationService:
-    def __init__(self, 
+    def __init__(self,
                  retriever_factory: RetrieverFactory,
                  context_manager: ContextManager,
                  security_validator: SecurityValidator,
@@ -148,7 +148,7 @@ async def search_graph(
     # Log search in background if needed
     if background_tasks:
         background_tasks.add_task(log_search, graph_id, query.text)
-    
+
     return await graph_service.search_graph(query.text, graph_id)
 
 # BAD - Overcomplicated endpoint - DON'T DO THIS

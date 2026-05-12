@@ -15,17 +15,17 @@
 graph TB
     subgraph "Core Oraclous Services"
         AUTH[auth-service:8000]
-        CRED[credential-broker:8000] 
+        CRED[credential-broker:8000]
         CORE[oraclous-core:8000]
         KGB[knowledge-graph-builder:8000]
     end
-    
+
     subgraph "Cognitive Assessment Ecosystem"
         CAS[cognitive-assessment-service:8000]
         PSY[psychometric-service:8000]
         SIM[simulation-service:8000]
     end
-    
+
     subgraph "Specialized Agents"
         TRA[Trait Analysis Agent]
         SGA[Scenario Generation Agent]
@@ -33,20 +33,20 @@ graph TB
         BIA[Bias Monitoring Agent]
         CAU[Causal Inference Agent]
     end
-    
+
     subgraph "Shared Infrastructure"
         NEO[(Neo4j Cluster)]
         RED[(Redis Cache)]
         KAF[(Kafka Streams)]
     end
-    
+
     CAS --> KGB
     PSY --> KGB
     SIM --> KGB
     KGB --> NEO
     CAS --> PSY
     CAS --> SIM
-    
+
     TRA --> CAS
     SGA --> CAS
     ADA --> PSY
@@ -72,11 +72,11 @@ graph TB
 # Location: knowledge-graph-builder/app/schemas/assessment_schema.py
 class AssessmentSchemaManager:
     """Centralized assessment schema management in KG Builder"""
-    
+
     def __init__(self, neo4j_client: Neo4jClient):
         self.neo4j_client = neo4j_client
         self.schema_versioning = SchemaVersioning()
-    
+
     async def initialize_assessment_schema(self, version: str = "1.0.0"):
         """Initialize assessment-specific schema extensions"""
         schema_migrations = [
@@ -85,7 +85,7 @@ class AssessmentSchemaManager:
             self._create_vector_indexes(),
             self._create_composite_indexes()
         ]
-        
+
         for migration in schema_migrations:
             await self.schema_versioning.apply_migration(migration, version)
 
@@ -117,7 +117,7 @@ from enum import Enum
 class FounderTraitType(str, Enum):
     """Founder-specific trait categories"""
     RISK_TOLERANCE = "risk_tolerance"
-    DECISION_MAKING = "decision_making" 
+    DECISION_MAKING = "decision_making"
     LEADERSHIP_STYLE = "leadership_style"
     INNOVATION_APPROACH = "innovation_approach"
     CRISIS_MANAGEMENT = "crisis_management"
@@ -134,7 +134,7 @@ class AssessmentConstruct(BaseModel):
     sub_traits: List[str] = Field(default_factory=list)
     measurement_approach: str = Field(default="scenario_based")
     validation_studies: Optional[List[str]] = None
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -177,48 +177,48 @@ class AssessmentConstruct(BaseModel):
 # Location: cognitive-assessment-service/app/agents/assessment_orchestrator.py
 class AssessmentOrchestratorAgent:
     """Central orchestration agent for assessment workflows"""
-    
+
     def __init__(self):
         self.kg_connector = KnowledgeGraphConnectorAgent()
         self.auth_connector = AuthenticationConnectorAgent()
         self.workflow_manager = WorkflowManagerAgent()
         self.event_bus = EventBusAgent()
-    
+
     async def create_assessment_workflow(
-        self, 
+        self,
         assessment_request: CreateAssessmentRequest,
         user_context: UserContext
     ) -> AssessmentWorkflowResult:
         """Orchestrate assessment creation across services"""
-        
+
         # Step 1: Validate user permissions
         auth_result = await self.auth_connector.validate_assessment_permissions(
             user_context, assessment_request.assessment_type
         )
-        
+
         if not auth_result.authorized:
             raise InsufficientPermissionsError(auth_result.reason)
-        
+
         # Step 2: Initialize graph structure
         graph_result = await self.kg_connector.initialize_assessment_graph(
             assessment_id=assessment_request.id,
             constructs=assessment_request.constructs,
             schema_version="1.0.0"
         )
-        
+
         # Step 3: Setup workflow tracking
         workflow = await self.workflow_manager.create_workflow(
             workflow_type="assessment_creation",
             steps=["graph_init", "scenario_gen", "validation", "activation"],
             context={"assessment_id": assessment_request.id}
         )
-        
+
         # Step 4: Emit workflow events
         await self.event_bus.emit_event(
             event_type="assessment.workflow.started",
             payload={"assessment_id": assessment_request.id, "workflow_id": workflow.id}
         )
-        
+
         return AssessmentWorkflowResult(
             assessment_id=assessment_request.id,
             workflow_id=workflow.id,
@@ -229,20 +229,20 @@ class AssessmentOrchestratorAgent:
 # Agent for Knowledge Graph Builder communication
 class KnowledgeGraphConnectorAgent:
     """Handles all communication with Knowledge Graph Builder service"""
-    
+
     def __init__(self):
         self.http_client = HTTPXClient()
         self.circuit_breaker = CircuitBreaker()
         self.retry_policy = RetryPolicy(max_attempts=3, backoff="exponential")
-    
+
     async def initialize_assessment_graph(
-        self, 
-        assessment_id: str, 
+        self,
+        assessment_id: str,
         constructs: List[AssessmentConstruct],
         schema_version: str
     ) -> GraphInitializationResult:
         """Initialize assessment graph through KG Builder API"""
-        
+
         @self.circuit_breaker.protect
         @self.retry_policy.retry
         async def _call_kg_builder():
@@ -256,9 +256,9 @@ class KnowledgeGraphConnectorAgent:
                 headers={"X-Internal-Service": "cognitive-assessment"}
             )
             return response.json()
-        
+
         result = await _call_kg_builder()
-        
+
         return GraphInitializationResult(
             graph_id=result["graph_id"],
             nodes_created=result["nodes_created"],
@@ -279,15 +279,15 @@ class KnowledgeGraphConnectorAgent:
 # Location: cognitive-assessment-service/app/integration/service_integration.py
 class ServiceIntegrationFramework:
     """Framework for integrating with existing Oraclous services"""
-    
+
     def __init__(self):
         self.service_registry = ServiceRegistry()
         self.health_monitor = HealthMonitor()
         self.load_balancer = LoadBalancer()
-    
+
     async def initialize_service_integrations(self):
         """Initialize all service connections and health monitoring"""
-        
+
         services = [
             ServiceConfig(
                 name="auth-service",
@@ -297,7 +297,7 @@ class ServiceIntegrationFramework:
                 timeout=5.0
             ),
             ServiceConfig(
-                name="knowledge-graph-builder", 
+                name="knowledge-graph-builder",
                 url=settings.KG_BUILDER_URL,
                 health_endpoint="/api/v1/health",
                 required=True,
@@ -305,13 +305,13 @@ class ServiceIntegrationFramework:
             ),
             ServiceConfig(
                 name="credential-broker",
-                url=settings.CREDENTIAL_BROKER_URL, 
+                url=settings.CREDENTIAL_BROKER_URL,
                 health_endpoint="/health",
                 required=True,
                 timeout=5.0
             )
         ]
-        
+
         for service_config in services:
             await self.service_registry.register_service(service_config)
             await self.health_monitor.start_monitoring(service_config)
@@ -319,32 +319,32 @@ class ServiceIntegrationFramework:
 # Microservice communication patterns
 class InterServiceCommunication:
     """Standardized patterns for service-to-service communication"""
-    
+
     async def call_with_auth(
-        self, 
-        service_name: str, 
-        endpoint: str, 
+        self,
+        service_name: str,
+        endpoint: str,
         method: str = "POST",
         payload: Optional[Dict] = None,
         user_context: Optional[UserContext] = None
     ) -> ServiceResponse:
         """Make authenticated service call with proper error handling"""
-        
+
         # Get service configuration
         service_config = await self.service_registry.get_service(service_name)
-        
+
         # Prepare headers
         headers = {
             "X-Internal-Service": "cognitive-assessment",
             "X-Request-ID": str(uuid.uuid4()),
             "Content-Type": "application/json"
         }
-        
+
         # Add user context if available
         if user_context:
             headers["X-User-ID"] = user_context.user_id
             headers["Authorization"] = f"Bearer {user_context.token}"
-        
+
         # Make request with retries and circuit breaking
         async with self.circuit_breaker(service_name):
             response = await self.http_client.request(
@@ -354,15 +354,15 @@ class InterServiceCommunication:
                 headers=headers,
                 timeout=service_config.timeout
             )
-            
+
             if not response.is_success:
                 raise ServiceCallError(
                     service=service_name,
-                    endpoint=endpoint, 
+                    endpoint=endpoint,
                     status_code=response.status_code,
                     error=response.text
                 )
-            
+
             return ServiceResponse(
                 status_code=response.status_code,
                 data=response.json(),
@@ -401,14 +401,14 @@ class InterServiceCommunication:
 # Location: cognitive-assessment-service/app/agents/scenario_generation_agent.py
 class ScenarioGenerationAgent:
     """Specialized agent for generating assessment scenarios"""
-    
+
     def __init__(self):
         self.llm_coordinator = LLMCoordinatorAgent()
         self.rag_agent = RAGRetrievalAgent()
         self.validation_agent = ContentValidationAgent()
         self.novelty_detector = NoveltyDetectionAgent()
         self.kg_connector = KnowledgeGraphConnectorAgent()
-    
+
     async def generate_domain_scenarios(
         self,
         constructs: List[AssessmentConstruct],
@@ -416,14 +416,14 @@ class ScenarioGenerationAgent:
         generation_config: ScenarioGenerationConfig
     ) -> List[ValidatedScenario]:
         """Generate scenarios with domain-specific context"""
-        
+
         # Step 1: Retrieve domain context using RAG
         domain_knowledge = await self.rag_agent.retrieve_domain_context(
             domain=domain_context.domain,
             timeframe=domain_context.timeframe,
             focus_areas=domain_context.focus_areas
         )
-        
+
         # Step 2: Generate scenarios for each construct
         generated_scenarios = []
         for construct in constructs:
@@ -433,13 +433,13 @@ class ScenarioGenerationAgent:
                 count=generation_config.scenarios_per_construct
             )
             generated_scenarios.extend(construct_scenarios)
-        
+
         # Step 3: Novelty detection and deduplication
         unique_scenarios = await self.novelty_detector.filter_novel_scenarios(
             scenarios=generated_scenarios,
             similarity_threshold=generation_config.novelty_threshold
         )
-        
+
         # Step 4: Content validation
         validated_scenarios = []
         for scenario in unique_scenarios:
@@ -447,7 +447,7 @@ class ScenarioGenerationAgent:
                 scenario=scenario,
                 validation_criteria=generation_config.validation_criteria
             )
-            
+
             if validation_result.passes_validation:
                 validated_scenarios.append(
                     ValidatedScenario(
@@ -456,33 +456,33 @@ class ScenarioGenerationAgent:
                         quality_metrics=validation_result.quality_metrics
                     )
                 )
-        
+
         # Step 5: Store scenarios in knowledge graph
         storage_results = await self.kg_connector.store_scenarios(
             scenarios=validated_scenarios,
             domain_context=domain_context
         )
-        
+
         return validated_scenarios
 
 # RAG Agent for external knowledge retrieval
 class RAGRetrievalAgent:
     """Agent for retrieving and processing external knowledge sources"""
-    
+
     def __init__(self):
         self.source_aggregator = ExternalSourceAggregator()
         self.content_processor = ContentProcessor()
         self.embedding_service = EmbeddingService()
         self.kg_connector = KnowledgeGraphConnectorAgent()
-    
+
     async def retrieve_domain_context(
         self,
         domain: str,
-        timeframe: str = "last_6_months", 
+        timeframe: str = "last_6_months",
         focus_areas: List[str] = None
     ) -> DomainKnowledgeContext:
         """Retrieve and process domain-specific knowledge"""
-        
+
         # Step 1: Fetch external sources
         external_sources = await self.source_aggregator.fetch_sources(
             domain=domain,
@@ -490,7 +490,7 @@ class RAGRetrievalAgent:
             source_types=["industry_reports", "case_studies", "news_articles"],
             focus_keywords=focus_areas
         )
-        
+
         # Step 2: Process and extract key insights
         processed_insights = []
         for source in external_sources:
@@ -500,12 +500,12 @@ class RAGRetrievalAgent:
                 focus_areas=focus_areas
             )
             processed_insights.extend(insights)
-        
+
         # Step 3: Generate embeddings for similarity search
         insight_embeddings = await self.embedding_service.generate_embeddings(
             texts=[insight.summary for insight in processed_insights]
         )
-        
+
         # Step 4: Store in knowledge graph for future retrieval
         await self.kg_connector.store_domain_context(
             domain=domain,
@@ -513,7 +513,7 @@ class RAGRetrievalAgent:
             embeddings=insight_embeddings,
             metadata={"timeframe": timeframe, "source_count": len(external_sources)}
         )
-        
+
         return DomainKnowledgeContext(
             domain=domain,
             insights=processed_insights,
@@ -524,17 +524,17 @@ class RAGRetrievalAgent:
 # External Source Aggregator with multiple source types
 class ExternalSourceAggregator:
     """Aggregates content from multiple external sources"""
-    
+
     def __init__(self):
         self.source_adapters = {
             "rss_feeds": RSSFeedAdapter(),
-            "api_sources": APISourceAdapter(), 
+            "api_sources": APISourceAdapter(),
             "web_scraping": WebScrapingAdapter(),
             "document_upload": DocumentUploadAdapter()
         }
         self.content_filter = ContentFilter()
         self.rate_limiter = RateLimiter()
-    
+
     async def fetch_sources(
         self,
         domain: str,
@@ -543,13 +543,13 @@ class ExternalSourceAggregator:
         focus_keywords: List[str] = None
     ) -> List[ExternalSource]:
         """Fetch content from multiple source types"""
-        
+
         all_sources = []
-        
+
         for source_type in source_types:
             if source_type in self.source_adapters:
                 adapter = self.source_adapters[source_type]
-                
+
                 # Rate limiting to respect API limits
                 async with self.rate_limiter.acquire(source_type):
                     sources = await adapter.fetch_content(
@@ -557,20 +557,20 @@ class ExternalSourceAggregator:
                         timeframe=timeframe,
                         keywords=focus_keywords
                     )
-                    
+
                     # Filter for quality and relevance
                     filtered_sources = await self.content_filter.filter_sources(
                         sources=sources,
                         domain=domain,
                         quality_threshold=0.7
                     )
-                    
+
                     all_sources.extend(filtered_sources)
-        
+
         # Deduplicate and rank by relevance
         deduplicated_sources = await self._deduplicate_sources(all_sources)
         ranked_sources = await self._rank_by_relevance(deduplicated_sources, domain)
-        
+
         return ranked_sources[:50]  # Limit to top 50 sources
 ```
 
@@ -587,39 +587,39 @@ class ExternalSourceAggregator:
 # Location: cognitive-assessment-service/app/agents/novelty_detection_agent.py
 class NoveltyDetectionAgent:
     """Agent for detecting and preventing duplicate scenarios"""
-    
+
     def __init__(self):
         self.embedding_service = EmbeddingService()
         self.similarity_calculator = SimilarityCalculator()
         self.kg_connector = KnowledgeGraphConnectorAgent()
         self.clustering_engine = ClusteringEngine()
-    
+
     async def filter_novel_scenarios(
         self,
         scenarios: List[GeneratedScenario],
         similarity_threshold: float = 0.85
     ) -> List[GeneratedScenario]:
         """Filter scenarios for novelty using multiple approaches"""
-        
+
         # Step 1: Get existing scenario embeddings from knowledge graph
         existing_embeddings = await self.kg_connector.get_scenario_embeddings()
-        
+
         # Step 2: Generate embeddings for new scenarios
         new_scenario_texts = [
             f"{s.title} {s.situation} {' '.join([opt.text for opt in s.options])}"
             for s in scenarios
         ]
         new_embeddings = await self.embedding_service.generate_embeddings(new_scenario_texts)
-        
+
         # Step 3: Calculate similarity with existing scenarios
         novel_scenarios = []
         similarity_matrix = await self.similarity_calculator.calculate_pairwise_similarity(
             new_embeddings, existing_embeddings
         )
-        
+
         for i, scenario in enumerate(scenarios):
             max_similarity = max(similarity_matrix[i]) if similarity_matrix[i] else 0
-            
+
             if max_similarity < similarity_threshold:
                 novel_scenarios.append(scenario)
                 # Store embedding for future comparisons
@@ -628,31 +628,31 @@ class NoveltyDetectionAgent:
                     embedding=new_embeddings[i],
                     similarity_metadata={"max_existing_similarity": max_similarity}
                 )
-        
+
         # Step 4: Cluster-based novelty detection
         clustered_scenarios = await self._cluster_based_novelty_detection(
             novel_scenarios, new_embeddings
         )
-        
+
         return clustered_scenarios
 
 # Content Validation Agent with multiple validation dimensions
 class ContentValidationAgent:
     """Agent for comprehensive scenario content validation"""
-    
+
     def __init__(self):
         self.llm_coordinator = LLMCoordinatorAgent()
         self.bias_detector = BiasDetectionAgent()
         self.quality_assessor = QualityAssessmentAgent()
         self.cultural_validator = CulturalValidationAgent()
-    
+
     async def validate_scenario(
         self,
         scenario: GeneratedScenario,
         validation_criteria: ValidationCriteria
     ) -> ValidationResult:
         """Comprehensive multi-dimensional scenario validation"""
-        
+
         validation_tasks = [
             self._validate_realism(scenario),
             self._validate_clarity(scenario),
@@ -661,19 +661,19 @@ class ContentValidationAgent:
             self._validate_construct_alignment(scenario),
             self._validate_bias_absence(scenario)
         ]
-        
+
         # Run validations in parallel
         validation_results = await asyncio.gather(*validation_tasks)
-        
+
         # Aggregate results
         overall_score = sum(result.score for result in validation_results) / len(validation_results)
-        
+
         passes_validation = (
             overall_score >= validation_criteria.minimum_score and
             all(result.score >= validation_criteria.dimension_thresholds.get(result.dimension, 0.7)
                 for result in validation_results)
         )
-        
+
         return ValidationResult(
             overall_score=overall_score,
             dimension_scores={result.dimension: result.score for result in validation_results},
@@ -681,34 +681,34 @@ class ContentValidationAgent:
             validation_feedback=[result.feedback for result in validation_results],
             quality_metrics=self._calculate_quality_metrics(validation_results)
         )
-    
+
     async def _validate_construct_alignment(self, scenario: GeneratedScenario) -> DimensionValidationResult:
         """Validate that scenario actually tests the intended psychological construct"""
-        
+
         validation_prompt = f"""
         Evaluate how well this scenario tests the intended psychological construct:
-        
+
         Intended Construct: {scenario.target_construct}
         Construct Description: {scenario.construct_description}
-        
+
         Scenario: {scenario.situation}
         Options: {[f"{i+1}. {opt.text}" for i, opt in enumerate(scenario.options)]}
-        
+
         Rate on a scale of 1-10:
         1. Does the scenario require the target construct for decision-making?
         2. Do the options differentiate between levels of the construct?
         3. Is the construct central to the decision, not peripheral?
         4. Would someone with different levels of this construct choose differently?
-        
+
         Provide specific evidence for your ratings.
         """
-        
+
         validation_response = await self.llm_coordinator.generate_with_validation(
             prompt=validation_prompt,
             expected_format="construct_alignment_validation",
             temperature=0.1
         )
-        
+
         return self._parse_construct_validation(validation_response)
 ```
 
@@ -744,14 +744,14 @@ class ContentValidationAgent:
 # Location: cognitive-assessment-service/app/agents/trait_analysis_agent.py
 class TraitAnalysisAgent:
     """Specialized agent for behavioral trait analysis and annotation"""
-    
+
     def __init__(self):
         self.expert_ontology = ExpertOntologyManager()
         self.llm_coordinator = LLMCoordinatorAgent()
         self.kg_connector = KnowledgeGraphConnectorAgent()
         self.similarity_engine = SimilarityEngine()
         self.annotation_validator = AnnotationValidator()
-    
+
     async def annotate_scenario_with_traits(
         self,
         scenario: AssessmentScenario,
@@ -759,29 +759,29 @@ class TraitAnalysisAgent:
         expert_input: Optional[ExpertAnnotation] = None
     ) -> AnnotatedScenario:
         """Multi-modal trait annotation for assessment scenarios"""
-        
+
         annotation_strategies = []
-        
+
         # Strategy 1: Expert ontology-based annotation
         if annotation_mode in ["expert", "hybrid"]:
             expert_annotations = await self._apply_expert_ontology(scenario)
             annotation_strategies.append(("expert", expert_annotations))
-        
+
         # Strategy 2: AI-assisted annotation
         if annotation_mode in ["ai_assisted", "hybrid"]:
             ai_annotations = await self._ai_assisted_annotation(scenario)
             annotation_strategies.append(("ai_assisted", ai_annotations))
-        
+
         # Strategy 3: Similarity-based transfer
         if annotation_mode in ["similarity", "hybrid"]:
             similarity_annotations = await self._similarity_based_annotation(scenario)
             annotation_strategies.append(("similarity", similarity_annotations))
-        
+
         # Strategy 4: Graph-based discovery
         if annotation_mode in ["graph_discovery", "hybrid"]:
             graph_annotations = await self._graph_based_annotation(scenario)
             annotation_strategies.append(("graph_discovery", graph_annotations))
-        
+
         # Merge and validate annotations
         merged_annotations = await self._merge_annotation_strategies(annotation_strategies)
         validated_annotations = await self.annotation_validator.validate_annotations(
@@ -789,7 +789,7 @@ class TraitAnalysisAgent:
             annotations=merged_annotations,
             confidence_threshold=0.7
         )
-        
+
         # Store in knowledge graph
         storage_result = await self.kg_connector.store_trait_annotations(
             scenario_id=scenario.id,
@@ -800,7 +800,7 @@ class TraitAnalysisAgent:
                 "validation_timestamp": datetime.utcnow().isoformat()
             }
         )
-        
+
         return AnnotatedScenario(
             scenario=scenario,
             trait_annotations=validated_annotations,
@@ -810,73 +810,73 @@ class TraitAnalysisAgent:
 
     async def _ai_assisted_annotation(self, scenario: AssessmentScenario) -> AITraitAnnotations:
         """AI-powered trait annotation using structured LLM analysis"""
-        
+
         # Load founder-specific trait taxonomy
         trait_taxonomy = await self.expert_ontology.get_founder_trait_taxonomy()
-        
+
         annotation_prompt = f"""
         Analyze this founder assessment scenario and annotate each response option with the behavioral traits it reveals.
-        
+
         Scenario Context: {scenario.context}
         Decision Situation: {scenario.situation}
-        
+
         Response Options:
         {self._format_options_for_analysis(scenario.options)}
-        
+
         Available Trait Categories:
         {self._format_trait_taxonomy(trait_taxonomy)}
-        
+
         For each option, identify:
         1. Primary traits revealed (confidence 0-1)
-        2. Secondary traits indicated 
+        2. Secondary traits indicated
         3. Reasoning pattern implications (analytical/intuitive/heuristic)
         4. Risk profile indicators
         5. Leadership style implications
         6. Decision-making approach indicators
-        
+
         Format as structured JSON with trait mappings, confidence scores, and evidence.
         Focus on founder-specific behavioral patterns and startup-relevant decision-making styles.
         """
-        
+
         annotation_result = await self.llm_coordinator.generate_structured_response(
             prompt=annotation_prompt,
             response_schema=TraitAnnotationSchema,
             temperature=0.2,
             validation_checks=["trait_validity", "confidence_consistency", "evidence_quality"]
         )
-        
+
         return self._parse_ai_trait_annotations(annotation_result, scenario)
 
 # Graph Discovery Agent for trait pattern mining
 class GraphDiscoveryAgent:
     """Agent for discovering trait patterns through graph analysis"""
-    
+
     def __init__(self):
         self.kg_connector = KnowledgeGraphConnectorAgent()
         self.graph_analyzer = GraphAnalysisEngine()
         self.pattern_miner = PatternMiningEngine()
         self.community_detector = CommunityDetectionEngine()
-    
+
     async def discover_emergent_trait_patterns(
         self,
         assessment_id: str,
         discovery_config: PatternDiscoveryConfig
     ) -> EmergentTraitPatterns:
         """Discover new trait patterns from response data using graph analysis"""
-        
+
         # Step 1: Build trait co-occurrence graph
         trait_graph = await self.kg_connector.build_trait_cooccurrence_graph(
             assessment_id=assessment_id,
             minimum_cooccurrence=discovery_config.min_cooccurrence
         )
-        
+
         # Step 2: Apply community detection algorithms
         communities = await self.community_detector.detect_trait_communities(
             graph=trait_graph,
             algorithm="leiden",  # More robust than Louvain
             resolution_parameter=discovery_config.resolution
         )
-        
+
         # Step 3: Analyze each community for coherent patterns
         emergent_patterns = []
         for community in communities:
@@ -885,7 +885,7 @@ class GraphDiscoveryAgent:
                 assessment_data=await self.kg_connector.get_community_response_data(community),
                 coherence_threshold=discovery_config.coherence_threshold
             )
-            
+
             if pattern_analysis.coherence_score > discovery_config.coherence_threshold:
                 emergent_patterns.append(EmergentTraitPattern(
                     pattern_id=f"emergent_{assessment_id}_{community.id}",
@@ -896,13 +896,13 @@ class GraphDiscoveryAgent:
                     supporting_evidence=pattern_analysis.evidence,
                     frequency=community.size / trait_graph.total_nodes
                 ))
-        
+
         # Step 4: Validate patterns using graph metrics
         validated_patterns = await self._validate_emergent_patterns(
             patterns=emergent_patterns,
             validation_metrics=["modularity", "silhouette_score", "stability"]
         )
-        
+
         return EmergentTraitPatterns(
             assessment_id=assessment_id,
             discovered_patterns=validated_patterns,
@@ -916,14 +916,14 @@ class GraphDiscoveryAgent:
 # Response Analysis Agent with multi-modal analysis
 class ResponseAnalysisAgent:
     """Agent for comprehensive response analysis and behavioral extraction"""
-    
+
     def __init__(self):
         self.llm_coordinator = LLMCoordinatorAgent()
         self.bias_detector = CognitiveBiasDetector()
         self.reasoning_classifier = ReasoningPatternClassifier()
         self.confidence_calibrator = ConfidenceCalibrator()
         self.kg_connector = KnowledgeGraphConnectorAgent()
-    
+
     async def analyze_candidate_response(
         self,
         scenario: AnnotatedScenario,
@@ -931,10 +931,10 @@ class ResponseAnalysisAgent:
         analysis_depth: str = "comprehensive"  # basic, standard, comprehensive, deep
     ) -> ComprehensiveResponseAnalysis:
         """Multi-dimensional analysis of candidate responses"""
-        
+
         analysis_pipeline = self._configure_analysis_pipeline(analysis_depth)
         analysis_results = {}
-        
+
         # Execute analysis pipeline
         for analysis_type, analyzer in analysis_pipeline.items():
             try:
@@ -943,25 +943,25 @@ class ResponseAnalysisAgent:
             except Exception as e:
                 logger.error(f"Analysis failed for {analysis_type}: {e}")
                 analysis_results[analysis_type] = self._create_fallback_result(analysis_type)
-        
+
         # Synthesize results
         synthesized_analysis = await self._synthesize_analysis_results(
             analysis_results, scenario, response
         )
-        
+
         # Update candidate profile in real-time
         profile_update = await self._generate_profile_updates(
             candidate_id=response.candidate_id,
             analysis=synthesized_analysis,
             scenario_context=scenario
         )
-        
+
         await self.kg_connector.update_candidate_behavioral_profile(
             candidate_id=response.candidate_id,
             profile_updates=profile_update,
             analysis_metadata=synthesized_analysis.metadata
         )
-        
+
         return ComprehensiveResponseAnalysis(
             response_id=response.id,
             scenario_id=scenario.id,
@@ -974,63 +974,63 @@ class ResponseAnalysisAgent:
 
     def _configure_analysis_pipeline(self, depth: str) -> Dict[str, ResponseAnalyzer]:
         """Configure analysis pipeline based on depth requirements"""
-        
+
         base_pipeline = {
             "reasoning_pattern": self.reasoning_classifier,
             "cognitive_bias": self.bias_detector,
             "trait_indicators": TraitIndicatorExtractor()
         }
-        
+
         if depth in ["standard", "comprehensive", "deep"]:
             base_pipeline.update({
                 "decision_style": DecisionStyleClassifier(),
                 "confidence_analysis": ConfidenceAnalyzer(),
                 "consistency_check": ConsistencyChecker()
             })
-        
+
         if depth in ["comprehensive", "deep"]:
             base_pipeline.update({
                 "emotional_indicators": EmotionalIndicatorExtractor(),
                 "stress_response": StressResponseAnalyzer(),
                 "time_pressure_analysis": TimePressureAnalyzer()
             })
-        
+
         if depth == "deep":
             base_pipeline.update({
                 "cognitive_load": CognitiveLoadAssessor(),
                 "metacognitive_awareness": MetacognitiveAnalyzer(),
                 "value_system_indicators": ValueSystemExtractor()
             })
-        
+
         return base_pipeline
 
 # Cognitive Bias Detection with founder-specific patterns
 class CognitiveBiasDetector:
     """Specialized detector for cognitive biases in founder decision-making"""
-    
+
     def __init__(self):
         self.llm_coordinator = LLMCoordinatorAgent()
         self.bias_taxonomy = FounderBiasTaxonomy()
         self.pattern_matcher = BiasPatternMatcher()
-    
+
     async def analyze(self, scenario: AnnotatedScenario, response: CandidateResponse) -> BiasAnalysisResult:
         """Detect cognitive biases specific to founder decision-making contexts"""
-        
+
         # Load founder-specific bias patterns
         founder_biases = await self.bias_taxonomy.get_founder_relevant_biases()
-        
+
         bias_detection_prompt = f"""
         Analyze this founder's decision-making response for cognitive biases:
-        
+
         Scenario Context: {scenario.situation}
         Available Options: {self._format_options(scenario.options)}
         Founder's Choice: {response.selected_option}
         Founder's Reasoning: {response.reasoning}
         Response Time: {response.response_time}s
         Confidence Level: {response.confidence_level}
-        
+
         Analyze for these founder-relevant cognitive biases:
-        
+
         1. Overconfidence Bias: Overestimating chances of success
         2. Confirmation Bias: Seeking information that confirms preexisting beliefs
         3. Anchoring Bias: Over-relying on first piece of information
@@ -1041,35 +1041,35 @@ class CognitiveBiasDetector:
         8. Status Quo Bias: Preferring current state of affairs
         9. Loss Aversion: Preferring avoiding losses over acquiring gains
         10. Survivorship Bias: Focusing on successful examples while ignoring failures
-        
+
         For each detected bias:
         - Provide specific evidence from the response
-        - Rate severity (Low/Medium/High) 
+        - Rate severity (Low/Medium/High)
         - Assess impact on decision quality
         - Suggest awareness interventions
-        
+
         Consider founder-specific contexts: uncertainty, resource constraints, stakeholder pressure.
         """
-        
+
         bias_analysis = await self.llm_coordinator.generate_structured_response(
             prompt=bias_detection_prompt,
             response_schema=BiasAnalysisSchema,
             temperature=0.1
         )
-        
+
         # Cross-validate with pattern matching
         pattern_matches = await self.pattern_matcher.detect_bias_patterns(
             response_text=response.reasoning,
             choice_pattern=response.selected_option,
             bias_taxonomy=founder_biases
         )
-        
+
         # Merge LLM analysis with pattern matching
         merged_analysis = await self._merge_bias_detection_results(
             llm_analysis=bias_analysis,
             pattern_matches=pattern_matches
         )
-        
+
         return BiasAnalysisResult(
             detected_biases=merged_analysis.biases,
             severity_distribution=merged_analysis.severity_stats,
@@ -1092,19 +1092,19 @@ class CognitiveBiasDetector:
 # Location: knowledge-graph-builder/app/services/trait_graph_service.py
 class TraitGraphService:
     """Extended KG Builder service for trait-specific graph operations"""
-    
+
     def __init__(self, neo4j_client: Neo4jClient):
         self.neo4j_client = neo4j_client
         self.graph_algorithms = GraphAlgorithmsService()
         self.community_detector = CommunityDetectionService()
-    
+
     async def build_trait_cooccurrence_graph(
         self,
         assessment_id: str,
         minimum_cooccurrence: int = 5
     ) -> TraitCooccurrenceGraph:
         """Build graph of trait co-occurrences for pattern discovery"""
-        
+
         # Cypher query to build co-occurrence relationships
         cooccurrence_query = """
         MATCH (a:Assessment {id: $assessment_id})-[:CONTAINS]->(s:Scenario)
@@ -1113,16 +1113,16 @@ class TraitGraphService:
         WHERE t1 <> t2
         WITH t1, t2, count(*) as cooccurrence_count
         WHERE cooccurrence_count >= $minimum_cooccurrence
-        
+
         CREATE (t1)-[r:CO_OCCURS_WITH {
             strength: cooccurrence_count,
             assessment_id: $assessment_id,
             created_at: datetime()
         }]->(t2)
-        
+
         RETURN t1, t2, r
         """
-        
+
         result = await self.neo4j_client.run_query(
             cooccurrence_query,
             parameters={
@@ -1130,16 +1130,16 @@ class TraitGraphService:
                 "minimum_cooccurrence": minimum_cooccurrence
             }
         )
-        
+
         # Build graph representation
         graph = TraitCooccurrenceGraph()
         for record in result:
             graph.add_edge(
                 source=record["t1"]["name"],
-                target=record["t2"]["name"], 
+                target=record["t2"]["name"],
                 weight=record["r"]["strength"]
             )
-        
+
         return graph
 
     async def detect_trait_communities(
@@ -1149,7 +1149,7 @@ class TraitGraphService:
         resolution: float = 1.0
     ) -> List[TraitCommunity]:
         """Detect communities in trait co-occurrence graph"""
-        
+
         if algorithm == "leiden":
             communities = await self.community_detector.leiden_algorithm(
                 graph=graph,
@@ -1162,10 +1162,10 @@ class TraitGraphService:
             )
         else:
             raise ValueError(f"Unsupported algorithm: {algorithm}")
-        
+
         # Store community results in Neo4j
         await self._store_trait_communities(communities, graph.assessment_id)
-        
+
         return communities
 
     async def calculate_trait_centrality_metrics(
@@ -1173,36 +1173,36 @@ class TraitGraphService:
         assessment_id: str
     ) -> TraitCentralityMetrics:
         """Calculate centrality metrics for traits in assessment context"""
-        
+
         centrality_query = """
         MATCH (a:Assessment {id: $assessment_id})-[:CONTAINS]->(s:Scenario)
         MATCH (s)-[:TESTS_FOR]->(c:Construct)-[:HAS_TRAIT]->(t:Trait)
-        
+
         // Calculate degree centrality
         WITH t, count(DISTINCT s) as degree_centrality
-        
+
         // Calculate betweenness centrality using APOC
         CALL apoc.algo.betweenness(['Trait'], ['CO_OCCURS_WITH'], {write: false})
         YIELD node, score as betweenness_centrality
         WHERE node = t
-        
+
         // Calculate PageRank
         CALL apoc.algo.pageRank(['Trait'], ['CO_OCCURS_WITH'], {write: false})
         YIELD node, score as pagerank_score
         WHERE node = t
-        
+
         RETURN t.name as trait_name,
                degree_centrality,
                betweenness_centrality,
                pagerank_score
         ORDER BY pagerank_score DESC
         """
-        
+
         result = await self.neo4j_client.run_query(
             centrality_query,
             parameters={"assessment_id": assessment_id}
         )
-        
+
         return TraitCentralityMetrics(
             assessment_id=assessment_id,
             trait_metrics=[
@@ -1225,12 +1225,12 @@ async def build_trait_cooccurrence_graph(
 ):
     """Build trait co-occurrence graph for pattern discovery"""
     trait_service = TraitGraphService(neo4j_client)
-    
+
     cooccurrence_graph = await trait_service.build_trait_cooccurrence_graph(
         assessment_id=graph_id,
         minimum_cooccurrence=config.minimum_cooccurrence
     )
-    
+
     return {
         "graph_id": graph_id,
         "nodes": cooccurrence_graph.node_count,
@@ -1247,17 +1247,17 @@ async def detect_trait_communities(
 ):
     """Detect trait communities using graph algorithms"""
     trait_service = TraitGraphService(neo4j_client)
-    
+
     # First build co-occurrence graph
     cooccurrence_graph = await trait_service.build_trait_cooccurrence_graph(graph_id)
-    
+
     # Then detect communities
     communities = await trait_service.detect_trait_communities(
         graph=cooccurrence_graph,
         algorithm=detection_config.algorithm,
         resolution=detection_config.resolution
     )
-    
+
     return {
         "graph_id": graph_id,
         "communities_detected": len(communities),
@@ -1306,31 +1306,31 @@ async def detect_trait_communities(
 # Location: psychometric-service/app/main.py
 class PsychometricService:
     """Dedicated service for psychometric computations and validation"""
-    
+
     def __init__(self):
         self.irt_engine = IRTComputationEngine()
         self.adaptive_engine = AdaptiveTestingEngine()
         self.validation_engine = PsychometricValidationEngine()
         self.kg_connector = KnowledgeGraphConnectorAgent()
         self.model_store = PsychometricModelStore()
-    
+
     async def initialize_service(self):
         """Initialize psychometric service with required components"""
-        
+
         # Load pre-trained models
         await self.model_store.load_base_models()
-        
+
         # Initialize computation engines
         await self.irt_engine.initialize()
         await self.adaptive_engine.initialize()
-        
+
         # Setup model versioning
         await self.model_store.setup_versioning()
 
 # IRT Computation Engine with multiple model support
 class IRTComputationEngine:
     """Engine for Item Response Theory computations"""
-    
+
     def __init__(self):
         self.models = {
             "1pl": OnePLModel(),           # Rasch model
@@ -1342,7 +1342,7 @@ class IRTComputationEngine:
         self.parameter_estimator = ParameterEstimator()
         self.ability_estimator = AbilityEstimator()
         self.model_selector = ModelSelector()
-    
+
     async def estimate_item_parameters(
         self,
         item_responses: ItemResponseMatrix,
@@ -1350,18 +1350,18 @@ class IRTComputationEngine:
         model_type: str = "auto"
     ) -> IRTItemParameters:
         """Estimate IRT parameters for assessment items"""
-        
+
         # Automatic model selection if not specified
         if model_type == "auto":
             model_type = await self.model_selector.select_optimal_model(
                 responses=item_responses,
                 metadata=item_metadata
             )
-        
+
         # Validate model choice
         if model_type not in self.models:
             raise ValueError(f"Unsupported IRT model: {model_type}")
-        
+
         # Estimate parameters using selected model
         model = self.models[model_type]
         parameters = await model.estimate_parameters(
@@ -1370,21 +1370,21 @@ class IRTComputationEngine:
             max_iterations=1000,
             convergence_threshold=1e-6
         )
-        
+
         # Validate parameter estimates
         validation_result = await self._validate_parameter_estimates(
             parameters=parameters,
             responses=item_responses,
             model=model
         )
-        
+
         if not validation_result.valid:
             # Fallback to more robust estimation
             parameters = await self._robust_parameter_estimation(
                 responses=item_responses,
                 model=model
             )
-        
+
         return IRTItemParameters(
             item_id=item_metadata.item_id,
             model_type=model_type,
@@ -1408,11 +1408,11 @@ class IRTComputationEngine:
         estimation_method: str = "eap"  # eap, map, mle
     ) -> PersonAbilityEstimate:
         """Estimate person ability using IRT models"""
-        
+
         # Prepare response pattern and item parameters
         response_vector = person_responses.to_vector()
         parameter_matrix = self._prepare_parameter_matrix(item_parameters)
-        
+
         # Estimate ability based on method
         if estimation_method == "eap":
             ability_estimate = await self.ability_estimator.estimate_eap(
@@ -1431,15 +1431,15 @@ class IRTComputationEngine:
             )
         else:
             raise ValueError(f"Unsupported estimation method: {estimation_method}")
-        
+
         # Calculate measurement precision
         information_function = await self._calculate_test_information(
             ability=ability_estimate.theta,
             parameters=parameter_matrix
         )
-        
+
         standard_error = 1 / np.sqrt(information_function)
-        
+
         return PersonAbilityEstimate(
             person_id=person_responses.person_id,
             theta=ability_estimate.theta,
@@ -1454,13 +1454,13 @@ class IRTComputationEngine:
 # Adaptive Testing Engine with information maximization
 class AdaptiveTestingEngine:
     """Engine for computerized adaptive testing"""
-    
+
     def __init__(self):
         self.item_selector = ItemSelector()
         self.stopping_rules = StoppingRuleEngine()
         self.information_calculator = InformationCalculator()
         self.ability_tracker = AbilityTracker()
-    
+
     async def select_next_item(
         self,
         current_ability_estimate: PersonAbilityEstimate,
@@ -1469,16 +1469,16 @@ class AdaptiveTestingEngine:
         constraints: Optional[AdaptiveConstraints] = None
     ) -> ItemSelectionResult:
         """Select optimal next item for adaptive testing"""
-        
+
         # Apply constraints (content balancing, exposure control)
         eligible_items = await self._apply_constraints(available_items, constraints)
-        
+
         if not eligible_items:
             raise NoEligibleItemsError("No items available after applying constraints")
-        
+
         # Calculate information for each eligible item
         item_information_scores = []
-        
+
         for item in eligible_items:
             if selection_criterion == "maximum_information":
                 info_score = await self.information_calculator.calculate_fisher_information(
@@ -1496,18 +1496,18 @@ class AdaptiveTestingEngine:
                     ability_distribution=current_ability_estimate.posterior_distribution,
                     item_parameters=item
                 )
-            
+
             item_information_scores.append((item, info_score))
-        
+
         # Select item with maximum information
         selected_item, max_information = max(
             item_information_scores,
             key=lambda x: x[1]
         )
-        
+
         # Update item exposure tracking
         await self._update_item_exposure(selected_item.item_id)
-        
+
         return ItemSelectionResult(
             selected_item=selected_item,
             information_gain=max_information,
@@ -1525,37 +1525,37 @@ class AdaptiveTestingEngine:
         test_constraints: TestConstraints
     ) -> StoppingDecision:
         """Determine if adaptive test should terminate"""
-        
+
         current_estimate = person_ability_history[-1]
-        
+
         # Check precision-based stopping
         precision_met = current_estimate.measurement_precision >= test_constraints.target_precision
-        
+
         # Check minimum items administered
         min_items_met = len(person_ability_history) >= test_constraints.minimum_items
-        
+
         # Check maximum items limit
         max_items_reached = len(person_ability_history) >= test_constraints.maximum_items
-        
+
         # Check ability estimate stability
         stability_met = await self._check_ability_stability(
             ability_history=person_ability_history,
             stability_threshold=test_constraints.stability_threshold
         )
-        
+
         # Decision logic
         should_stop = (
             (precision_met and min_items_met and stability_met) or
             max_items_reached
         )
-        
+
         stop_reason = None
         if should_stop:
             if max_items_reached:
                 stop_reason = "maximum_items_reached"
             elif precision_met and min_items_met and stability_met:
                 stop_reason = "precision_and_stability_achieved"
-        
+
         return StoppingDecision(
             should_stop=should_stop,
             reason=stop_reason,
@@ -1567,22 +1567,22 @@ class AdaptiveTestingEngine:
 # Psychometric Validation Engine
 class PsychometricValidationEngine:
     """Engine for comprehensive psychometric validation"""
-    
+
     def __init__(self):
         self.reliability_calculator = ReliabilityCalculator()
         self.validity_analyzer = ValidityAnalyzer()
         self.bias_analyzer = DifferentialItemFunctioningAnalyzer()
         self.fit_assessor = ModelFitAssessor()
-    
+
     async def validate_assessment_psychometrics(
         self,
         assessment_data: AssessmentDataset,
         validation_config: ValidationConfig
     ) -> PsychometricValidationReport:
         """Comprehensive psychometric validation of assessment"""
-        
+
         validation_results = {}
-        
+
         # Reliability analysis
         if "reliability" in validation_config.analyses:
             reliability_results = await self.reliability_calculator.calculate_reliability(
@@ -1590,7 +1590,7 @@ class PsychometricValidationEngine:
                 methods=["cronbach_alpha", "omega", "test_retest", "split_half"]
             )
             validation_results["reliability"] = reliability_results
-        
+
         # Validity analysis
         if "validity" in validation_config.analyses:
             validity_results = await self.validity_analyzer.assess_validity(
@@ -1598,7 +1598,7 @@ class PsychometricValidationEngine:
                 validity_types=["content", "criterion", "construct"]
             )
             validation_results["validity"] = validity_results
-        
+
         # Differential Item Functioning (DIF) analysis
         if "bias" in validation_config.analyses:
             dif_results = await self.bias_analyzer.analyze_dif(
@@ -1607,7 +1607,7 @@ class PsychometricValidationEngine:
                 dif_methods=["mantel_haenszel", "logistic_regression", "lord_chi_square"]
             )
             validation_results["bias"] = dif_results
-        
+
         # Model fit assessment
         if "fit" in validation_config.analyses:
             fit_results = await self.fit_assessor.assess_model_fit(
@@ -1615,10 +1615,10 @@ class PsychometricValidationEngine:
                 fit_indices=["outfit", "infit", "likelihood_ratio", "aic", "bic"]
             )
             validation_results["fit"] = fit_results
-        
+
         # Generate overall quality score
         overall_quality = await self._calculate_overall_quality_score(validation_results)
-        
+
         return PsychometricValidationReport(
             assessment_id=assessment_data.assessment_id,
             validation_results=validation_results,
@@ -1634,12 +1634,12 @@ class PsychometricValidationEngine:
 # Location: cognitive-assessment-service/app/agents/adaptive_testing_agent.py
 class AdaptiveTestingAgent:
     """Agent for coordinating adaptive testing between services"""
-    
+
     def __init__(self):
         self.psychometric_client = PsychometricServiceClient()
         self.kg_connector = KnowledgeGraphConnectorAgent()
         self.session_manager = TestSessionManager()
-    
+
     async def conduct_adaptive_assessment(
         self,
         candidate_id: str,
@@ -1647,20 +1647,20 @@ class AdaptiveTestingAgent:
         adaptive_config: AdaptiveTestingConfig
     ) -> AdaptiveAssessmentResult:
         """Conduct full adaptive assessment session"""
-        
+
         # Initialize test session
         session = await self.session_manager.create_session(
             candidate_id=candidate_id,
             assessment_id=assessment_id,
             config=adaptive_config
         )
-        
+
         # Get initial item parameters from knowledge graph
         available_items = await self.kg_connector.get_assessment_items(assessment_id)
-        
+
         # Convert to IRT parameters
         irt_parameters = await self._convert_to_irt_parameters(available_items)
-        
+
         # Initialize ability estimate
         current_ability = PersonAbilityEstimate(
             person_id=candidate_id,
@@ -1668,9 +1668,9 @@ class AdaptiveTestingAgent:
             standard_error=1.0,
             measurement_precision=0.0
         )
-        
+
         assessment_history = []
-        
+
         while True:
             # Select next optimal item
             item_selection = await self.psychometric_client.select_next_item(
@@ -1678,56 +1678,56 @@ class AdaptiveTestingAgent:
                 available_items=irt_parameters,
                 selection_criterion=adaptive_config.selection_criterion
             )
-            
+
             # Present item to candidate (through UI)
             response = await self._present_item_and_collect_response(
                 session_id=session.id,
                 item=item_selection.selected_item
             )
-            
+
             # Update ability estimate
             updated_ability = await self.psychometric_client.estimate_person_ability(
                 person_responses=session.get_response_pattern(),
                 item_parameters=irt_parameters
             )
-            
+
             current_ability = updated_ability
             assessment_history.append(updated_ability)
-            
+
             # Check stopping criteria
             stopping_decision = await self.psychometric_client.check_stopping_criteria(
                 person_ability_history=assessment_history,
                 test_constraints=adaptive_config.stopping_rules
             )
-            
+
             if stopping_decision.should_stop:
                 break
-        
+
         # Finalize assessment
         final_result = await self._finalize_adaptive_assessment(
             session=session,
             final_ability=current_ability,
             stopping_reason=stopping_decision.reason
         )
-        
+
         return final_result
 
 # Psychometric Service Client for inter-service communication
 class PsychometricServiceClient:
     """Client for communicating with psychometric service"""
-    
+
     def __init__(self):
         self.base_url = settings.PSYCHOMETRIC_SERVICE_URL
         self.http_client = HTTPXClient()
         self.circuit_breaker = CircuitBreaker()
-    
+
     async def estimate_item_parameters(
         self,
         assessment_id: str,
         response_data: List[CandidateResponse]
     ) -> List[IRTItemParameters]:
         """Estimate IRT parameters for assessment items"""
-        
+
         @self.circuit_breaker.protect
         async def _call_psychometric_service():
             response = await self.http_client.post(
@@ -1740,14 +1740,14 @@ class PsychometricServiceClient:
                 }
             )
             return response.json()
-        
+
         result = await _call_psychometric_service()
-        
+
         return [
-            IRTItemParameters.parse_obj(params) 
+            IRTItemParameters.parse_obj(params)
             for params in result["item_parameters"]
         ]
-    
+
     async def select_next_item(
         self,
         current_ability_estimate: PersonAbilityEstimate,
@@ -1755,7 +1755,7 @@ class PsychometricServiceClient:
         selection_criterion: str = "maximum_information"
     ) -> ItemSelectionResult:
         """Select optimal next item for adaptive testing"""
-        
+
         @self.circuit_breaker.protect
         async def _call_item_selection():
             response = await self.http_client.post(
@@ -1767,7 +1767,7 @@ class PsychometricServiceClient:
                 }
             )
             return response.json()
-        
+
         result = await _call_item_selection()
         return ItemSelectionResult.parse_obj(result)
 ```
@@ -1777,11 +1777,11 @@ class PsychometricServiceClient:
 # Location: knowledge-graph-builder/app/services/psychometric_graph_service.py
 class PsychometricGraphService:
     """Extended KG service for psychometric parameter storage and retrieval"""
-    
+
     def __init__(self, neo4j_client: Neo4jClient):
         self.neo4j_client = neo4j_client
         self.parameter_versioning = ParameterVersioning()
-    
+
     async def store_irt_parameters(
         self,
         item_id: str,
@@ -1789,10 +1789,10 @@ class PsychometricGraphService:
         validation_metadata: dict
     ) -> ParameterStorageResult:
         """Store IRT parameters with versioning and validation metadata"""
-        
+
         storage_query = """
         MERGE (item:Item {id: $item_id})
-        
+
         CREATE (params:IRTParameters {
             id: $params_id,
             model_type: $model_type,
@@ -1806,9 +1806,9 @@ class PsychometricGraphService:
             created_at: datetime(),
             version: $version
         })
-        
+
         CREATE (item)-[:HAS_PARAMETERS {version: $version}]->(params)
-        
+
         // Store validation metadata
         CREATE (validation:ValidationMetadata {
             id: $validation_id,
@@ -1818,15 +1818,15 @@ class PsychometricGraphService:
             model_fit: $model_fit,
             validated_at: datetime()
         })
-        
+
         CREATE (params)-[:VALIDATED_BY]->(validation)
-        
+
         RETURN params, validation
         """
-        
+
         params_id = f"irt_params_{item_id}_{parameters.version}"
         validation_id = f"validation_{params_id}"
-        
+
         result = await self.neo4j_client.run_query(
             storage_query,
             parameters={
@@ -1848,7 +1848,7 @@ class PsychometricGraphService:
                 "model_fit": validation_metadata.get("model_fit")
             }
         )
-        
+
         return ParameterStorageResult(
             item_id=item_id,
             parameters_id=params_id,
@@ -1861,17 +1861,17 @@ class PsychometricGraphService:
         assessment_id: str
     ) -> List[IRTItemParameters]:
         """Retrieve current IRT parameters for all items in assessment"""
-        
+
         retrieval_query = """
         MATCH (a:Assessment {id: $assessment_id})-[:CONTAINS]->(s:Scenario)
         MATCH (s)-[:CORRESPONDS_TO]->(item:Item)
         MATCH (item)-[r:HAS_PARAMETERS]->(params:IRTParameters)
-        
+
         // Get latest version for each item
         WITH item, params, r.version as version
         ORDER BY version DESC
         WITH item, collect(params)[0] as latest_params
-        
+
         RETURN item.id as item_id,
                latest_params.model_type as model_type,
                latest_params.difficulty as difficulty,
@@ -1880,12 +1880,12 @@ class PsychometricGraphService:
                latest_params.standard_errors as standard_errors,
                latest_params.version as version
         """
-        
+
         result = await self.neo4j_client.run_query(
             retrieval_query,
             parameters={"assessment_id": assessment_id}
         )
-        
+
         return [
             IRTItemParameters(
                 item_id=record["item_id"],
@@ -1906,11 +1906,11 @@ class PsychometricGraphService:
         ability_history: List[PersonAbilityEstimate]
     ) -> AbilityStorageResult:
         """Store person ability estimates and measurement precision history"""
-        
+
         storage_query = """
         MATCH (c:Candidate {id: $candidate_id})
         MATCH (a:Assessment {id: $assessment_id})
-        
+
         CREATE (session:TestSession {
             id: $session_id,
             candidate_id: $candidate_id,
@@ -1922,10 +1922,10 @@ class PsychometricGraphService:
             final_precision: $final_precision,
             stopping_reason: $stopping_reason
         })
-        
+
         CREATE (c)-[:PARTICIPATED_IN]->(session)
         CREATE (session)-[:FOR_ASSESSMENT]->(a)
-        
+
         // Store ability estimates history
         UNWIND $ability_history as ability_data
         CREATE (estimate:AbilityEstimate {
@@ -1939,14 +1939,14 @@ class PsychometricGraphService:
             estimation_method: ability_data.estimation_method,
             timestamp: ability_data.timestamp
         })
-        
+
         CREATE (session)-[:HAS_ESTIMATE]->(estimate)
-        
+
         RETURN session.id as session_id
         """
-        
+
         session_id = f"session_{candidate_id}_{assessment_id}_{int(time.time())}"
-        
+
         ability_history_data = [
             {
                 "item_number": i + 1,
@@ -1959,7 +1959,7 @@ class PsychometricGraphService:
             }
             for i, estimate in enumerate(ability_history)
         ]
-        
+
         result = await self.neo4j_client.run_query(
             storage_query,
             parameters={
@@ -1974,7 +1974,7 @@ class PsychometricGraphService:
                 "ability_history": ability_history_data
             }
         )
-        
+
         return AbilityStorageResult(
             session_id=session_id,
             estimates_stored=len(ability_history),
@@ -2016,24 +2016,24 @@ class PsychometricGraphService:
 # Location: simulation-service/app/main.py
 class BehavioralSimulationService:
     """Dedicated service for behavioral simulation and prediction"""
-    
+
     def __init__(self):
         self.causal_engine = CausalInferenceEngine()
-        self.simulation_engine = BehavioralSimulationEngine() 
+        self.simulation_engine = BehavioralSimulationEngine()
         self.prediction_engine = BehavioralPredictionEngine()
         self.validation_engine = PredictionValidationEngine()
         self.model_store = BehavioralModelStore()
-    
+
     async def initialize_service(self):
         """Initialize simulation service with required ML libraries"""
-        
+
         # Load pre-trained behavioral models
         await self.model_store.load_founder_behavioral_models()
-        
+
         # Initialize causal inference frameworks
         await self.causal_engine.initialize_dowhy()
         await self.causal_engine.initialize_causalnex()
-        
+
         # Setup simulation frameworks
         await self.simulation_engine.initialize_mesa()
         await self.simulation_engine.initialize_agent_frameworks()
@@ -2041,7 +2041,7 @@ class BehavioralSimulationService:
 # Causal Inference Engine with multiple frameworks
 class CausalInferenceEngine:
     """Engine for causal inference in founder behavioral data"""
-    
+
     def __init__(self):
         self.frameworks = {
             "dowhy": DoWhyFramework(),
@@ -2051,7 +2051,7 @@ class CausalInferenceEngine:
         }
         self.causal_graph_builder = CausalGraphBuilder()
         self.identification_engine = CausalIdentificationEngine()
-    
+
     async def build_founder_causal_model(
         self,
         outcome_variable: str,
@@ -2059,7 +2059,7 @@ class CausalInferenceEngine:
         domain_knowledge: Optional[DomainKnowledge] = None
     ) -> FounderCausalModel:
         """Build causal model for founder behavioral outcomes"""
-        
+
         # Step 1: Build causal graph structure
         if domain_knowledge and domain_knowledge.has_causal_graph():
             causal_graph = domain_knowledge.causal_graph
@@ -2070,14 +2070,14 @@ class CausalInferenceEngine:
                 algorithm="pc_stable",  # PC algorithm with stability selection
                 significance_level=0.05
             )
-        
+
         # Step 2: Validate causal graph with domain expertise
         validated_graph = await self._validate_causal_graph_with_domain_knowledge(
             discovered_graph=causal_graph,
             domain_knowledge=domain_knowledge,
             founder_context=True
         )
-        
+
         # Step 3: Create DoWhy causal model
         dowhy_model = CausalModel(
             data=founder_dataset.to_dataframe(),
@@ -2086,26 +2086,26 @@ class CausalInferenceEngine:
             graph=validated_graph.to_gml(),
             instruments=self._identify_instrumental_variables(founder_dataset)
         )
-        
+
         # Step 4: Identify causal effect
         identified_estimand = dowhy_model.identify_effect(
             proceed_when_unidentifiable=True
         )
-        
+
         # Step 5: Estimate causal effects using multiple methods
         causal_estimates = await self._estimate_causal_effects_multiple_methods(
             model=dowhy_model,
             estimand=identified_estimand,
             dataset=founder_dataset
         )
-        
+
         # Step 6: Validate causal estimates
         validation_results = await self._validate_causal_estimates(
             estimates=causal_estimates,
             model=dowhy_model,
             dataset=founder_dataset
         )
-        
+
         return FounderCausalModel(
             outcome_variable=outcome_variable,
             causal_graph=validated_graph,
@@ -2127,17 +2127,17 @@ class CausalInferenceEngine:
         dataset: FounderDataset
     ) -> List[CausalEstimate]:
         """Estimate causal effects using multiple robust methods"""
-        
+
         estimation_methods = [
             "backdoor.linear_regression",
-            "backdoor.propensity_score_matching", 
+            "backdoor.propensity_score_matching",
             "backdoor.propensity_score_stratification",
             "instrumental_variable.two_stage_least_squares",
             "frontdoor.two_stage_least_squares"
         ]
-        
+
         causal_estimates = []
-        
+
         for method in estimation_methods:
             try:
                 estimate = model.estimate_effect(
@@ -2147,14 +2147,14 @@ class CausalInferenceEngine:
                     treatment_value=1,
                     target_units="ate"  # Average Treatment Effect
                 )
-                
+
                 # Add confidence intervals
                 confidence_intervals = model.estimate_confidence_intervals(
                     estimate=estimate,
                     confidence_level=0.95,
                     num_simulations=1000
                 )
-                
+
                 causal_estimates.append(CausalEstimate(
                     method=method,
                     effect_size=estimate.value,
@@ -2163,20 +2163,20 @@ class CausalInferenceEngine:
                     p_value=estimate.p_value if hasattr(estimate, 'p_value') else None,
                     estimation_metadata=estimate.params if hasattr(estimate, 'params') else {}
                 ))
-                
+
             except Exception as e:
                 logger.warning(f"Causal estimation failed for method {method}: {e}")
                 continue
-        
+
         if not causal_estimates:
             raise CausalEstimationError("All causal estimation methods failed")
-        
+
         return causal_estimates
 
 # Behavioral Simulation Engine with agent-based modeling
 class BehavioralSimulationEngine:
     """Engine for agent-based behavioral simulation"""
-    
+
     def __init__(self):
         self.agent_frameworks = {
             "mesa": MesaAgentFramework(),
@@ -2185,7 +2185,7 @@ class BehavioralSimulationEngine:
         }
         self.founder_agent_factory = FounderAgentFactory()
         self.scenario_engine = ScenarioSimulationEngine()
-    
+
     async def simulate_founder_behavior(
         self,
         founder_profile: ComprehensiveFounderProfile,
@@ -2193,23 +2193,23 @@ class BehavioralSimulationEngine:
         simulation_config: SimulationConfig
     ) -> FounderSimulationResults:
         """Simulate founder behavior across multiple scenarios"""
-        
+
         # Step 1: Create founder agent from profile
         founder_agent = await self.founder_agent_factory.create_founder_agent(
             profile=founder_profile,
             agent_framework=simulation_config.agent_framework
         )
-        
+
         # Step 2: Run simulations for each scenario
         scenario_results = []
-        
+
         for scenario in simulation_scenarios:
             # Create simulation environment
             simulation_env = await self._create_simulation_environment(
                 scenario=scenario,
                 agent_framework=simulation_config.agent_framework
             )
-            
+
             # Run simulation
             simulation_result = await self._run_single_scenario_simulation(
                 founder_agent=founder_agent,
@@ -2217,21 +2217,21 @@ class BehavioralSimulationEngine:
                 scenario=scenario,
                 config=simulation_config
             )
-            
+
             scenario_results.append(simulation_result)
-        
+
         # Step 3: Analyze simulation results for patterns
         behavioral_patterns = await self._analyze_simulation_patterns(
             scenario_results=scenario_results,
             founder_profile=founder_profile
         )
-        
+
         # Step 4: Calculate confidence metrics
         confidence_metrics = await self._calculate_simulation_confidence(
             scenario_results=scenario_results,
             founder_profile=founder_profile
         )
-        
+
         return FounderSimulationResults(
             founder_id=founder_profile.candidate_id,
             simulation_scenarios=simulation_scenarios,
@@ -2253,17 +2253,17 @@ class BehavioralSimulationEngine:
         config: SimulationConfig
     ) -> ScenarioSimulationResult:
         """Run simulation for a single scenario"""
-        
+
         # Initialize simulation
         simulation = environment.create_simulation(
             agents=[founder_agent],
             scenario_parameters=scenario.parameters,
             duration=config.simulation_duration
         )
-        
+
         # Record initial state
         initial_state = founder_agent.get_state()
-        
+
         # Run simulation steps
         simulation_log = []
         for step in range(config.max_steps):
@@ -2277,17 +2277,17 @@ class BehavioralSimulationEngine:
                     "response": response.dict(),
                     "agent_state": founder_agent.get_state()
                 })
-            
+
             # Update environment
             environment.step()
-            
+
             # Check termination conditions
             if environment.is_terminated() or founder_agent.is_terminated():
                 break
-        
+
         # Record final state
         final_state = founder_agent.get_state()
-        
+
         # Analyze simulation results
         behavioral_analysis = await self._analyze_founder_behavior_in_simulation(
             initial_state=initial_state,
@@ -2295,7 +2295,7 @@ class BehavioralSimulationEngine:
             simulation_log=simulation_log,
             scenario=scenario
         )
-        
+
         return ScenarioSimulationResult(
             scenario_id=scenario.id,
             founder_id=founder_agent.founder_id,
@@ -2310,13 +2310,13 @@ class BehavioralSimulationEngine:
 # Prediction Validation Engine with A/B testing
 class PredictionValidationEngine:
     """Engine for validating behavioral predictions through systematic testing"""
-    
+
     def __init__(self):
         self.ab_test_manager = ABTestManager()
         self.side_by_side_comparator = SideBySideComparator()
         self.prediction_tracker = PredictionTracker()
         self.model_updater = ModelUpdater()
-    
+
     async def conduct_prediction_validation_study(
         self,
         founder_pool: List[str],
@@ -2324,62 +2324,62 @@ class PredictionValidationEngine:
         validation_config: ValidationConfig
     ) -> PredictionValidationStudy:
         """Conduct systematic validation of behavioral predictions"""
-        
+
         # Step 1: Create validation groups
         validation_groups = await self._create_validation_groups(
             founder_pool=founder_pool,
             group_size=validation_config.group_size,
             stratification_variables=validation_config.stratification_vars
         )
-        
+
         # Step 2: Generate predictions for all founders
         prediction_results = []
-        
+
         for founder_id in founder_pool:
             founder_profile = await self._get_founder_profile(founder_id)
-            
+
             for scenario in prediction_scenarios:
                 prediction = await self._generate_behavioral_prediction(
                     founder_profile=founder_profile,
                     scenario=scenario
                 )
                 prediction_results.append(prediction)
-        
+
         # Step 3: Collect actual responses
         actual_responses = await self._collect_actual_responses(
             founder_pool=founder_pool,
             scenarios=prediction_scenarios,
             collection_method=validation_config.collection_method
         )
-        
+
         # Step 4: Compare predictions with actuals
         validation_results = []
-        
+
         for prediction in prediction_results:
             matching_actual = self._find_matching_actual_response(
                 prediction, actual_responses
             )
-            
+
             if matching_actual:
                 comparison = await self._compare_prediction_to_actual(
                     prediction=prediction,
                     actual=matching_actual
                 )
                 validation_results.append(comparison)
-        
+
         # Step 5: Analyze validation results
         validation_analysis = await self._analyze_validation_results(
             validation_results=validation_results,
             founder_pool=founder_pool,
             scenarios=prediction_scenarios
         )
-        
+
         # Step 6: Update models based on validation
         model_updates = await self.model_updater.update_models_from_validation(
             validation_results=validation_results,
             improvement_threshold=validation_config.improvement_threshold
         )
-        
+
         return PredictionValidationStudy(
             study_id=f"validation_{int(time.time())}",
             founder_pool=founder_pool,
@@ -2404,9 +2404,9 @@ class PredictionValidationEngine:
         prediction_models: List[str] = ["baseline", "enhanced"]
     ) -> SideBySideComparisonResult:
         """Conduct side-by-side comparison of prediction vs actual response"""
-        
+
         founder_profile = await self._get_founder_profile(founder_id)
-        
+
         # Generate predictions using different models
         model_predictions = {}
         for model_name in prediction_models:
@@ -2416,7 +2416,7 @@ class PredictionValidationEngine:
                 model_name=model_name
             )
             model_predictions[model_name] = prediction
-        
+
         # Present scenario to founder and collect actual response
         actual_response = await self._present_scenario_to_founder(
             founder_id=founder_id,
@@ -2424,7 +2424,7 @@ class PredictionValidationEngine:
             show_predictions=True,  # Show predictions alongside scenario
             prediction_models=model_predictions
         )
-        
+
         # Compare each model's prediction with actual
         comparison_results = {}
         for model_name, prediction in model_predictions.items():
@@ -2434,7 +2434,7 @@ class PredictionValidationEngine:
                 comparison_dimensions=["choice_accuracy", "reasoning_similarity", "confidence_calibration"]
             )
             comparison_results[model_name] = comparison
-        
+
         # Update model performance metrics
         for model_name, comparison in comparison_results.items():
             await self.prediction_tracker.update_model_performance(
@@ -2443,7 +2443,7 @@ class PredictionValidationEngine:
                 scenario_id=prediction_scenario.id,
                 accuracy_metrics=comparison.accuracy_metrics
             )
-        
+
         return SideBySideComparisonResult(
             founder_id=founder_id,
             scenario_id=prediction_scenario.id,
@@ -2492,13 +2492,13 @@ class PredictionValidationEngine:
 # Location: oraclous-core-service/app/tools/implementations/analytics/cognitive_assessment_tool.py
 class CognitiveAssessmentTool(InternalTool):
     """Comprehensive cognitive assessment tool with multi-service coordination"""
-    
+
     def __init__(self, definition: ToolDefinition):
         super().__init__(definition)
         self.service_coordinator = CognitiveAssessmentServiceCoordinator()
         self.credits_calculator = AssessmentCreditsCalculator()
         self.workflow_manager = AssessmentWorkflowManager()
-    
+
     @classmethod
     def get_tool_definition(cls) -> ToolDefinition:
         return ToolDefinition(
@@ -2563,7 +2563,7 @@ class CognitiveAssessmentTool(InternalTool):
                         "type": "string",
                         "enum": [
                             "create_behavioral_assessment",
-                            "analyze_founder_responses", 
+                            "analyze_founder_responses",
                             "predict_founder_performance",
                             "simulate_team_dynamics",
                             "generate_personalized_insights"
@@ -2641,7 +2641,7 @@ class CognitiveAssessmentTool(InternalTool):
                     description="OpenAI API for LLM-powered analysis and generation"
                 ),
                 CredentialRequirement(
-                    provider="anthropic", 
+                    provider="anthropic",
                     required=False,
                     description="Anthropic API for alternative LLM analysis"
                 )
@@ -2655,9 +2655,9 @@ class CognitiveAssessmentTool(InternalTool):
         execution_context: ExecutionContext
     ) -> ExecutionResult:
         """Execute cognitive assessment operations with multi-service coordination"""
-        
+
         action = parameters.get("action")
-        
+
         try:
             # Create workflow for complex multi-service operations
             workflow = await self.workflow_manager.create_assessment_workflow(
@@ -2666,7 +2666,7 @@ class CognitiveAssessmentTool(InternalTool):
                 user_id=user_id,
                 context=execution_context
             )
-            
+
             # Execute based on action type
             if action == "create_behavioral_assessment":
                 result = await self._execute_assessment_creation(parameters, user_id, workflow)
@@ -2680,7 +2680,7 @@ class CognitiveAssessmentTool(InternalTool):
                 result = await self._execute_insights_generation(parameters, user_id, workflow)
             else:
                 raise ValueError(f"Unknown action: {action}")
-            
+
             # Calculate credits consumed across all services
             total_credits = await self.credits_calculator.calculate_total_credits(
                 action=action,
@@ -2688,14 +2688,14 @@ class CognitiveAssessmentTool(InternalTool):
                 result=result,
                 services_used=workflow.services_involved
             )
-            
+
             # Update workflow status
             await self.workflow_manager.complete_workflow(
                 workflow_id=workflow.id,
                 result=result,
                 credits_consumed=total_credits
             )
-            
+
             return ExecutionResult(
                 success=True,
                 data=result,
@@ -2708,7 +2708,7 @@ class CognitiveAssessmentTool(InternalTool):
                     "quality_metrics": result.get("quality_metrics", {})
                 }
             )
-            
+
         except Exception as e:
             logger.error(f"Cognitive assessment execution failed: {e}")
             return ExecutionResult(
@@ -2725,16 +2725,16 @@ class CognitiveAssessmentTool(InternalTool):
         workflow: AssessmentWorkflow
     ) -> Dict[str, Any]:
         """Execute comprehensive assessment creation across services"""
-        
+
         assessment_config = parameters.get("assessment_config", {})
-        
+
         # Step 1: Create assessment structure (Cognitive Assessment Service)
         assessment_result = await self.service_coordinator.create_assessment(
             constructs=assessment_config.get("constructs", []),
             domain=assessment_config.get("domain", "startup_ecosystem"),
             user_id=user_id
         )
-        
+
         # Step 2: Initialize psychometric models (Psychometric Service)
         if assessment_config.get("adaptive_testing", True):
             psychometric_result = await self.service_coordinator.initialize_psychometric_models(
@@ -2742,14 +2742,14 @@ class CognitiveAssessmentTool(InternalTool):
                 constructs=assessment_config.get("constructs", [])
             )
             assessment_result["psychometric_config"] = psychometric_result
-        
+
         # Step 3: Setup behavioral simulation models (Simulation Service)
         simulation_result = await self.service_coordinator.initialize_simulation_models(
             assessment_id=assessment_result["assessment_id"],
             domain=assessment_config.get("domain")
         )
         assessment_result["simulation_config"] = simulation_result
-        
+
         # Step 4: Configure personalization (if specified)
         if "personalization" in assessment_config:
             personalization_result = await self.service_coordinator.configure_personalization(
@@ -2757,17 +2757,17 @@ class CognitiveAssessmentTool(InternalTool):
                 personalization_config=assessment_config["personalization"]
             )
             assessment_result["personalization_config"] = personalization_result
-        
+
         return assessment_result
 
 # Service Coordinator for multi-service workflows
 class CognitiveAssessmentServiceCoordinator:
     """Coordinator for orchestrating operations across multiple assessment services"""
-    
+
     def __init__(self):
         self.service_clients = {
             "assessment": CognitiveAssessmentClient(),
-            "psychometric": PsychometricServiceClient(), 
+            "psychometric": PsychometricServiceClient(),
             "simulation": SimulationServiceClient(),
             "kg_builder": KnowledgeGraphBuilderClient()
         }
@@ -2779,7 +2779,7 @@ class CognitiveAssessmentServiceCoordinator:
             service: RetryPolicy(max_attempts=3, backoff="exponential")
             for service in self.service_clients.keys()
         }
-    
+
     async def create_assessment(
         self,
         constructs: List[str],
@@ -2787,7 +2787,7 @@ class CognitiveAssessmentServiceCoordinator:
         user_id: str
     ) -> Dict[str, Any]:
         """Coordinate assessment creation across services"""
-        
+
         # Create assessment in main service
         assessment_data = await self._call_service_with_resilience(
             service="assessment",
@@ -2798,7 +2798,7 @@ class CognitiveAssessmentServiceCoordinator:
                 "user_id": user_id
             }
         )
-        
+
         # Initialize knowledge graph structure
         kg_result = await self._call_service_with_resilience(
             service="kg_builder",
@@ -2808,11 +2808,11 @@ class CognitiveAssessmentServiceCoordinator:
                 "constructs": constructs
             }
         )
-        
+
         assessment_data["graph_id"] = kg_result["graph_id"]
-        
+
         return assessment_data
-    
+
     async def _call_service_with_resilience(
         self,
         service: str,
@@ -2820,16 +2820,16 @@ class CognitiveAssessmentServiceCoordinator:
         parameters: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Call service method with circuit breaker and retry logic"""
-        
+
         client = self.service_clients[service]
         circuit_breaker = self.circuit_breakers[service]
         retry_policy = self.retry_policies[service]
-        
+
         @circuit_breaker.protect
         @retry_policy.retry
         async def _resilient_call():
             return await getattr(client, method)(**parameters)
-        
+
         try:
             return await _resilient_call()
         except CircuitBreakerOpenError:
@@ -2842,7 +2842,7 @@ class CognitiveAssessmentServiceCoordinator:
 # Credits Calculator for multi-service operations
 class AssessmentCreditsCalculator:
     """Calculator for credits across multiple assessment services"""
-    
+
     def __init__(self):
         self.service_rates = {
             "assessment": {
@@ -2866,7 +2866,7 @@ class AssessmentCreditsCalculator:
             "medium": {"threshold": 50, "discount": 0.10},
             "large": {"threshold": 100, "discount": 0.15}
         }
-    
+
     async def calculate_total_credits(
         self,
         action: str,
@@ -2875,9 +2875,9 @@ class AssessmentCreditsCalculator:
         services_used: List[str]
     ) -> Decimal:
         """Calculate total credits consumed across all services"""
-        
+
         total_credits = Decimal("0.00")
-        
+
         # Calculate credits per service
         for service in services_used:
             service_credits = await self._calculate_service_credits(
@@ -2887,14 +2887,14 @@ class AssessmentCreditsCalculator:
                 result=result
             )
             total_credits += service_credits
-        
+
         # Apply bulk discounts
         if total_credits > Decimal("10.00"):
             discount = self._calculate_bulk_discount(total_credits)
             total_credits *= (Decimal("1.00") - discount)
-        
+
         return total_credits
-    
+
     async def _calculate_service_credits(
         self,
         service: str,
@@ -2903,13 +2903,13 @@ class AssessmentCreditsCalculator:
         result: Dict[str, Any]
     ) -> Decimal:
         """Calculate credits for specific service operations"""
-        
+
         if service not in self.service_rates:
             return Decimal("0.00")
-        
+
         service_rates = self.service_rates[service]
         service_credits = Decimal("0.00")
-        
+
         if service == "assessment":
             if action == "create_behavioral_assessment":
                 scenario_count = result.get("scenarios_generated", 0)
@@ -2917,17 +2917,17 @@ class AssessmentCreditsCalculator:
             elif action == "analyze_founder_responses":
                 response_count = result.get("responses_analyzed", 0)
                 service_credits += Decimal(str(response_count * service_rates["response_analysis"]))
-        
+
         elif service == "psychometric":
             if "adaptive_testing" in result:
                 items_administered = result["adaptive_testing"].get("items_administered", 0)
                 service_credits += Decimal(str(items_administered * service_rates["adaptive_testing"]))
-        
+
         elif service == "simulation":
             if action == "predict_founder_performance":
                 simulations_run = result.get("simulations_run", 0)
                 service_credits += Decimal(str(simulations_run * service_rates["behavioral_simulation"]))
-        
+
         return service_credits
 ```
 
@@ -2936,13 +2936,13 @@ class AssessmentCreditsCalculator:
 # Location: oraclous-core-service/app/workflows/assessment_workflow_manager.py
 class AssessmentWorkflowManager:
     """Manager for complex multi-service assessment workflows"""
-    
+
     def __init__(self):
         self.workflow_store = WorkflowStore()
         self.step_executor = WorkflowStepExecutor()
         self.event_bus = EventBus()
         self.monitoring = WorkflowMonitoring()
-    
+
     async def create_assessment_workflow(
         self,
         action: str,
@@ -2951,9 +2951,9 @@ class AssessmentWorkflowManager:
         context: ExecutionContext
     ) -> AssessmentWorkflow:
         """Create workflow for complex assessment operations"""
-        
+
         workflow_steps = self._define_workflow_steps(action, parameters)
-        
+
         workflow = AssessmentWorkflow(
             id=f"workflow_{action}_{int(time.time())}",
             action=action,
@@ -2964,9 +2964,9 @@ class AssessmentWorkflowManager:
             services_involved=self._identify_services_needed(action, parameters),
             created_at=datetime.utcnow()
         )
-        
+
         await self.workflow_store.save_workflow(workflow)
-        
+
         # Emit workflow creation event
         await self.event_bus.emit(
             event_type="assessment.workflow.created",
@@ -2977,16 +2977,16 @@ class AssessmentWorkflowManager:
                 "estimated_duration": workflow.estimated_duration
             }
         )
-        
+
         return workflow
-    
+
     def _define_workflow_steps(
         self,
         action: str,
         parameters: Dict[str, Any]
     ) -> List[WorkflowStep]:
         """Define workflow steps based on action type"""
-        
+
         if action == "create_behavioral_assessment":
             return [
                 WorkflowStep(
@@ -2997,7 +2997,7 @@ class AssessmentWorkflowManager:
                 ),
                 WorkflowStep(
                     name="initialize_knowledge_graph",
-                    service="kg_builder", 
+                    service="kg_builder",
                     operation="create_assessment_graph",
                     dependencies=["validate_parameters"]
                 ),
@@ -3010,7 +3010,7 @@ class AssessmentWorkflowManager:
                 WorkflowStep(
                     name="setup_psychometrics",
                     service="psychometric",
-                    operation="initialize_irt_models", 
+                    operation="initialize_irt_models",
                     dependencies=["generate_scenarios"]
                 ),
                 WorkflowStep(
@@ -3020,7 +3020,7 @@ class AssessmentWorkflowManager:
                     dependencies=["setup_psychometrics"]
                 )
             ]
-        
+
         elif action == "predict_founder_performance":
             return [
                 WorkflowStep(
@@ -3037,7 +3037,7 @@ class AssessmentWorkflowManager:
                 ),
                 WorkflowStep(
                     name="run_behavioral_simulation",
-                    service="simulation", 
+                    service="simulation",
                     operation="simulate_founder_behavior",
                     dependencies=["build_causal_model"]
                 ),
@@ -3048,34 +3048,34 @@ class AssessmentWorkflowManager:
                     dependencies=["run_behavioral_simulation"]
                 )
             ]
-        
+
         # Add more action types as needed
         return []
-    
+
     async def execute_workflow_step(
         self,
         workflow: AssessmentWorkflow,
         step: WorkflowStep
     ) -> WorkflowStepResult:
         """Execute individual workflow step with monitoring"""
-        
+
         start_time = datetime.utcnow()
-        
+
         try:
             # Check dependencies
             await self._verify_step_dependencies(workflow, step)
-            
+
             # Execute step
             step_result = await self.step_executor.execute_step(
                 workflow=workflow,
                 step=step
             )
-            
+
             # Update workflow state
             await self._update_workflow_step_status(
                 workflow.id, step.name, "completed"
             )
-            
+
             # Emit step completion event
             await self.event_bus.emit(
                 event_type="assessment.workflow.step.completed",
@@ -3085,15 +3085,15 @@ class AssessmentWorkflowManager:
                     "execution_time": (datetime.utcnow() - start_time).total_seconds()
                 }
             )
-            
+
             return step_result
-            
+
         except Exception as e:
             # Mark step as failed
             await self._update_workflow_step_status(
                 workflow.id, step.name, "failed"
             )
-            
+
             # Emit failure event
             await self.event_bus.emit(
                 event_type="assessment.workflow.step.failed",
@@ -3103,7 +3103,7 @@ class AssessmentWorkflowManager:
                     "error": str(e)
                 }
             )
-            
+
             raise WorkflowStepError(f"Step {step.name} failed: {e}")
 ```
 
@@ -3140,24 +3140,24 @@ class AssessmentWorkflowManager:
 # Location: cognitive-assessment-service/app/analytics/advanced_analytics_service.py
 class AdvancedAnalyticsService:
     """Advanced analytics service with real-time bias monitoring and insights"""
-    
+
     def __init__(self):
         self.bias_monitor = RealTimeBiasMonitor()
         self.analytics_engine = AnalyticsEngine()
         self.alert_manager = AlertManager()
         self.dashboard_generator = DashboardGenerator()
         self.kg_connector = KnowledgeGraphConnectorAgent()
-    
+
     async def real_time_assessment_analytics(
         self,
         assessment_id: str,
         analytics_config: AnalyticsConfig
     ) -> RealTimeAnalytics:
         """Generate real-time analytics for ongoing assessments"""
-        
+
         # Collect real-time data from all services
         assessment_data = await self._collect_cross_service_data(assessment_id)
-        
+
         # Generate analytics dashboard
         analytics_results = await asyncio.gather(
             self._calculate_completion_metrics(assessment_data),
@@ -3166,20 +3166,20 @@ class AdvancedAnalyticsService:
             self._assess_prediction_accuracy(assessment_data),
             self._evaluate_psychometric_quality(assessment_data)
         )
-        
+
         # Combine results
         combined_analytics = self._combine_analytics_results(analytics_results)
-        
+
         # Generate alerts if needed
         alerts = await self._check_alert_conditions(combined_analytics)
-        
+
         # Update real-time dashboard
         dashboard_update = await self.dashboard_generator.update_dashboard(
             assessment_id=assessment_id,
             analytics=combined_analytics,
             alerts=alerts
         )
-        
+
         return RealTimeAnalytics(
             assessment_id=assessment_id,
             analytics_timestamp=datetime.utcnow(),
@@ -3195,7 +3195,7 @@ class AdvancedAnalyticsService:
 # Real-time Bias Monitoring with ML-based detection
 class RealTimeBiasMonitor:
     """Real-time monitoring for assessment bias across multiple dimensions"""
-    
+
     def __init__(self):
         self.bias_detectors = {
             "demographic": DemographicBiasDetector(),
@@ -3207,27 +3207,27 @@ class RealTimeBiasMonitor:
         self.ml_bias_detector = MLBiasDetector()
         self.statistical_analyzer = StatisticalBiasAnalyzer()
         self.alert_thresholds = BiasAlertThresholds()
-    
+
     async def monitor_assessment_bias(
         self,
         assessment_id: str,
         time_window: str = "last_24_hours"
     ) -> BiasMonitoringReport:
         """Comprehensive bias monitoring across multiple dimensions"""
-        
+
         # Get recent assessment data
         assessment_data = await self._get_assessment_data(assessment_id, time_window)
-        
+
         if len(assessment_data.responses) < 10:
             return BiasMonitoringReport(
                 assessment_id=assessment_id,
                 status="insufficient_data",
                 message="Insufficient data for bias analysis"
             )
-        
+
         # Run bias detection across all dimensions
         bias_results = {}
-        
+
         for bias_type, detector in self.bias_detectors.items():
             try:
                 bias_result = await detector.detect_bias(
@@ -3242,22 +3242,22 @@ class RealTimeBiasMonitor:
                     status="error",
                     error_message=str(e)
                 )
-        
+
         # ML-based bias detection
         ml_bias_result = await self.ml_bias_detector.detect_algorithmic_bias(
             assessment_data=assessment_data
         )
         bias_results["algorithmic"] = ml_bias_result
-        
+
         # Statistical bias analysis
         statistical_result = await self.statistical_analyzer.analyze_statistical_bias(
             assessment_data=assessment_data
         )
         bias_results["statistical"] = statistical_result
-        
+
         # Aggregate bias score
         overall_bias_score = self._calculate_overall_bias_score(bias_results)
-        
+
         # Generate alerts if bias exceeds thresholds
         alerts = []
         for bias_type, result in bias_results.items():
@@ -3268,14 +3268,14 @@ class RealTimeBiasMonitor:
                     bias_result=result
                 )
                 alerts.append(alert)
-        
+
         # Store bias monitoring results
         await self._store_bias_monitoring_results(
             assessment_id=assessment_id,
             bias_results=bias_results,
             overall_score=overall_bias_score
         )
-        
+
         return BiasMonitoringReport(
             assessment_id=assessment_id,
             monitoring_timestamp=datetime.utcnow(),
@@ -3289,26 +3289,26 @@ class RealTimeBiasMonitor:
 # Demographic Bias Detector with statistical analysis
 class DemographicBiasDetector:
     """Detector for demographic bias in assessment outcomes"""
-    
+
     def __init__(self):
         self.statistical_tests = StatisticalTestSuite()
         self.effect_size_calculator = EffectSizeCalculator()
         self.fairness_metrics = FairnessMetrics()
-    
+
     async def detect_bias(
         self,
         assessment_data: AssessmentData,
         demographic_data: DemographicData
     ) -> BiasDetectionResult:
         """Detect demographic bias using multiple statistical methods"""
-        
+
         # Group performance by demographics
         performance_by_group = self._group_performance_by_demographics(
             assessment_data, demographic_data
         )
-        
+
         bias_indicators = {}
-        
+
         # Test for significant performance differences
         for demographic_category in ["gender", "age_group", "ethnicity", "education_level"]:
             if demographic_category in performance_by_group:
@@ -3317,17 +3317,17 @@ class DemographicBiasDetector:
                     groups=performance_by_group[demographic_category],
                     test_type="kruskal_wallis"  # Non-parametric test
                 )
-                
+
                 # Effect size calculation
                 effect_size = await self.effect_size_calculator.calculate_cohens_d(
                     groups=performance_by_group[demographic_category]
                 )
-                
+
                 # Four-fifths rule compliance
                 four_fifths_result = await self.fairness_metrics.check_four_fifths_rule(
                     groups=performance_by_group[demographic_category]
                 )
-                
+
                 bias_indicators[demographic_category] = DemographicBiasIndicator(
                     category=demographic_category,
                     statistical_significance=significance_result,
@@ -3341,12 +3341,12 @@ class DemographicBiasDetector:
 # Location: cognitive-assessment-service/app/agents/adaptive_testing_agent.py
 class AdaptiveTestingAgent:
     """Agent for coordinating adaptive testing between services"""
-    
+
     def __init__(self):
         self.psychometric_client = PsychometricServiceClient()
         self.kg_connector = KnowledgeGraphConnectorAgent()
         self.session_manager = TestSessionManager()
-    
+
     async def conduct_adaptive_assessment(
         self,
         candidate_id: str,
@@ -3354,20 +3354,20 @@ class AdaptiveTestingAgent:
         adaptive_config: AdaptiveTestingConfig
     ) -> AdaptiveAssessmentResult:
         """Conduct full adaptive assessment session"""
-        
+
         # Initialize test session
         session = await self.session_manager.create_session(
             candidate_id=candidate_id,
             assessment_id=assessment_id,
             config=adaptive_config
         )
-        
+
         # Get initial item parameters from knowledge graph
         available_items = await self.kg_connector.get_assessment_items(assessment_id)
-        
+
         # Convert to IRT parameters
         irt_parameters = await self._convert_to_irt_parameters(available_items)
-        
+
         # Initialize ability estimate
         current_ability = PersonAbilityEstimate(
             person_id=candidate_id,
@@ -3375,9 +3375,9 @@ class AdaptiveTestingAgent:
             standard_error=1.0,
             measurement_precision=0.0
         )
-        
+
         assessment_history = []
-        
+
         while True:
             # Select next optimal item
             item_selection = await self.psychometric_client.select_next_item(
@@ -3385,56 +3385,56 @@ class AdaptiveTestingAgent:
                 available_items=irt_parameters,
                 selection_criterion=adaptive_config.selection_criterion
             )
-            
+
             # Present item to candidate (through UI)
             response = await self._present_item_and_collect_response(
                 session_id=session.id,
                 item=item_selection.selected_item
             )
-            
+
             # Update ability estimate
             updated_ability = await self.psychometric_client.estimate_person_ability(
                 person_responses=session.get_response_pattern(),
                 item_parameters=irt_parameters
             )
-            
+
             current_ability = updated_ability
             assessment_history.append(updated_ability)
-            
+
             # Check stopping criteria
             stopping_decision = await self.psychometric_client.check_stopping_criteria(
                 person_ability_history=assessment_history,
                 test_constraints=adaptive_config.stopping_rules
             )
-            
+
             if stopping_decision.should_stop:
                 break
-        
+
         # Finalize assessment
         final_result = await self._finalize_adaptive_assessment(
             session=session,
             final_ability=current_ability,
             stopping_reason=stopping_decision.reason
         )
-        
+
         return final_result
 
 # Psychometric Service Client for inter-service communication
 class PsychometricServiceClient:
     """Client for communicating with psychometric service"""
-    
+
     def __init__(self):
         self.base_url = settings.PSYCHOMETRIC_SERVICE_URL
         self.http_client = HTTPXClient()
         self.circuit_breaker = CircuitBreaker()
-    
+
     async def estimate_item_parameters(
         self,
         assessment_id: str,
         response_data: List[CandidateResponse]
     ) -> List[IRTItemParameters]:
         """Estimate IRT parameters for assessment items"""
-        
+
         @self.circuit_breaker.protect
         async def _call_psychometric_service():
             response = await self.http_client.post(
@@ -3447,14 +3447,14 @@ class PsychometricServiceClient:
                 }
             )
             return response.json()
-        
+
         result = await _call_psychometric_service()
-        
+
         return [
-            IRTItemParameters.parse_obj(params) 
+            IRTItemParameters.parse_obj(params)
             for params in result["item_parameters"]
         ]
-    
+
     async def select_next_item(
         self,
         current_ability_estimate: PersonAbilityEstimate,
@@ -3462,7 +3462,7 @@ class PsychometricServiceClient:
         selection_criterion: str = "maximum_information"
     ) -> ItemSelectionResult:
         """Select optimal next item for adaptive testing"""
-        
+
         @self.circuit_breaker.protect
         async def _call_item_selection():
             response = await self.http_client.post(
@@ -3474,7 +3474,7 @@ class PsychometricServiceClient:
                 }
             )
             return response.json()
-        
+
         result = await _call_item_selection()
         return ItemSelectionResult.parse_obj(result)
 ```
@@ -3484,16 +3484,16 @@ class PsychometricServiceClient:
 # Location: infrastructure/scaling/horizontal_scaling_manager.py
 class HorizontalScalingManager:
     """Manager for horizontal scaling across assessment services"""
-    
+
     def __init__(self):
         self.kubernetes_client = KubernetesClient()
         self.load_balancer = LoadBalancerManager()
         self.auto_scaler = AutoScalerConfig()
         self.resource_monitor = ResourceMonitor()
-    
+
     async def configure_horizontal_scaling(self) -> ScalingConfiguration:
         """Configure horizontal scaling for all assessment services"""
-        
+
         scaling_configs = {
             "cognitive-assessment-service": {
                 "min_replicas": 2,
@@ -3516,13 +3516,13 @@ class HorizontalScalingManager:
                 "max_replicas": 8,
                 "target_cpu_utilization": 80,
                 "target_memory_utilization": 85,
-                "scale_up_policy": "moderate", 
+                "scale_up_policy": "moderate",
                 "scale_down_policy": "slow"
             }
         }
-        
+
         scaling_deployments = []
-        
+
         for service, config in scaling_configs.items():
             deployment = await self.kubernetes_client.configure_horizontal_pod_autoscaler(
                 service_name=service,
@@ -3540,7 +3540,7 @@ class HorizontalScalingManager:
                         }
                     },
                     {
-                        "type": "Resource", 
+                        "type": "Resource",
                         "resource": {
                             "name": "memory",
                             "target": {
@@ -3565,7 +3565,7 @@ class HorizontalScalingManager:
                         "stabilizationWindowSeconds": 300,
                         "policies": [
                             {
-                                "type": "Percent", 
+                                "type": "Percent",
                                 "value": 10 if config["scale_down_policy"] == "conservative" else 25,
                                 "periodSeconds": 60
                             }
@@ -3574,7 +3574,7 @@ class HorizontalScalingManager:
                 }
             )
             scaling_deployments.append(deployment)
-        
+
         return ScalingConfiguration(
             configured_services=list(scaling_configs.keys()),
             scaling_deployments=scaling_deployments,
@@ -3589,7 +3589,7 @@ version: '3.8'
 services:
   # Assessment Services
   cognitive-assessment-service:
-    build: 
+    build:
       context: ./cognitive-assessment-service
       dockerfile: Dockerfile.prod
     ports:
@@ -3820,14 +3820,14 @@ networks:
 # Location: cognitive-assessment-service/app/agents/personalization_agent.py
 class AssessmentPersonalizationAgent:
     """Agent for personalizing assessments based on evaluator requirements"""
-    
+
     def __init__(self):
         self.trait_prioritizer = TraitPriorizationEngine()
         self.scenario_adapter = ScenarioAdaptationEngine()
         self.evaluator_profiler = EvaluatorProfiler()
         self.role_context_analyzer = RoleContextAnalyzer()
         self.kg_connector = KnowledgeGraphConnectorAgent()
-    
+
     async def create_personalized_assessment_config(
         self,
         assessment_id: str,
@@ -3836,41 +3836,41 @@ class AssessmentPersonalizationAgent:
         evaluation_objectives: List[str] = None
     ) -> PersonalizedAssessmentConfig:
         """Create personalized assessment configuration based on evaluator needs"""
-        
+
         # Step 1: Analyze evaluator requirements
         evaluator_analysis = await self.evaluator_profiler.analyze_evaluator_requirements(
             evaluator_profile=evaluator_profile,
             role_context=role_context,
             objectives=evaluation_objectives
         )
-        
+
         # Step 2: Map evaluator priorities to psychological constructs
         construct_prioritization = await self.trait_prioritizer.map_priorities_to_constructs(
             evaluator_priorities=evaluator_analysis.priority_areas,
             role_requirements=role_context.role_requirements if role_context else [],
             domain_context=evaluator_profile.domain_expertise
         )
-        
+
         # Step 3: Configure scenario selection weights
         scenario_weights = await self.scenario_adapter.calculate_scenario_weights(
             construct_priorities=construct_prioritization,
             evaluator_preferences=evaluator_analysis.assessment_preferences,
             time_constraints=evaluator_profile.time_constraints
         )
-        
+
         # Step 4: Set adaptive testing thresholds
         adaptive_thresholds = await self._configure_adaptive_thresholds(
             precision_requirements=evaluator_analysis.precision_requirements,
             time_constraints=evaluator_profile.time_constraints,
             decision_criticality=role_context.decision_criticality if role_context else "medium"
         )
-        
+
         # Step 5: Configure bias monitoring sensitivity
         bias_monitoring_config = await self._configure_bias_monitoring(
             evaluator_profile=evaluator_profile,
             regulatory_requirements=evaluator_analysis.regulatory_requirements
         )
-        
+
         # Store personalization config
         storage_result = await self.kg_connector.store_personalization_config(
             assessment_id=assessment_id,
@@ -3884,7 +3884,7 @@ class AssessmentPersonalizationAgent:
                 bias_monitoring=bias_monitoring_config
             )
         )
-        
+
         return PersonalizedAssessmentConfig(
             config_id=storage_result.config_id,
             assessment_id=assessment_id,
@@ -3908,7 +3908,7 @@ class InvestorEvaluatorTemplate:
     """Template for investor-specific evaluation requirements"""
     async def get_base_requirements(self) -> BaseEvaluatorRequirements:
         """Get base requirements for investor evaluation"""
-    
+
         return BaseEvaluatorRequirements(
             priority_areas=[
                 "market_opportunity_assessment",    # Can they identify and size opportunities?
@@ -3958,28 +3958,28 @@ def __init__(self):
         personalization_config: PersonalizedAssessmentConfig
     ) -> OptimalScenarioSelection:
         """Select next scenario to maximize information gain while respecting personalization"""
-        
+
         # Step 1: Analyze current assessment state
         assessment_state = await self._analyze_current_assessment_state(
             candidate_id=candidate_id,
             completed_responses=completed_responses,
             personalization_config=personalization_config
         )
-        
+
         # Step 2: Calculate trait certainty levels
         trait_certainty = await self.uncertainty_tracker.calculate_trait_certainty(
             candidate_id=candidate_id,
             responses=completed_responses,
             target_constructs=personalization_config.construct_priorities
         )
-        
+
         # Step 3: Identify assessment blind spots
         blind_spots = await self.blind_spot_detector.identify_blind_spots(
             trait_certainty=trait_certainty,
             priority_constructs=personalization_config.construct_priorities,
             assessment_progress=assessment_state.progress_metrics
         )
-        
+
         # Step 4: Calculate information gain for scenario selection strategies
         selection_strategies = await self._evaluate_selection_strategies(
             blind_spots=blind_spots,
@@ -3987,13 +3987,13 @@ def __init__(self):
             personalization_config=personalization_config,
             assessment_state=assessment_state
         )
-        
+
         # Step 5: Select optimal strategy and generate/select scenario
         optimal_strategy = max(
             selection_strategies,
             key=lambda s: s.expected_information_gain
         )
-        
+
         if optimal_strategy.strategy_type == "blind_spot_exploration":
             selected_scenario = await self._generate_blind_spot_scenario(
                 candidate_id=candidate_id,
@@ -4012,7 +4012,7 @@ def __init__(self):
                 trait_patterns=assessment_state.observed_patterns,
                 personalization_config=personalization_config
             )
-        
+
         return OptimalScenarioSelection(
             scenario=selected_scenario,
             selection_strategy=optimal_strategy,
@@ -4029,45 +4029,45 @@ def __init__(self):
         personalization_config: PersonalizedAssessmentConfig
     ) -> AssessmentScenario:
         """Generate scenario specifically targeting identified blind spots"""
-        
+
         # Get candidate's response patterns
         response_patterns = await self.kg_connector.get_candidate_response_patterns(candidate_id)
-        
+
         # Get evaluator context for scenario customization
         evaluator_context = personalization_config.evaluator_profile.domain_expertise
-        
+
         blind_spot_scenario_prompt = f"""
         Generate a founder assessment scenario specifically designed to resolve this assessment blind spot:
-        
+
         Blind Spot Type: {blind_spot.blind_spot_type}
         Uncertain Traits: {blind_spot.uncertain_traits}
         Ambiguity Level: {blind_spot.ambiguity_score}
-        
+
         Candidate's Established Patterns:
         - Dominant Decision Style: {response_patterns.dominant_decision_style}
         - Risk Approach: {response_patterns.risk_approach}
         - Communication Pattern: {response_patterns.communication_style}
-        
+
         Evaluator Context: {evaluator_context}
-        
+
         Create a scenario that:
         1. Forces clear differentiation between {' vs '.join(blind_spot.uncertain_traits)}
         2. Cannot be solved using their established pattern: {response_patterns.dominant_decision_style}
         3. Requires demonstration of the uncertain trait in a realistic {evaluator_context} context
         4. Has clear behavioral implications for each response option
         5. Is culturally neutral and bias-free
-        
-        The scenario should be specific enough that different levels of the uncertain trait 
+
+        The scenario should be specific enough that different levels of the uncertain trait
         would lead to clearly different choices, but realistic enough to engage the candidate.
         """
-        
+
         scenario_result = await self.scenario_generator.generate_targeted_scenario(
             prompt=blind_spot_scenario_prompt,
             target_constructs=blind_spot.uncertain_traits,
             domain_context=evaluator_context,
             difficulty_level="adaptive"
         )
-        
+
         return scenario_result
 
 ```
@@ -4097,11 +4097,11 @@ class ExternalDataIntegrationAgent:
         validation_config: ExternalDataValidationConfig
     ) -> EnrichedFounderProfile:
         """Integrate and validate external data sources for comprehensive profiling"""
-        
+
         # Step 1: Process each data source
         processed_insights = {}
         processing_errors = {}
-        
+
         for source_type, raw_data in external_data_sources.items():
             if source_type in self.data_processors:
                 try:
@@ -4114,30 +4114,30 @@ class ExternalDataIntegrationAgent:
                 except Exception as e:
                     logger.error(f"Failed to process {source_type} data: {e}")
                     processing_errors[source_type] = str(e)
-        
+
         # Step 2: Validate consistency across sources
         consistency_analysis = await self.consistency_validator.validate_cross_source_consistency(
             processed_insights=processed_insights,
             validation_config=validation_config
         )
-        
+
         # Step 3: Synthesize insights across sources
         synthesized_profile = await self.insight_synthesizer.synthesize_cross_source_insights(
             processed_insights=processed_insights,
             consistency_analysis=consistency_analysis,
             synthesis_strategy="weighted_consensus"
         )
-        
+
         # Step 4: Get baseline assessment profile for comparison
         baseline_profile = await self.kg_connector.get_candidate_assessment_profile(candidate_id)
-        
+
         # Step 5: Merge external insights with assessment data
         enriched_profile = await self._merge_external_with_assessment_data(
             baseline_profile=baseline_profile,
             external_insights=synthesized_profile,
             consistency_analysis=consistency_analysis
         )
-        
+
         # Step 6: Store enriched profile
         storage_result = await self.kg_connector.store_enriched_founder_profile(
             candidate_id=candidate_id,
@@ -4149,7 +4149,7 @@ class ExternalDataIntegrationAgent:
                 "enrichment_timestamp": datetime.utcnow().isoformat()
             }
         )
-        
+
         return EnrichedFounderProfile(
             candidate_id=candidate_id,
             baseline_profile=baseline_profile,
@@ -4168,7 +4168,7 @@ class ExternalDataIntegrationAgent:
 # Evaluator Profiler for different types of evaluators
 class EvaluatorProfiler:
     """Profiler for understanding different types of evaluators and their needs"""
-    
+
     def __init__(self):
         self.evaluator_templates = {
             "investor": InvestorEvaluatorTemplate(),
@@ -4178,7 +4178,7 @@ class EvaluatorProfiler:
             "peer_founder": PeerFounderEvaluatorTemplate()
         }
         self.requirement_analyzer = RequirementAnalyzer()
-    
+
     async def analyze_evaluator_requirements(
         self,
         evaluator_profile: EvaluatorProfile,
@@ -4186,26 +4186,26 @@ class EvaluatorProfiler:
         objectives: List[str] = None
     ) -> EvaluatorAnalysis:
         """Analyze evaluator requirements and preferences"""
-        
+
         # Determine evaluator type
         evaluator_type = await self._classify_evaluator_type(evaluator_profile)
-        
+
         # Get evaluator template
         if evaluator_type in self.evaluator_templates:
             template = self.evaluator_templates[evaluator_type]
             base_requirements = await template.get_base_requirements()
         else:
             base_requirements = await self._derive_custom_requirements(evaluator_profile)
-        
+
         # Analyze specific objectives if provided
         objective_analysis = None
         if objectives:
-            objective_        
+            objective_
         # Calculate overall demographic bias severity
         overall_severity = max(
             indicator.bias_severity for indicator in bias_indicators.values()
         ) if bias_indicators else 0.0
-        
+
         return BiasDetectionResult(
             bias_type="demographic",
             severity=overall_severity,
@@ -4217,16 +4217,16 @@ class EvaluatorProfiler:
 # Performance Optimization Framework
 class PerformanceOptimizationFramework:
     """Framework for optimizing performance across all assessment services"""
-    
+
     def __init__(self):
         self.cache_optimizer = MultiServiceCacheOptimizer()
         self.query_optimizer = QueryOptimizer()
         self.load_balancer = AssessmentLoadBalancer()
         self.scaling_manager = HorizontalScalingManager()
-    
+
     async def optimize_assessment_ecosystem_performance(self):
         """Optimize performance across the entire assessment ecosystem"""
-        
+
         optimization_tasks = [
             self._optimize_caching_strategy(),
             self._optimize_database_queries(),
@@ -4234,9 +4234,9 @@ class PerformanceOptimizationFramework:
             self._optimize_resource_allocation(),
             self._setup_horizontal_scaling()
         ]
-        
+
         optimization_results = await asyncio.gather(*optimization_tasks)
-        
+
         return PerformanceOptimizationResults(
             caching_optimization=optimization_results[0],
             query_optimization=optimization_results[1],
@@ -4245,10 +4245,10 @@ class PerformanceOptimizationFramework:
             scaling_optimization=optimization_results[4],
             overall_improvement=self._calculate_overall_improvement(optimization_results)
         )
-    
+
     async def _optimize_caching_strategy(self) -> CacheOptimizationResult:
         """Implement multi-level caching across services"""
-        
+
         cache_layers = {
             "level_1_redis": {
                 "services": ["assessment", "psychometric", "simulation"],
@@ -4274,9 +4274,9 @@ class PerformanceOptimizationFramework:
                 }
             }
         }
-        
+
         cache_setup_results = []
-        
+
         for cache_level, config in cache_layers.items():
             setup_result = await self.cache_optimizer.setup_cache_layer(
                 cache_type=cache_level,
@@ -4284,12 +4284,12 @@ class PerformanceOptimizationFramework:
                 ttl_config=config["ttl_config"]
             )
             cache_setup_results.append(setup_result)
-        
+
         # Setup cache invalidation strategies
         invalidation_strategy = await self.cache_optimizer.setup_cache_invalidation(
             strategies=["time_based", "event_driven", "dependency_based"]
         )
-        
+
         return CacheOptimizationResult(
             cache_layers_configured=len(cache_layers),
             setup_results=cache_setup_results,
@@ -4300,44 +4300,44 @@ class PerformanceOptimizationFramework:
 # Compliance Monitoring Framework
 class ComplianceMonitoringFramework:
     """Unified compliance monitoring across all assessment services"""
-    
+
     def __init__(self):
         self.gdpr_monitor = GDPRComplianceMonitor()
         self.ai_act_monitor = EUAIActComplianceMonitor()
         self.eeoc_monitor = EEOCComplianceMonitor()
         self.audit_logger = ComplianceAuditLogger()
         self.alert_manager = ComplianceAlertManager()
-    
+
     async def continuous_compliance_monitoring(self) -> ComplianceMonitoringResult:
         """Continuous monitoring of all regulatory compliance requirements"""
-        
+
         # GDPR Compliance Monitoring
         gdpr_status = await self.gdpr_monitor.check_comprehensive_compliance(
             services=["assessment", "psychometric", "simulation", "kg_builder"]
         )
-        
+
         # EU AI Act Compliance (High-risk AI system requirements)
         ai_act_status = await self.ai_act_monitor.check_high_risk_system_compliance(
             ai_systems=["adaptive_testing", "behavioral_prediction", "bias_detection"]
         )
-        
+
         # EEOC Compliance (US)
         eeoc_status = await self.eeoc_monitor.check_employment_compliance(
             assessment_systems=["cognitive_assessment", "behavioral_simulation"]
         )
-        
+
         # Generate compliance alerts
         compliance_alerts = []
-        
+
         if not gdpr_status.compliant:
             compliance_alerts.extend(await self._generate_gdpr_alerts(gdpr_status))
-        
+
         if not ai_act_status.compliant:
             compliance_alerts.extend(await self._generate_ai_act_alerts(ai_act_status))
-        
+
         if not eeoc_status.compliant:
             compliance_alerts.extend(await self._generate_eeoc_alerts(eeoc_status))
-        
+
         # Log compliance check
         await self.audit_logger.log_compliance_check(
             timestamp=datetime.utcnow(),
@@ -4346,12 +4346,12 @@ class ComplianceMonitoringFramework:
             eeoc_status=eeoc_status,
             alerts_generated=len(compliance_alerts)
         )
-        
+
         # Calculate overall compliance score
         overall_score = self._calculate_overall_compliance_score(
             gdpr_status, ai_act_status, eeoc_status
         )
-        
+
         return ComplianceMonitoringResult(
             monitoring_timestamp=datetime.utcnow(),
             gdpr_compliance=gdpr_status,
@@ -4365,22 +4365,22 @@ class ComplianceMonitoringFramework:
 # EU AI Act Compliance Monitor
 class EUAIActComplianceMonitor:
     """Monitor compliance with EU AI Act requirements for high-risk AI systems"""
-    
+
     def __init__(self):
         self.risk_assessor = AISystemRiskAssessor()
         self.transparency_checker = TransparencyChecker()
         self.human_oversight_monitor = HumanOversightMonitor()
         self.accuracy_monitor = AccuracyMonitor()
-    
+
     async def check_high_risk_system_compliance(
         self,
         ai_systems: List[str]
     ) -> AIActComplianceStatus:
         """Check compliance with EU AI Act for high-risk AI systems"""
-        
+
         compliance_checks = {
             "risk_management_system": await self._check_risk_management_system(),
-            "data_quality_requirements": await self._check_data_quality_requirements(), 
+            "data_quality_requirements": await self._check_data_quality_requirements(),
             "technical_documentation": await self._check_technical_documentation(),
             "record_keeping": await self._check_record_keeping_requirements(),
             "transparency_obligations": await self._check_transparency_obligations(),
@@ -4388,13 +4388,13 @@ class EUAIActComplianceMonitor:
             "accuracy_robustness": await self._check_accuracy_robustness(),
             "cybersecurity": await self._check_cybersecurity_measures()
         }
-        
+
         # Check system-specific requirements
         system_specific_checks = {}
         for system in ai_systems:
             system_checks = await self._check_system_specific_requirements(system)
             system_specific_checks[system] = system_checks
-        
+
         # Calculate overall compliance
         overall_compliant = all(
             check.compliant for check in compliance_checks.values()
@@ -4402,13 +4402,13 @@ class EUAIActComplianceMonitor:
             all(check.compliant for check in system_checks.values())
             for system_checks in system_specific_checks.values()
         )
-        
+
         # Generate non-compliance issues
         non_compliance_issues = []
         for requirement, check in compliance_checks.items():
             if not check.compliant:
                 non_compliance_issues.extend(check.issues)
-        
+
         return AIActComplianceStatus(
             overall_compliant=overall_compliant,
             compliance_checks=compliance_checks,
@@ -4417,30 +4417,30 @@ class EUAIActComplianceMonitor:
             remediation_timeline=await self._calculate_remediation_timeline(non_compliance_issues),
             compliance_score=self._calculate_ai_act_compliance_score(compliance_checks)
         )
-    
+
     async def _check_risk_management_system(self) -> ComplianceCheck:
         """Check risk management system implementation"""
-        
+
         required_components = [
             "risk_identification_process",
-            "risk_assessment_methodology", 
+            "risk_assessment_methodology",
             "risk_mitigation_measures",
             "testing_procedures",
             "quality_management_system"
         ]
-        
+
         implemented_components = []
         missing_components = []
-        
+
         for component in required_components:
             is_implemented = await self._verify_component_implementation(component)
             if is_implemented:
                 implemented_components.append(component)
             else:
                 missing_components.append(component)
-        
+
         compliant = len(missing_components) == 0
-        
+
         return ComplianceCheck(
             requirement="risk_management_system",
             compliant=compliant,
@@ -4451,32 +4451,32 @@ class EUAIActComplianceMonitor:
 
 class ProductionMonitoringStack:
     """Comprehensive monitoring stack for production assessment services"""
-    
+
     def __init__(self):
         self.prometheus_config = PrometheusConfig()
         self.grafana_dashboards = GrafanaDashboardManager()
         self.alertmanager = AlertManagerConfig()
         self.jaeger_tracing = JaegerTracingConfig()
         self.elasticsearch_logs = ElasticsearchLoggingConfig()
-    
+
     async def setup_production_monitoring(self) -> MonitoringSetupResult:
         """Setup comprehensive production monitoring infrastructure"""
-        
+
         # Setup Prometheus metrics collection
         prometheus_setup = await self._setup_prometheus_monitoring()
-        
+
         # Create Grafana dashboards
         grafana_setup = await self._setup_grafana_dashboards()
-        
+
         # Configure alerting
         alerting_setup = await self._setup_alerting_infrastructure()
-        
+
         # Setup distributed tracing
         tracing_setup = await self._setup_distributed_tracing()
-        
+
         # Configure centralized logging
         logging_setup = await self._setup_centralized_logging()
-        
+
         return MonitoringSetupResult(
             prometheus_metrics=prometheus_setup,
             grafana_dashboards=grafana_setup,
@@ -4485,14 +4485,14 @@ class ProductionMonitoringStack:
             centralized_logging=logging_setup,
             monitoring_endpoints=self._generate_monitoring_endpoints()
         )
-    
+
     async def _setup_prometheus_monitoring(self) -> PrometheusSetupResult:
         """Setup Prometheus metrics collection for all services"""
-        
+
         metrics_config = {
             "assessment_service_metrics": [
                 "assessment_creation_rate",
-                "scenario_generation_latency", 
+                "scenario_generation_latency",
                 "response_analysis_duration",
                 "trait_extraction_accuracy",
                 "bias_detection_alerts"
@@ -4517,7 +4517,7 @@ class ProductionMonitoringStack:
                 "resource_utilization"
             ]
         }
-        
+
         configured_metrics = []
         for service, metrics in metrics_config.items():
             for metric in metrics:
@@ -4528,7 +4528,7 @@ class ProductionMonitoringStack:
                     labels=self._get_metric_labels(service, metric)
                 )
                 configured_metrics.append(metric_config)
-        
+
         return PrometheusSetupResult(
             configured_metrics=configured_metrics,
             scrape_endpoints=self._generate_scrape_endpoints(),
@@ -4548,23 +4548,23 @@ class LinkedInDataProcessor:
         candidate_id: str
     ) -> LinkedInBehavioralInsights:
         """Extract behavioral insights from LinkedIn profile data"""
-        
+
         insights = {}
-        
+
         # Career progression analysis
         if "experience" in raw_data:
             career_insights = await self._analyze_career_progression(
                 experience_data=raw_data["experience"]
             )
             insights["career_progression"] = career_insights
-        
+
         # Leadership growth analysis
         if "experience" in raw_data:
             leadership_insights = await self._analyze_leadership_progression(
                 experience_data=raw_data["experience"]
             )
             insights["leadership_development"] = leadership_insights
-        
+
         # Network analysis
         if "connections" in raw_data and "recommendations" in raw_data:
             network_insights = await self._analyze_professional_network(
@@ -4572,7 +4572,7 @@ class LinkedInDataProcessor:
                 recommendations=raw_data["recommendations"]
             )
             insights["networking_style"] = network_insights
-        
+
         # Content analysis
         if "posts" in raw_data or "articles" in raw_data:
             content_insights = await self._analyze_thought_leadership(
@@ -4580,14 +4580,14 @@ class LinkedInDataProcessor:
                 articles=raw_data.get("articles", [])
             )
             insights["thought_leadership"] = content_insights
-        
+
         # Skills and endorsements analysis
         if "skills" in raw_data:
             skills_insights = await self._analyze_skill_development_patterns(
                 skills_data=raw_data["skills"]
             )
             insights["skill_development"] = skills_insights
-        
+
         return LinkedInBehavioralInsights(
             candidate_id=candidate_id,
             data_source="linkedin",
@@ -4605,7 +4605,7 @@ class LinkedInDataProcessor:
         experience_data: List[Dict[str, Any]]
     ) -> CareerProgressionInsights:
         """Analyze career progression for behavioral indicators"""
-        
+
         progression_analysis_prompt = f"""
         Analyze this founder's career progression for behavioral trait indicators:
 
@@ -4613,14 +4613,14 @@ class LinkedInDataProcessor:
         {self._format_experience_data(experience_data)}
 
         Extract behavioral indicators for:
-        1. Risk Tolerance: 
+        1. Risk Tolerance:
         - Career moves to startups vs established companies
         - Taking on undefined roles vs structured positions
         - Geographic moves for opportunities
         - Industry changes and pivots
 
         2. Growth Orientation:
-        - Progression in scope and responsibility 
+        - Progression in scope and responsibility
         - Seeking challenging vs comfortable roles
         - Building new functions vs managing existing ones
         - Taking on stretch assignments
@@ -4645,13 +4645,13 @@ class LinkedInDataProcessor:
 
         Provide specific evidence from the career history and confidence scores (0-1) for each trait.
         """
-        
+
         analysis_result = await self.llm_service.generate_structured_response(
             prompt=progression_analysis_prompt,
             response_schema=CareerProgressionAnalysisSchema,
             temperature=0.1
         )
-        
+
         return self._parse_career_progression_analysis(analysis_result)
 
 ```
@@ -4662,7 +4662,7 @@ class LinkedInDataProcessor:
 # Location: cognitive-assessment-service/app/reporting/personalized_reporting_engine.py
 class PersonalizedReportingEngine:
     """Engine for generating personalized reports based on audience and context"""
-    
+
     def __init__(self):
         self.report_templates = {
             "investor": InvestorReportTemplate(),
@@ -4675,7 +4675,7 @@ class PersonalizedReportingEngine:
         self.insight_generator = PersonalizedInsightGenerator()
         self.benchmarking_service = BenchmarkingService()
         self.recommendation_engine = RecommendationEngine()
-    
+
     async def generate_audience_specific_report(
         self,
         candidate_id: str,
@@ -4685,18 +4685,18 @@ class PersonalizedReportingEngine:
         customization_preferences: Optional[ReportCustomization] = None
     ) -> PersonalizedAssessmentReport:
         """Generate personalized report based on specific audience needs"""
-        
+
         # Get comprehensive founder profile
         founder_profile = await self._get_comprehensive_founder_profile(
             candidate_id, assessment_id
         )
-        
+
         # Get audience-specific template
         if report_audience not in self.report_templates:
             raise ValueError(f"Unsupported report audience: {report_audience}")
-        
+
         template = self.report_templates[report_audience]
-        
+
         # Generate audience-specific insights
         audience_insights = await self.insight_generator.generate_audience_insights(
             founder_profile=founder_profile,
@@ -4704,14 +4704,14 @@ class PersonalizedReportingEngine:
             audience_context=audience_context,
             focus_areas=customization_preferences.focus_areas if customization_preferences else None
         )
-        
+
         # Generate benchmarking data
         benchmarking_data = await self.benchmarking_service.generate_audience_relevant_benchmarks(
             founder_profile=founder_profile,
             audience_type=report_audience,
             comparison_criteria=audience_context.comparison_criteria
         )
-        
+
         # Generate personalized recommendations
         recommendations = await self.recommendation_engine.generate_audience_recommendations(
             founder_profile=founder_profile,
@@ -4719,7 +4719,7 @@ class PersonalizedReportingEngine:
             audience_type=report_audience,
             audience_context=audience_context
         )
-        
+
         # Compile report using template
         report = await template.compile_report(
             founder_profile=founder_profile,
@@ -4728,7 +4728,7 @@ class PersonalizedReportingEngine:
             recommendations=recommendations,
             customization=customization_preferences
         )
-        
+
         return PersonalizedAssessmentReport(
             report_id=f"report_{candidate_id}_{report_audience}_{int(time.time())}",
             candidate_id=candidate_id,
@@ -4750,19 +4750,19 @@ class PersonalizedReportingEngine:
 # Investor Report Template
 class InvestorReportTemplate:
     """Template for generating investor-focused assessment reports"""
-    
+
     def __init__(self):
         self.version = "1.0.0"
         self.focus_areas = [
             "investment_readiness",
-            "market_opportunity_assessment", 
+            "market_opportunity_assessment",
             "execution_capability",
             "team_building_potential",
             "scalability_indicators",
             "risk_factors",
             "fundraising_readiness"
         ]
-    
+
     async def compile_report(
         self,
         founder_profile: ComprehensiveFounderProfile,
@@ -4772,7 +4772,7 @@ class InvestorReportTemplate:
         customization: Optional[ReportCustomization] = None
     ) -> InvestorAssessmentReport:
         """Compile investor-focused assessment report"""
-        
+
         # Executive Summary
         executive_summary = await self._generate_executive_summary(
             founder_profile=founder_profile,
@@ -4780,42 +4780,42 @@ class InvestorReportTemplate:
             key_strengths=audience_insights.key_strengths[:3],
             primary_concerns=audience_insights.primary_concerns[:2]
         )
-        
+
         # Investment Thesis Analysis
         investment_thesis = await self._analyze_investment_thesis(
             founder_profile=founder_profile,
             market_assessment_ability=audience_insights.market_assessment_capability,
             execution_track_record=audience_insights.execution_evidence
         )
-        
+
         # Team Building Assessment
         team_building_analysis = await self._assess_team_building_capability(
             leadership_style=founder_profile.leadership_style,
             collaboration_patterns=founder_profile.collaboration_indicators,
             talent_attraction_evidence=audience_insights.talent_attraction_evidence
         )
-        
+
         # Risk Assessment
         risk_analysis = await self._conduct_investment_risk_assessment(
             founder_profile=founder_profile,
             behavioral_risk_factors=audience_insights.behavioral_risk_factors,
             mitigation_strategies=recommendations
         )
-        
+
         # Benchmarking Against Portfolio
         portfolio_comparison = await self._compare_against_portfolio_founders(
             founder_profile=founder_profile,
             benchmarking_data=benchmarking_data,
             success_predictors=audience_insights.success_predictors
         )
-        
+
         # Due Diligence Recommendations
         due_diligence_areas = await self._generate_due_diligence_recommendations(
             founder_profile=founder_profile,
             risk_factors=risk_analysis.risk_factors,
             areas_for_validation=audience_insights.validation_areas
         )
-        
+
         return InvestorAssessmentReport(
             executive_summary=executive_summary,
             investment_recommendation=audience_insights.investment_recommendation,
@@ -4901,7 +4901,7 @@ spec:
           value: "http://knowledge-graph-builder:8003"
         - name: PSYCHOMETRIC_SERVICE_URL
           value: "http://psychometric-service:8005"
-        - name: SIMULATION_SERVICE_URL  
+        - name: SIMULATION_SERVICE_URL
           value: "http://simulation-service:8006"
         - name: REDIS_CLUSTER_URL
           value: "redis://redis-cluster:6379"
@@ -4990,35 +4990,35 @@ spec:
 # Location: monitoring/assessment_monitoring_stack.py
 class AssessmentMonitoringStack:
     """Complete monitoring stack for assessment ecosystem"""
-    
+
     def __init__(self):
         self.prometheus_config = PrometheusAssessmentConfig()
         self.grafana_manager = GrafanaAssessmentDashboards()
         self.alert_manager = AssessmentAlertManager()
         self.jaeger_tracing = AssessmentDistributedTracing()
         self.log_aggregation = AssessmentLogAggregation()
-    
+
     async def deploy_monitoring_infrastructure(self) -> MonitoringDeploymentResult:
         """Deploy comprehensive monitoring infrastructure for assessment ecosystem"""
-        
+
         # Deploy Prometheus with assessment-specific configuration
         prometheus_deployment = await self._deploy_prometheus_monitoring()
-        
+
         # Create Grafana dashboards for assessment services
         grafana_dashboards = await self._create_assessment_dashboards()
-        
+
         # Setup alerting rules and notification channels
         alerting_deployment = await self._deploy_alerting_infrastructure()
-        
+
         # Configure distributed tracing
         tracing_deployment = await self._deploy_distributed_tracing()
-        
+
         # Setup centralized logging
         logging_deployment = await self._deploy_log_aggregation()
-        
+
         # Create monitoring endpoints and health checks
         monitoring_endpoints = await self._create_monitoring_endpoints()
-        
+
         return MonitoringDeploymentResult(
             prometheus_config=prometheus_deployment,
             grafana_dashboards=grafana_dashboards,
@@ -5029,12 +5029,12 @@ class AssessmentMonitoringStack:
             deployment_status="successful",
             monitoring_coverage=self._calculate_monitoring_coverage()
         )
-    
+
     async def _create_assessment_dashboards(self) -> List[GrafanaDashboard]:
         """Create comprehensive Grafana dashboards for assessment ecosystem"""
-        
+
         dashboards = []
-        
+
         # Executive Dashboard - High-level KPIs
         executive_dashboard = await self.grafana_manager.create_dashboard(
             name="Assessment Ecosystem - Executive Overview",
@@ -5073,7 +5073,7 @@ class AssessmentMonitoringStack:
             ]
         )
         dashboards.append(executive_dashboard)
-        
+
         # Technical Dashboard - Service Performance
         technical_dashboard = await self.grafana_manager.create_dashboard(
             name="Assessment Ecosystem - Technical Performance",
@@ -5083,7 +5083,7 @@ class AssessmentMonitoringStack:
                     "type": "graph",
                     "targets": [
                         "cognitive_assessment_response_time",
-                        "psychometric_service_response_time", 
+                        "psychometric_service_response_time",
                         "simulation_service_response_time"
                     ],
                     "description": "Response time breakdown by service"
@@ -5107,4 +5107,3 @@ class AssessmentMonitoringStack:
                     ],
 ```
 ---
-

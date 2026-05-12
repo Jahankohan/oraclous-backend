@@ -14,7 +14,6 @@ Environment variables required (same as the app):
 """
 
 import os
-import sys
 
 from neo4j import GraphDatabase
 
@@ -64,10 +63,10 @@ def run_backfill(driver) -> None:
 
         # ── Step 3: Create indexes for delta detection performance ─────────────────
         indexes = [
-            ("doc_content_hash",   "Document",   "contentHash"),
-            ("chunk_job_id",       "Chunk",      "jobId"),
-            ("chunk_content_hash", "Chunk",      "contentHash"),
-            ("entity_job_id",      "__Entity__", "lastJobId"),
+            ("doc_content_hash", "Document", "contentHash"),
+            ("chunk_job_id", "Chunk", "jobId"),
+            ("chunk_content_hash", "Chunk", "contentHash"),
+            ("entity_job_id", "__Entity__", "lastJobId"),
         ]
         for idx_name, label, prop in indexes:
             try:
@@ -82,7 +81,9 @@ def run_backfill(driver) -> None:
     print("  → All existing Documents and Chunks have provenance fields.")
     print("  → Indexes for delta detection are in place.")
     print("  → First re-ingestion of any legacy document will proceed as 'full' mode")
-    print("    (LEGACY_UNKNOWN hash never matches a real SHA256), then set the correct hash.")
+    print(
+        "    (LEGACY_UNKNOWN hash never matches a real SHA256), then set the correct hash."
+    )
 
 
 def main() -> None:

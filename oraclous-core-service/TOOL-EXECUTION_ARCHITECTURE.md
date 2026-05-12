@@ -15,7 +15,7 @@ We now have ONE service: ToolExecutionService
 
 This service handles:
 1. Synchronous execution (execute_sync) - for quick operations
-2. Asynchronous execution (execute_async) - for long-running operations  
+2. Asynchronous execution (execute_async) - for long-running operations
 3. Job tracking and progress monitoring
 4. Tool capabilities discovery
 5. Validation integration
@@ -33,7 +33,7 @@ ToolExecutionService responsibilities:
 - Update execution statistics
 
 InstanceManagerService responsibilities:
-- Manage tool instances (CRUD operations)  
+- Manage tool instances (CRUD operations)
 - Handle credential configuration
 - Manage instance status transitions
 - Create execution records
@@ -57,7 +57,7 @@ TYPICAL USAGE FLOW:
    POST /api/v1/instances/
    {
      "tool_definition_id": "google-drive-reader",
-     "workflow_id": "workflow-123", 
+     "workflow_id": "workflow-123",
      "name": "My Drive Reader"
    }
 
@@ -82,7 +82,7 @@ TYPICAL USAGE FLOW:
 4b. EXECUTE ASYNCHRONOUSLY (long operations):
     POST /api/v1/instances/{id}/execute-async
     {
-      "file_id": "large-file-123", 
+      "file_id": "large-file-123",
       "extract_content": true
     }
     Returns: {"job_id": "job-456", "progress_url": "/api/v1/instances/{id}/jobs/job-456/progress"}
@@ -92,7 +92,7 @@ TYPICAL USAGE FLOW:
    Returns: {"status": "RUNNING", "progress": 45, "current_step": "Processing data"}
 
 6. GET RESULT (for async):
-   GET /api/v1/instances/{id}/jobs/{job_id}/result  
+   GET /api/v1/instances/{id}/jobs/{job_id}/result
    Returns: {"status": "COMPLETED", "result": {...}}
 """
 
@@ -105,7 +105,7 @@ DATABASE RECORDS CREATED:
    - Stores instance configuration and credentials
    - Tracks execution statistics
 
-2. Execution (via InstanceManager) 
+2. Execution (via InstanceManager)
    - Records each execution attempt
    - Stores input data, output data, timing, credits
 
@@ -132,7 +132,7 @@ New approach:
   "metadata": {
     "action_items": [{
       "action": "fix_credential",
-      "message": "Click the link below to reconnect your Google account", 
+      "message": "Click the link below to reconnect your Google account",
       "url": "https://oauth.example.com/reauth",
       "priority": "high"
     }]
@@ -156,7 +156,7 @@ TO INTEGRATE THIS:
 4. TEST the flow:
    - Create instance
    - Execute sync
-   - Execute async  
+   - Execute async
    - Track progress
    - Check validation
 
@@ -182,7 +182,7 @@ OUR NEW UNIFIED ToolExecutionService:
 - Better error handling
 - Integration with validation service
 
-The core job tracking logic is very similar to what you had - I just unified it 
+The core job tracking logic is very similar to what you had - I just unified it
 with sync execution and added the capabilities/validation features.
 """
 
@@ -193,7 +193,7 @@ IMMEDIATE NEXT STEPS:
 
 1. Fix ToolFactory.execute_tool method signature
 2. Test the sync execution flow
-3. Test the async execution flow  
+3. Test the async execution flow
 4. Verify job tracking works as expected
 
 FUTURE ENHANCEMENTS:

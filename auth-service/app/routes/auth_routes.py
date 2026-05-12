@@ -5,11 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
-from app.core.dependencies import (get_service_account_repository,
-                                   get_user_repository,
-                                   verify_internal_service)
-from app.core.jwt_handler import (create_service_account_token,
-                                  verify_access_token)
+from app.core.dependencies import (
+    get_service_account_repository,
+    get_user_repository,
+    verify_internal_service,
+)
+from app.core.jwt_handler import create_service_account_token, verify_access_token
 from app.core.rate_limiter import enforce_key_prefix_rate_limit, limiter
 from app.schema import auth_schemas
 from app.services.auth_service import AuthService

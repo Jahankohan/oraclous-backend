@@ -28,7 +28,6 @@ STORY-019 acceptance criteria map:
 from __future__ import annotations
 
 import os
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -165,7 +164,7 @@ async def test_candidates_endpoint_happy_path():
 
     AC-2: candidates endpoint returns correctly shaped list.
     """
-    from app.services.federation_service import FederationError, FederationService
+    from app.services.federation_service import FederationService
 
     mock_candidates = [
         _make_candidate_result("id-1", "id-2", 0.70),
@@ -190,7 +189,9 @@ async def test_candidates_endpoint_happy_path():
     app.dependency_overrides[_get_federation_service] = lambda: fake_service
 
     with (
-        patch.object(auth_service, "verify_token", new=AsyncMock(return_value=fake_user)),
+        patch.object(
+            auth_service, "verify_token", new=AsyncMock(return_value=fake_user)
+        ),
     ):
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
@@ -247,7 +248,9 @@ async def test_candidates_entity_name_forwarded_to_service():
 
     app.dependency_overrides[_get_federation_service] = lambda: fake_service
 
-    with patch.object(auth_service, "verify_token", new=AsyncMock(return_value=fake_user)):
+    with patch.object(
+        auth_service, "verify_token", new=AsyncMock(return_value=fake_user)
+    ):
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
             "/api/v1/graphs/graph-X/federation/candidates",
@@ -279,9 +282,9 @@ async def test_candidates_server_side_threshold_filters_low_scores():
     from app.services.federation_service import FederationService
 
     mock_candidates = [
-        _make_candidate_result("id-1", "id-2", 0.45),   # below threshold
-        _make_candidate_result("id-3", "id-4", 0.62),   # above threshold
-        _make_candidate_result("id-5", "id-6", 0.91),   # above threshold
+        _make_candidate_result("id-1", "id-2", 0.45),  # below threshold
+        _make_candidate_result("id-3", "id-4", 0.62),  # above threshold
+        _make_candidate_result("id-5", "id-6", 0.91),  # above threshold
     ]
 
     app = _build_test_app()
@@ -301,7 +304,9 @@ async def test_candidates_server_side_threshold_filters_low_scores():
 
     app.dependency_overrides[_get_federation_service] = lambda: fake_service
 
-    with patch.object(auth_service, "verify_token", new=AsyncMock(return_value=fake_user)):
+    with patch.object(
+        auth_service, "verify_token", new=AsyncMock(return_value=fake_user)
+    ):
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
             "/api/v1/graphs/graph-X/federation/candidates",
@@ -315,7 +320,9 @@ async def test_candidates_server_side_threshold_filters_low_scores():
     # Only the 0.62 and 0.91 pairs must appear
     assert len(data) == 2, f"Expected 2 results (>= 0.60), got {len(data)}: {data}"
     scores = {round(item["score"], 2) for item in data}
-    assert 0.45 not in scores, "Score 0.45 (below threshold) must not appear in response"
+    assert 0.45 not in scores, (
+        "Score 0.45 (below threshold) must not appear in response"
+    )
     assert all(s >= 0.60 for s in scores), f"All scores must be >= 0.60; got {scores}"
 
 
@@ -350,7 +357,9 @@ async def test_candidates_auth_returns_403_when_graph_inaccessible():
 
     app.dependency_overrides[_get_federation_service] = lambda: fake_service
 
-    with patch.object(auth_service, "verify_token", new=AsyncMock(return_value=fake_user)):
+    with patch.object(
+        auth_service, "verify_token", new=AsyncMock(return_value=fake_user)
+    ):
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
             "/api/v1/graphs/graph-X/federation/candidates",
@@ -456,7 +465,9 @@ async def test_resolve_endpoint_happy_path():
     app.dependency_overrides[_get_federation_service] = lambda: fake_service
 
     with (
-        patch.object(auth_service, "verify_token", new=AsyncMock(return_value=fake_user)),
+        patch.object(
+            auth_service, "verify_token", new=AsyncMock(return_value=fake_user)
+        ),
         patch(
             "app.api.v1.endpoints.federation.verify_graph_access",
             new=AsyncMock(return_value="graph-X"),
@@ -513,7 +524,9 @@ async def test_resolve_endpoint_no_write_access_returns_403():
     app.dependency_overrides[_get_federation_service] = lambda: fake_service
 
     with (
-        patch.object(auth_service, "verify_token", new=AsyncMock(return_value=fake_user)),
+        patch.object(
+            auth_service, "verify_token", new=AsyncMock(return_value=fake_user)
+        ),
         patch(
             "app.api.v1.endpoints.federation.verify_graph_access",
             new=AsyncMock(
@@ -564,7 +577,9 @@ async def test_resolve_endpoint_no_read_access_returns_403():
 
     app.dependency_overrides[_get_federation_service] = lambda: fake_service
 
-    with patch.object(auth_service, "verify_token", new=AsyncMock(return_value=fake_user)):
+    with patch.object(
+        auth_service, "verify_token", new=AsyncMock(return_value=fake_user)
+    ):
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
             "/api/v1/graphs/graph-X/federation/resolve",
@@ -617,14 +632,16 @@ async def test_celery_task_result_has_correct_keys():
             new=AsyncMock(return_value=[]),
         ),
     ):
-        result = await _resolve_same_as_async(
-            mock_task, "graph-X", "graph-Y", 0.85
-        )
+        result = await _resolve_same_as_async(mock_task, "graph-X", "graph-Y", 0.85)
 
     assert isinstance(result, dict), f"Expected dict result, got {type(result)}"
     assert "created_links" in result, f"Missing 'created_links' key in result: {result}"
-    assert "ambiguous_count" in result, f"Missing 'ambiguous_count' key in result: {result}"
-    assert "rejected_count" in result, f"Missing 'rejected_count' key in result: {result}"
+    assert "ambiguous_count" in result, (
+        f"Missing 'ambiguous_count' key in result: {result}"
+    )
+    assert "rejected_count" in result, (
+        f"Missing 'rejected_count' key in result: {result}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +680,9 @@ async def test_federate_query_endpoint_still_registered():
 
     app.dependency_overrides[_get_federation_service] = lambda: fake_service
 
-    with patch.object(auth_service, "verify_token", new=AsyncMock(return_value=fake_user)):
+    with patch.object(
+        auth_service, "verify_token", new=AsyncMock(return_value=fake_user)
+    ):
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
             "/api/v1/graphs/federate/query",
@@ -716,7 +735,9 @@ async def test_federate_vector_search_endpoint_still_registered():
 
     app.dependency_overrides[_get_federation_service] = lambda: fake_service
 
-    with patch.object(auth_service, "verify_token", new=AsyncMock(return_value=fake_user)):
+    with patch.object(
+        auth_service, "verify_token", new=AsyncMock(return_value=fake_user)
+    ):
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post(
             "/api/v1/graphs/federate/vector-search",

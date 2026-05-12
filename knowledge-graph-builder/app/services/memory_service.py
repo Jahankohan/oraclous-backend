@@ -293,9 +293,9 @@ class MemoryService:
              duration.inDays(m.last_accessed_at, datetime()).days AS days_since
         WITH m, text_score, imp,
              exp(-0.02 * toFloat(days_since)) AS recency,
-             ({_RANK_WEIGHTS['vector']} * text_score
-              + {_RANK_WEIGHTS['importance']} * imp
-              + {_RANK_WEIGHTS['recency']} * exp(-0.02 * toFloat(days_since))) AS ranking
+             ({_RANK_WEIGHTS["vector"]} * text_score
+              + {_RANK_WEIGHTS["importance"]} * imp
+              + {_RANK_WEIGHTS["recency"]} * exp(-0.02 * toFloat(days_since))) AS ranking
         ORDER BY ranking DESC
         LIMIT $limit
         RETURN

@@ -82,14 +82,21 @@ Respond in this exact JSON format (no other text):
 
 def get_headers() -> dict[str, str]:
     if not ORACLOUS_API_KEY:
-        print("ERROR: ORACLOUS_API_KEY environment variable is not set.", file=sys.stderr)
+        print(
+            "ERROR: ORACLOUS_API_KEY environment variable is not set.", file=sys.stderr
+        )
         sys.exit(1)
-    return {"Authorization": f"Bearer {ORACLOUS_API_KEY}", "Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {ORACLOUS_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
 
 def get_anthropic_headers() -> dict[str, str]:
     if not ANTHROPIC_API_KEY:
-        print("ERROR: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
+        print(
+            "ERROR: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr
+        )
         sys.exit(1)
     return {
         "x-api-key": ANTHROPIC_API_KEY,
@@ -102,7 +109,9 @@ def load_articles() -> list[dict]:
     """Load articles from datasets/wikipedia_100.jsonl."""
     path = DATASETS_DIR / "wikipedia_100.jsonl"
     if not path.exists():
-        print(f"ERROR: {path} not found. Run bench_ingestion.py first.", file=sys.stderr)
+        print(
+            f"ERROR: {path} not found. Run bench_ingestion.py first.", file=sys.stderr
+        )
         sys.exit(1)
     with open(path, encoding="utf-8") as fh:
         return [json.loads(line) for line in fh if line.strip()]
@@ -145,11 +154,13 @@ def generate_qa_pair(session: requests.Session, article: dict) -> dict | None:
                 }
             elif resp.status_code == 529 or resp.status_code == 429:
                 # Rate limited — back off
-                wait = 2 ** attempt
+                wait = 2**attempt
                 print(f"    Rate limited (HTTP {resp.status_code}), waiting {wait}s...")
                 time.sleep(wait)
             else:
-                print(f"    WARNING: Anthropic HTTP {resp.status_code}: {resp.text[:100]}")
+                print(
+                    f"    WARNING: Anthropic HTTP {resp.status_code}: {resp.text[:100]}"
+                )
                 return None
         except (requests.RequestException, json.JSONDecodeError, KeyError) as exc:
             print(f"    WARNING: Q&A gen error (attempt {attempt + 1}): {exc}")
@@ -170,14 +181,18 @@ def generate_qa_pairs(articles: list[dict]) -> list[dict]:
             pairs.append(pair)
             print(f"  [{i:3d}/100] OK  Q: {pair['question'][:60]}")
         else:
-            print(f"  [{i:3d}/100] SKIP (no content or generation failed): {article['title']}")
+            print(
+                f"  [{i:3d}/100] SKIP (no content or generation failed): {article['title']}"
+            )
             # Provide a fallback to keep dataset at ~100 pairs
             pairs.append(
                 {
                     "wikipedia_title": article.get("wikipedia_title", article["title"]),
                     "article_title": article["title"],
                     "question": f"What is {article['title']}?",
-                    "ground_truth": article["content"][:200] if article.get("content") else "No information available.",
+                    "ground_truth": article["content"][:200]
+                    if article.get("content")
+                    else "No information available.",
                 }
             )
 
@@ -260,7 +275,12 @@ def evaluate_pair(
         "question": question,
         "answer": answer,
         "ground_truth": ground_truth,
-        "metrics": ["faithfulness", "answer_relevance", "context_precision", "context_recall"],
+        "metrics": [
+            "faithfulness",
+            "answer_relevance",
+            "context_precision",
+            "context_recall",
+        ],
     }
 
     resp = session.post(url, json=payload, headers=get_headers(), timeout=120)
@@ -308,7 +328,10 @@ def main() -> None:
     if SKIP_QA_GEN:
         pairs = load_qa_pairs()
         if not pairs:
-            print("ERROR: No cached Q&A pairs found. Remove SKIP_QA_GEN=1 to generate.", file=sys.stderr)
+            print(
+                "ERROR: No cached Q&A pairs found. Remove SKIP_QA_GEN=1 to generate.",
+                file=sys.stderr,
+            )
             sys.exit(1)
         print(f"Loaded {len(pairs)} Q&A pairs from cache.")
     else:
@@ -347,7 +370,9 @@ def main() -> None:
         # Evaluate
         try:
             t_eval = time.perf_counter()
-            eval_result = evaluate_pair(session, question, chat_result["answer"], ground_truth)
+            eval_result = evaluate_pair(
+                session, question, chat_result["answer"], ground_truth
+            )
             eval_elapsed = time.perf_counter() - t_eval
         except Exception as exc:
             print(f"  [{i:3d}/100] EVAL ERROR: {exc}")
@@ -405,14 +430,20 @@ def main() -> None:
         "total_pairs": len(pairs),
         "evaluated": len(ok_results),
         "errors": len(per_question_results) - len(ok_results),
-        "mean_faithfulness": round(mean_faithfulness, 4) if mean_faithfulness is not None else None,
+        "mean_faithfulness": round(mean_faithfulness, 4)
+        if mean_faithfulness is not None
+        else None,
         "mean_answer_relevance": round(mean_ar, 4) if mean_ar is not None else None,
         "mean_context_precision": round(mean_cp, 4) if mean_cp is not None else None,
         "mean_context_recall": round(mean_cr, 4) if mean_cr is not None else None,
         "target_faithfulness": TARGET_FAITHFULNESS,
         "target_answer_relevance": TARGET_ANSWER_RELEVANCE,
-        "faithfulness_target_met": (mean_faithfulness is not None and mean_faithfulness >= TARGET_FAITHFULNESS),
-        "answer_relevance_target_met": (mean_ar is not None and mean_ar >= TARGET_ANSWER_RELEVANCE),
+        "faithfulness_target_met": (
+            mean_faithfulness is not None and mean_faithfulness >= TARGET_FAITHFULNESS
+        ),
+        "answer_relevance_target_met": (
+            mean_ar is not None and mean_ar >= TARGET_ANSWER_RELEVANCE
+        ),
     }
 
     output = {
@@ -432,15 +463,41 @@ def main() -> None:
     print("RESULTS — RAGAS Retrieval Quality")
     print("=" * 60)
     print(f"  Evaluated pairs:      {len(ok_results)}/{len(pairs)}")
-    print(f"  Faithfulness:         {mean_faithfulness:.4f}" if mean_faithfulness is not None else "  Faithfulness:         n/a")
-    print(f"  Answer relevance:     {mean_ar:.4f}" if mean_ar is not None else "  Answer relevance:     n/a")
-    print(f"  Context precision:    {mean_cp:.4f}" if mean_cp is not None else "  Context precision:    n/a")
-    print(f"  Context recall:       {mean_cr:.4f}" if mean_cr is not None else "  Context recall:       n/a")
+    print(
+        f"  Faithfulness:         {mean_faithfulness:.4f}"
+        if mean_faithfulness is not None
+        else "  Faithfulness:         n/a"
+    )
+    print(
+        f"  Answer relevance:     {mean_ar:.4f}"
+        if mean_ar is not None
+        else "  Answer relevance:     n/a"
+    )
+    print(
+        f"  Context precision:    {mean_cp:.4f}"
+        if mean_cp is not None
+        else "  Context precision:    n/a"
+    )
+    print(
+        f"  Context recall:       {mean_cr:.4f}"
+        if mean_cr is not None
+        else "  Context recall:       n/a"
+    )
     print()
 
     for metric, actual, target, key in [
-        ("faithfulness", mean_faithfulness, TARGET_FAITHFULNESS, "faithfulness_target_met"),
-        ("answer_relevance", mean_ar, TARGET_ANSWER_RELEVANCE, "answer_relevance_target_met"),
+        (
+            "faithfulness",
+            mean_faithfulness,
+            TARGET_FAITHFULNESS,
+            "faithfulness_target_met",
+        ),
+        (
+            "answer_relevance",
+            mean_ar,
+            TARGET_ANSWER_RELEVANCE,
+            "answer_relevance_target_met",
+        ),
     ]:
         if actual is not None:
             result_str = "PASS" if aggregate[key] else "FAIL"

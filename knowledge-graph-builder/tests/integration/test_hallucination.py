@@ -134,7 +134,6 @@ def _headers():
 
 
 class TestKnownFactsCorrectness:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_answer_contains_known_graph_fact(self, async_client):
@@ -172,9 +171,9 @@ class TestKnownFactsCorrectness:
         data = response.json()
         assert data["success"] is True
         assert data["is_grounded"] is True
-        assert (
-            "Alice Smith" in data["answer"]
-        ), "Known fact 'Alice Smith is CEO' was not reflected in the answer"
+        assert "Alice Smith" in data["answer"], (
+            "Known fact 'Alice Smith is CEO' was not reflected in the answer"
+        )
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -214,9 +213,9 @@ class TestKnownFactsCorrectness:
         assert len(data["sources"]) > 0
         # The source node ID must match what was in the graph
         source_ids = [s["node_id"] for s in data["sources"]]
-        assert (
-            "company-technova" in source_ids
-        ), f"Expected source node 'company-technova' in {source_ids}"
+        assert "company-technova" in source_ids, (
+            f"Expected source node 'company-technova' in {source_ids}"
+        )
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -245,9 +244,9 @@ class TestKnownFactsCorrectness:
 
         assert response.status_code == 200
         data = response.json()
-        assert (
-            data["confidence"] > 0.5
-        ), f"Confidence {data['confidence']} too low for high-score retrieval"
+        assert data["confidence"] > 0.5, (
+            f"Confidence {data['confidence']} too low for high-score retrieval"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +255,6 @@ class TestKnownFactsCorrectness:
 
 
 class TestNoDataResponses:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_empty_graph_returns_no_data_response_not_hallucination(
@@ -283,12 +281,12 @@ class TestNoDataResponses:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert (
-            data["is_grounded"] is False
-        ), "is_grounded must be False when no context was retrieved"
-        assert (
-            data["confidence"] == 0.0
-        ), f"Confidence must be 0.0 for empty retrieval, got {data['confidence']}"
+        assert data["is_grounded"] is False, (
+            "is_grounded must be False when no context was retrieved"
+        )
+        assert data["confidence"] == 0.0, (
+            f"Confidence must be 0.0 for empty retrieval, got {data['confidence']}"
+        )
         # The response should clearly indicate lack of data (not fabricate an answer)
         answer_lower = data["answer"].lower()
         assert any(
@@ -327,9 +325,9 @@ class TestNoDataResponses:
         assert response.status_code == 200
         data = response.json()
         sources = data.get("sources") or []
-        assert (
-            len(sources) == 0
-        ), f"Expected 0 sources for empty graph, got {len(sources)}: {sources}"
+        assert len(sources) == 0, (
+            f"Expected 0 sources for empty graph, got {len(sources)}: {sources}"
+        )
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -357,9 +355,9 @@ class TestNoDataResponses:
         assert response.status_code == 200
         data = response.json()
         # Must not claim to know Phantom Corp's revenue
-        assert (
-            "Phantom Corp" not in data["answer"] or data["is_grounded"] is False
-        ), "System appears to have hallucinated Phantom Corp data"
+        assert "Phantom Corp" not in data["answer"] or data["is_grounded"] is False, (
+            "System appears to have hallucinated Phantom Corp data"
+        )
         assert data["confidence"] == 0.0 or data["is_grounded"] is False
 
     @pytest.mark.integration
@@ -398,9 +396,9 @@ class TestNoDataResponses:
         assert response.status_code == 200
         data = response.json()
         # The fabricated entity should not appear in the answer
-        assert (
-            fabricated_entity not in data["answer"]
-        ), f"Fabricated entity '{fabricated_entity}' appeared in grounded answer"
+        assert fabricated_entity not in data["answer"], (
+            f"Fabricated entity '{fabricated_entity}' appeared in grounded answer"
+        )
         # The real entity from the graph should be there
         assert real_entity in data["answer"]
 
@@ -411,7 +409,6 @@ class TestNoDataResponses:
 
 
 class TestGroundingIntegrity:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_is_grounded_false_when_zero_sources_retrieved(self, async_client):
@@ -477,9 +474,9 @@ class TestGroundingIntegrity:
 
         assert response.status_code == 200
         data = response.json()
-        assert (
-            data["graph_id"] == target_graph_id
-        ), f"Response graph_id '{data['graph_id']}' does not match request '{target_graph_id}'"
+        assert data["graph_id"] == target_graph_id, (
+            f"Response graph_id '{data['graph_id']}' does not match request '{target_graph_id}'"
+        )
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -518,12 +515,12 @@ class TestGroundingIntegrity:
         assert response.status_code == 200
         data = response.json()
         assert data["is_grounded"] is True
-        assert (
-            len(data["sources"]) == n_items
-        ), f"Expected {n_items} sources, got {len(data['sources'])}"
-        assert (
-            data["context"]["total_results"] == n_items
-        ), f"context.total_results should be {n_items}, got {data['context']['total_results']}"
+        assert len(data["sources"]) == n_items, (
+            f"Expected {n_items} sources, got {len(data['sources'])}"
+        )
+        assert data["context"]["total_results"] == n_items, (
+            f"context.total_results should be {n_items}, got {data['context']['total_results']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -532,7 +529,6 @@ class TestGroundingIntegrity:
 
 
 class TestErrorRecoveryNoHallucination:
-
     @pytest.mark.integration
     @pytest.mark.api
     async def test_service_error_returns_500_not_fabricated_answer(self, async_client):

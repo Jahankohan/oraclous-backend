@@ -95,7 +95,9 @@ async def get_published_agent(
     await verify_graph_access(graph_id, "read", user_id)
     published = await svc.get_published_by_agent(agent_id, graph_id)
     if not published:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent is not published")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Agent is not published"
+        )
     return PublishedAgentResponse(
         agent_id=published["agent_id"],
         slug=published["slug"],
@@ -127,7 +129,9 @@ async def unpublish_agent(
     await verify_graph_access(graph_id, "admin", user_id)
     found = await svc.unpublish_agent(agent_id, graph_id)
     if not found:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent is not published")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Agent is not published"
+        )
 
 
 @router.post(

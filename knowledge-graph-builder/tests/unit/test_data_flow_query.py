@@ -77,7 +77,7 @@ def test_data_flow_with_source_symbol_does_not_raise():
     _run_code_query with query_type='data_flow' and source_symbol present
     must not raise _QueryParamError.
     """
-    from app.api.v1.endpoints.code_graphs import _QueryParamError, _run_code_query
+    from app.api.v1.endpoints.code_graphs import _run_code_query
 
     mock_driver = AsyncMock()
     mock_driver.execute_query.return_value = _neo4j_result([])
@@ -242,13 +242,15 @@ def test_data_flow_forward_returns_path_records():
     from app.api.v1.endpoints.code_graphs import _run_code_query
 
     mock_driver = AsyncMock()
-    mock_driver.execute_query.return_value = _neo4j_result([
-        {
-            "path_nodes": ["mod.fn", "mod.fn.x", "mod.fn"],
-            "path_labels": ["Function", "Variable", "Function"],
-            "depth": 2,
-        }
-    ])
+    mock_driver.execute_query.return_value = _neo4j_result(
+        [
+            {
+                "path_nodes": ["mod.fn", "mod.fn.x", "mod.fn"],
+                "path_labels": ["Function", "Variable", "Function"],
+                "depth": 2,
+            }
+        ]
+    )
 
     with patch("app.api.v1.endpoints.code_graphs.neo4j_client") as mnc:
         mnc.async_driver = mock_driver
@@ -266,8 +268,12 @@ def test_data_flow_forward_returns_path_records():
 
     assert len(result) == 1
     record = result[0]
-    assert "path_nodes" in record, f"Expected 'path_nodes' in result, got: {record.keys()}"
-    assert "path_labels" in record, f"Expected 'path_labels' in result, got: {record.keys()}"
+    assert "path_nodes" in record, (
+        f"Expected 'path_nodes' in result, got: {record.keys()}"
+    )
+    assert "path_labels" in record, (
+        f"Expected 'path_labels' in result, got: {record.keys()}"
+    )
     assert "depth" in record, f"Expected 'depth' in result, got: {record.keys()}"
     assert record["depth"] == 2
 
@@ -398,13 +404,15 @@ def test_code_query_data_flow_endpoint_returns_200():
     minimal_app.include_router(code_graphs_router, prefix="/api/v1")
 
     mock_driver = AsyncMock()
-    mock_driver.execute_query.return_value = _neo4j_result([
-        {
-            "path_nodes": ["views.handle_request", "views.handle_request.req"],
-            "path_labels": ["Function", "Variable"],
-            "depth": 1,
-        }
-    ])
+    mock_driver.execute_query.return_value = _neo4j_result(
+        [
+            {
+                "path_nodes": ["views.handle_request", "views.handle_request.req"],
+                "path_labels": ["Function", "Variable"],
+                "depth": 1,
+            }
+        ]
+    )
 
     fake_user = {"id": USER_A, "email": "test@test.com", "principal_type": "user"}
 
@@ -433,9 +441,7 @@ def test_code_query_data_flow_endpoint_returns_200():
                 },
             )
 
-    assert resp.status_code == 200, (
-        f"Expected 200, got {resp.status_code}: {resp.text}"
-    )
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     body = resp.json()
     assert body["query_type"] == "data_flow"
     assert body["total"] == 1

@@ -13,14 +13,14 @@ Env vars required: NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, POSTGRES_URL
 """
 
 import asyncio
-import sys
 import os
+import sys
 
 # Allow running from project root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from neo4j import GraphDatabase
 import asyncpg
+from neo4j import GraphDatabase
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -127,9 +127,13 @@ def run_neo4j_migrations(embedding_dim: int) -> None:
                         }}
                     """
                 )
-                logger.info(f"Created community_embeddings vector index (dim={embedding_dim})")
+                logger.info(
+                    f"Created community_embeddings vector index (dim={embedding_dim})"
+                )
             else:
-                logger.info("community_embeddings vector index already at correct dimension — skipping")
+                logger.info(
+                    "community_embeddings vector index already at correct dimension — skipping"
+                )
 
             # Run all other migrations
             for name, query in NEO4J_MIGRATIONS:
@@ -204,6 +208,7 @@ async def run_postgres_migrations() -> None:
 # ---------------------------------------------------------------------------
 # Entry Point
 # ---------------------------------------------------------------------------
+
 
 async def main() -> None:
     logger.info("=== Community Schema Migration ===")

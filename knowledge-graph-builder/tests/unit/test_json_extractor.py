@@ -17,7 +17,6 @@ import pytest
 
 from app.services.json_extractor import _infer_schema, extract_json
 
-
 # ─── _infer_schema unit tests ─────────────────────────────────────────────────
 
 

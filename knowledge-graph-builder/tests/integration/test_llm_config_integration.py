@@ -23,6 +23,7 @@ import pytest_asyncio
 
 try:
     from neo4j import AsyncDriver
+
     _NEO4J_AVAILABLE = True
 except ImportError:
     _NEO4J_AVAILABLE = False
@@ -79,6 +80,7 @@ async def _cleanup(neo4j_test_driver: AsyncDriver):
             "MATCH (n:LLMConfig) WHERE n.org_id IN [$a, $b] OR n.graph_id = $g DETACH DELETE n",
             {"a": _ORG_A, "b": _ORG_B, "g": _GID_A},
         )
+
     await _wipe()
     yield
     await _wipe()
@@ -86,8 +88,8 @@ async def _cleanup(neo4j_test_driver: AsyncDriver):
 
 @pytest.fixture(autouse=True)
 def _override_auth(async_client):
-    from app.main import app
     from app.api.dependencies import get_current_user, get_current_user_id
+    from app.main import app
 
     app.dependency_overrides[get_current_user] = lambda: {
         "id": _USER,
@@ -101,19 +103,21 @@ def _override_auth(async_client):
 
 @pytest.fixture(autouse=True)
 def _override_llm_config_service(neo4j_test_driver: AsyncDriver):
-    from app.main import app
     from app.api.v1.endpoints.llm_configs import _llm_config_service
+    from app.main import app
     from app.services.llm_config_service import LLMConfigService
 
-    app.dependency_overrides[_llm_config_service] = lambda: LLMConfigService(neo4j_test_driver)
+    app.dependency_overrides[_llm_config_service] = lambda: LLMConfigService(
+        neo4j_test_driver
+    )
     yield
     app.dependency_overrides.pop(_llm_config_service, None)
 
 
 @pytest.fixture(autouse=True)
 def _override_broker():
-    from app.main import app
     from app.api.v1.endpoints.llm_configs import _broker
+    from app.main import app
 
     mock = _make_mock_broker()
     app.dependency_overrides[_broker] = lambda: mock
@@ -229,8 +233,8 @@ class TestCrossTenantIsolation:
         create = await async_client.post(_ORG_PREFIX, json=_CREATE_BODY)
         config_id = create.json()["config_id"]
 
-        from app.main import app
         from app.api.dependencies import get_current_user
+        from app.main import app
 
         app.dependency_overrides[get_current_user] = lambda: {
             "id": "other-user",
@@ -250,8 +254,8 @@ class TestCrossTenantIsolation:
         create = await async_client.post(_ORG_PREFIX, json=_CREATE_BODY)
         config_id = create.json()["config_id"]
 
-        from app.main import app
         from app.api.dependencies import get_current_user
+        from app.main import app
 
         app.dependency_overrides[get_current_user] = lambda: {
             "id": "attacker",
@@ -272,8 +276,8 @@ class TestCrossTenantIsolation:
 
 class TestBrokerError:
     async def test_broker_error_surfaces_as_400(self, async_client):
-        from app.main import app
         from app.api.v1.endpoints.llm_configs import _broker
+        from app.main import app
         from app.services.credential_broker_client import CredentialBrokerError
 
         failing_broker = AsyncMock()

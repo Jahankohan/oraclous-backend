@@ -20,7 +20,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -334,8 +333,8 @@ class TestTenantIsolation:
         r.get = AsyncMock(return_value=None)
 
         bucket_states: dict[str, list] = {
-            "ratelimit:tenant-A:write": [0, 5],   # rejected
-            "ratelimit:tenant-B:write": [1, 9],   # allowed
+            "ratelimit:tenant-A:write": [0, 5],  # rejected
+            "ratelimit:tenant-B:write": [1, 9],  # allowed
         }
 
         async def per_bucket_eval(script, num_keys, bucket_key, *args):
@@ -395,9 +394,7 @@ class TestPerTenantConfig:
         """
         from app.core.rate_limiter import TokenBucketRateLimiter
 
-        tenant_config = {
-            "write": {"rate": 2.0, "burst": 20.0}
-        }
+        tenant_config = {"write": {"rate": 2.0, "burst": 20.0}}
 
         r = MagicMock()
         r.get = AsyncMock(return_value=None)  # cache miss
@@ -406,9 +403,7 @@ class TestPerTenantConfig:
 
         # Mock Neo4j session returning the config
         mock_record = MagicMock()
-        mock_record.__getitem__ = MagicMock(
-            return_value=json.dumps(tenant_config)
-        )
+        mock_record.__getitem__ = MagicMock(return_value=json.dumps(tenant_config))
 
         mock_result = AsyncMock()
         mock_result.single = AsyncMock(return_value=mock_record)
@@ -421,7 +416,9 @@ class TestPerTenantConfig:
         mock_neo4j = MagicMock()
         mock_neo4j.session = MagicMock(return_value=mock_session)
 
-        limiter = TokenBucketRateLimiter(r, "neo4j-tenant", "write", neo4j_driver=mock_neo4j)
+        limiter = TokenBucketRateLimiter(
+            r, "neo4j-tenant", "write", neo4j_driver=mock_neo4j
+        )
         rate, burst = await limiter._get_rate_and_burst()
 
         assert rate == 2.0
@@ -434,7 +431,7 @@ class TestPerTenantConfig:
         After loading the config from Neo4j, it must be stored in Redis
         with the correct config key and TTL.
         """
-        from app.core.rate_limiter import TokenBucketRateLimiter, _CONFIG_CACHE_TTL
+        from app.core.rate_limiter import _CONFIG_CACHE_TTL, TokenBucketRateLimiter
 
         tenant_config = {"write": {"rate": 1.5, "burst": 15.0}}
 
@@ -457,7 +454,9 @@ class TestPerTenantConfig:
         mock_neo4j = MagicMock()
         mock_neo4j.session = MagicMock(return_value=mock_session)
 
-        limiter = TokenBucketRateLimiter(r, "cache-tenant", "write", neo4j_driver=mock_neo4j)
+        limiter = TokenBucketRateLimiter(
+            r, "cache-tenant", "write", neo4j_driver=mock_neo4j
+        )
         await limiter._get_rate_and_burst()
 
         # Redis.set must have been called to cache the config
@@ -484,7 +483,9 @@ class TestPerTenantConfig:
         mock_neo4j = MagicMock()
         mock_neo4j.session = MagicMock()
 
-        limiter = TokenBucketRateLimiter(r, "redis-cached-tenant", "read", neo4j_driver=mock_neo4j)
+        limiter = TokenBucketRateLimiter(
+            r, "redis-cached-tenant", "read", neo4j_driver=mock_neo4j
+        )
         rate, burst = await limiter._get_rate_and_burst()
 
         assert rate == 3.0
@@ -498,7 +499,7 @@ class TestPerTenantConfig:
         """
         When neither Redis cache nor Neo4j has a config, defaults must be used.
         """
-        from app.core.rate_limiter import TokenBucketRateLimiter, _DEFAULTS
+        from app.core.rate_limiter import _DEFAULTS, TokenBucketRateLimiter
 
         r = MagicMock()
         r.get = AsyncMock(return_value=None)  # no cache
@@ -516,7 +517,9 @@ class TestPerTenantConfig:
         mock_neo4j = MagicMock()
         mock_neo4j.session = MagicMock(return_value=mock_session)
 
-        limiter = TokenBucketRateLimiter(r, "default-tenant", "write", neo4j_driver=mock_neo4j)
+        limiter = TokenBucketRateLimiter(
+            r, "default-tenant", "write", neo4j_driver=mock_neo4j
+        )
         rate, burst = await limiter._get_rate_and_burst()
 
         assert rate == _DEFAULTS["write"]["rate"]
@@ -572,9 +575,10 @@ class TestRateLimitErrorCode:
         """
         The HTTPException handler in main.py must map status 429 → KGB-4029.
         """
-        from fastapi import FastAPI, HTTPException
+        from unittest.mock import AsyncMock
+
+        from fastapi import HTTPException
         from fastapi.testclient import TestClient
-        from unittest.mock import patch, AsyncMock
 
         with (
             patch("app.core.neo4j_client.neo4j_client.connect", new=AsyncMock()),
@@ -604,9 +608,10 @@ class TestRateLimitErrorCode:
         """
         The HTTPException handler in main.py must map status 404 → KGB-4001.
         """
-        from fastapi import FastAPI, HTTPException
+        from unittest.mock import AsyncMock
+
+        from fastapi import HTTPException
         from fastapi.testclient import TestClient
-        from unittest.mock import patch, AsyncMock
 
         with (
             patch("app.core.neo4j_client.neo4j_client.connect", new=AsyncMock()),

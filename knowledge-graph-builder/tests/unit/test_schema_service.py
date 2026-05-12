@@ -152,7 +152,6 @@ class TestNeo4jSchemaManager:
             patch.object(schema_manager, "_get_indexes", return_value=[]),
             patch("app.services.schema_service.neo4j_client") as mock_client,
         ):
-
             mock_client.connect_async = AsyncMock()
             mock_client.async_driver = MagicMock()
 
@@ -188,7 +187,6 @@ class TestNeo4jSchemaManager:
             patch.object(schema_manager, "_get_indexes", return_value=[]),
             patch("app.services.schema_service.neo4j_client") as mock_client,
         ):
-
             mock_client.connect_async = AsyncMock()
             mock_client.async_driver = MagicMock()
 

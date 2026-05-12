@@ -118,7 +118,7 @@ async def ingest_document(
     if len(data) > _MAX_DOCUMENT_BYTES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File exceeds 50 MB limit ({len(data) // (1024*1024)} MB received)",
+            detail=f"File exceeds 50 MB limit ({len(data) // (1024 * 1024)} MB received)",
         )
 
     content_type = file.content_type or ""
@@ -230,7 +230,7 @@ async def ingest_image(
     if len(data) > _MAX_IMAGE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Image exceeds 20 MB limit ({len(data) // (1024*1024)} MB received)",
+            detail=f"Image exceeds 20 MB limit ({len(data) // (1024 * 1024)} MB received)",
         )
 
     content_type = file.content_type or ""

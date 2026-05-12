@@ -75,9 +75,7 @@ _SUPPORTED_EXTENSIONS = {
 }
 
 
-def _is_diagram_mode(
-    image_path: str, metadata: dict[str, Any] | None
-) -> bool:
+def _is_diagram_mode(image_path: str, metadata: dict[str, Any] | None) -> bool:
     """
     Return True when diagram-structured extraction should be used.
 

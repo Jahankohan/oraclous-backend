@@ -13,6 +13,7 @@ logger = get_logger(__name__)
 def _validate_egress_url(url: str) -> None:
     """Raise ValueError if egress_url points to a private/internal host (SSRF guard)."""
     import ipaddress
+
     parsed = urlparse(url)
     host = parsed.hostname or ""
     _BLOCKED = {"localhost", "metadata.google.internal", "169.254.169.254"}
@@ -32,7 +33,9 @@ def _validate_egress_url(url: str) -> None:
         addr = ipaddress.ip_address(host)
         for net in _PRIVATE:
             if addr in net:
-                raise ValueError(f"egress_url host '{host}' is in a private range (SSRF protection)")
+                raise ValueError(
+                    f"egress_url host '{host}' is in a private range (SSRF protection)"
+                )
     except ValueError as exc:
         if "SSRF" in str(exc):
             raise
@@ -42,30 +45,50 @@ def _validate_egress_url(url: str) -> None:
             resolved_addr = ipaddress.ip_address(resolved)
             for net in _PRIVATE:
                 if resolved_addr in net:
-                    raise ValueError(f"egress_url resolves to private IP (SSRF protection)")
+                    raise ValueError(
+                        "egress_url resolves to private IP (SSRF protection)"
+                    )
         except OSError:
             pass  # DNS failure is acceptable; caller's problem
 
 
 def _run_webhook_async(
-    graph_id: str, agent_id: str, slug: str,
-    message: str, session_id: str | None, context: dict,
-    egress_url: str | None, integration_key_last4: str,
+    graph_id: str,
+    agent_id: str,
+    slug: str,
+    message: str,
+    session_id: str | None,
+    context: dict,
+    egress_url: str | None,
+    integration_key_last4: str,
 ) -> None:
     """Synchronous wrapper that runs the async agent execution in a new event loop."""
-    asyncio.run(_async_webhook_core(
-        graph_id=graph_id, agent_id=agent_id, slug=slug,
-        message=message, session_id=session_id, context=context,
-        egress_url=egress_url, integration_key_last4=integration_key_last4,
-    ))
+    asyncio.run(
+        _async_webhook_core(
+            graph_id=graph_id,
+            agent_id=agent_id,
+            slug=slug,
+            message=message,
+            session_id=session_id,
+            context=context,
+            egress_url=egress_url,
+            integration_key_last4=integration_key_last4,
+        )
+    )
 
 
 async def _async_webhook_core(
-    graph_id: str, agent_id: str, slug: str,
-    message: str, session_id: str | None, context: dict,
-    egress_url: str | None, integration_key_last4: str,
+    graph_id: str,
+    agent_id: str,
+    slug: str,
+    message: str,
+    session_id: str | None,
+    context: dict,
+    egress_url: str | None,
+    integration_key_last4: str,
 ) -> None:
     from neo4j import GraphDatabase
+
     from app.core.config import settings
     from app.services.agent_executor import AgentExecutor
     from app.services.audit_service import log_public_call
@@ -82,6 +105,7 @@ async def _async_webhook_core(
 
     # Use the async driver for agent execution
     from neo4j import AsyncGraphDatabase
+
     async_driver = AsyncGraphDatabase.driver(
         settings.NEO4J_URI,
         auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
@@ -102,14 +126,19 @@ async def _async_webhook_core(
         if egress_url:
             try:
                 _validate_egress_url(egress_url)
-                await _fire_egress(egress_url, {
-                    "agent_id": agent_id,
-                    "session_id": result.session_id,
-                    "response": result.response,
-                    "provenance": result.provenance.model_dump() if result.provenance else None,
-                    "context_echo": context,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                })
+                await _fire_egress(
+                    egress_url,
+                    {
+                        "agent_id": agent_id,
+                        "session_id": result.session_id,
+                        "response": result.response,
+                        "provenance": result.provenance.model_dump()
+                        if result.provenance
+                        else None,
+                        "context_echo": context,
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    },
+                )
             except Exception as exc:
                 logger.error("Egress POST to %s failed: %s", egress_url, exc)
     except Exception as exc:
@@ -120,6 +149,7 @@ async def _async_webhook_core(
 
 async def _fire_egress(url: str, payload: dict) -> None:
     import httpx
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(url, json=payload)
         logger.info("Egress POST to %s returned %s", url, resp.status_code)
@@ -130,14 +160,24 @@ try:
 
     @celery_app.task(name="webhook_tasks.run_webhook_agent_task")
     def run_webhook_agent_task(
-        graph_id: str, agent_id: str, slug: str,
-        message: str, session_id: str | None, context: dict,
-        egress_url: str | None, integration_key_last4: str,
+        graph_id: str,
+        agent_id: str,
+        slug: str,
+        message: str,
+        session_id: str | None,
+        context: dict,
+        egress_url: str | None,
+        integration_key_last4: str,
     ) -> None:
         _run_webhook_async(
-            graph_id=graph_id, agent_id=agent_id, slug=slug,
-            message=message, session_id=session_id, context=context,
-            egress_url=egress_url, integration_key_last4=integration_key_last4,
+            graph_id=graph_id,
+            agent_id=agent_id,
+            slug=slug,
+            message=message,
+            session_id=session_id,
+            context=context,
+            egress_url=egress_url,
+            integration_key_last4=integration_key_last4,
         )
 
 except Exception:

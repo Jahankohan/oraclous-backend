@@ -12,14 +12,13 @@ Covers:
 """
 
 import json
-import tempfile
 import os
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.services.vision_extractor import VisionExtractor, _is_diagram_mode
-
 
 # ─── _is_diagram_mode logic ───────────────────────────────────────────────────
 
@@ -103,12 +102,16 @@ class TestVisionExtractorExtractRouting:
         extractor = VisionExtractor()
         path = self._make_png()
 
-        diagram_response = json.dumps({
-            "nodes": [{"id": "svc1", "label": "Service A", "type": "service"}],
-            "edges": [{"from": "svc1", "to": "db1", "label": "reads", "type": "data_flow"}],
-            "diagram_type": "architecture",
-            "description": "A simple service architecture.",
-        })
+        diagram_response = json.dumps(
+            {
+                "nodes": [{"id": "svc1", "label": "Service A", "type": "service"}],
+                "edges": [
+                    {"from": "svc1", "to": "db1", "label": "reads", "type": "data_flow"}
+                ],
+                "diagram_type": "architecture",
+                "description": "A simple service architecture.",
+            }
+        )
 
         try:
             with (
@@ -138,10 +141,12 @@ class TestVisionExtractorExtractRouting:
         extractor = VisionExtractor()
         path = self._make_png()
 
-        standard_response = json.dumps({
-            "entities": [{"name": "Alice", "type": "Person", "description": ""}],
-            "relationships": [],
-        })
+        standard_response = json.dumps(
+            {
+                "entities": [{"name": "Alice", "type": "Person", "description": ""}],
+                "relationships": [],
+            }
+        )
 
         try:
             with (
@@ -171,12 +176,14 @@ class TestVisionExtractorExtractRouting:
         with os.fdopen(fd, "wb") as fh:
             fh.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
 
-        diagram_response = json.dumps({
-            "nodes": [],
-            "edges": [],
-            "diagram_type": "other",
-            "description": "Empty diagram.",
-        })
+        diagram_response = json.dumps(
+            {
+                "nodes": [],
+                "edges": [],
+                "diagram_type": "other",
+                "description": "Empty diagram.",
+            }
+        )
 
         try:
             with (
@@ -233,10 +240,12 @@ class TestVisionExtractorExtractRouting:
         with os.fdopen(fd, "wb") as fh:
             fh.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
 
-        standard_response = json.dumps({
-            "entities": [],
-            "relationships": [],
-        })
+        standard_response = json.dumps(
+            {
+                "entities": [],
+                "relationships": [],
+            }
+        )
 
         try:
             with (

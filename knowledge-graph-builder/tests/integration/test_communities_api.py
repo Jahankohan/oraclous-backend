@@ -53,8 +53,12 @@ class TestListCommunitiesEndpoint:
         """200 with a list whose items have community_id, level, label, size, summary."""
         analytics_result = {
             "communities": [
-                _community_record("c-aaa", level=0, entity_count=12,
-                                  summary="Tech companies in the Bay Area. Includes startups."),
+                _community_record(
+                    "c-aaa",
+                    level=0,
+                    entity_count=12,
+                    summary="Tech companies in the Bay Area. Includes startups.",
+                ),
                 _community_record("c-bbb", level=1, entity_count=4, summary=None),
             ],
             "total": 2,
@@ -65,9 +69,13 @@ class TestListCommunitiesEndpoint:
         auth_patch = _patch_auth()
         try:
             with (
-                patch("app.api.v1.endpoints.communities.verify_graph_access",
-                      new_callable=AsyncMock) as mock_vga,
-                patch("app.api.v1.endpoints.communities.GraphAnalyticsService") as MockSvc,
+                patch(
+                    "app.api.v1.endpoints.communities.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
+                patch(
+                    "app.api.v1.endpoints.communities.GraphAnalyticsService"
+                ) as MockSvc,
             ):
                 mock_vga.return_value = GRAPH_ID
                 MockSvc.return_value.get_communities_list = AsyncMock(
@@ -120,9 +128,13 @@ class TestListCommunitiesEndpoint:
         auth_patch = _patch_auth()
         try:
             with (
-                patch("app.api.v1.endpoints.communities.verify_graph_access",
-                      new_callable=AsyncMock) as mock_vga,
-                patch("app.api.v1.endpoints.communities.GraphAnalyticsService") as MockSvc,
+                patch(
+                    "app.api.v1.endpoints.communities.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
+                patch(
+                    "app.api.v1.endpoints.communities.GraphAnalyticsService"
+                ) as MockSvc,
             ):
                 mock_vga.return_value = GRAPH_ID
                 MockSvc.return_value.get_communities_list = AsyncMock(
@@ -143,7 +155,8 @@ class TestListCommunitiesEndpoint:
     @pytest.mark.api
     async def test_returns_403_when_no_read_access(self, async_client):
         """403 when caller lacks read access to the graph."""
-        from fastapi import HTTPException, status as fastapi_status
+        from fastapi import HTTPException
+        from fastapi import status as fastapi_status
 
         auth_patch = _patch_auth()
         try:
@@ -152,7 +165,8 @@ class TestListCommunitiesEndpoint:
                 new_callable=AsyncMock,
             ) as mock_vga:
                 mock_vga.side_effect = HTTPException(
-                    status_code=fastapi_status.HTTP_403_FORBIDDEN, detail="Access denied"
+                    status_code=fastapi_status.HTTP_403_FORBIDDEN,
+                    detail="Access denied",
                 )
 
                 response = await async_client.get(
@@ -168,9 +182,7 @@ class TestListCommunitiesEndpoint:
     @pytest.mark.api
     async def test_requires_auth(self, async_client):
         """No token → 401/403."""
-        response = await async_client.get(
-            f"/api/v1/graphs/{GRAPH_ID}/communities"
-        )
+        response = await async_client.get(f"/api/v1/graphs/{GRAPH_ID}/communities")
         assert response.status_code in (401, 403)
 
     @pytest.mark.integration
@@ -186,9 +198,13 @@ class TestListCommunitiesEndpoint:
         auth_patch = _patch_auth()
         try:
             with (
-                patch("app.api.v1.endpoints.communities.verify_graph_access",
-                      new_callable=AsyncMock) as mock_vga,
-                patch("app.api.v1.endpoints.communities.GraphAnalyticsService") as MockSvc,
+                patch(
+                    "app.api.v1.endpoints.communities.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
+                patch(
+                    "app.api.v1.endpoints.communities.GraphAnalyticsService"
+                ) as MockSvc,
             ):
                 mock_vga.return_value = GRAPH_ID
                 svc = MockSvc.return_value
@@ -211,9 +227,13 @@ class TestListCommunitiesEndpoint:
         auth_patch = _patch_auth()
         try:
             with (
-                patch("app.api.v1.endpoints.communities.verify_graph_access",
-                      new_callable=AsyncMock) as mock_vga,
-                patch("app.api.v1.endpoints.communities.GraphAnalyticsService") as MockSvc,
+                patch(
+                    "app.api.v1.endpoints.communities.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
+                patch(
+                    "app.api.v1.endpoints.communities.GraphAnalyticsService"
+                ) as MockSvc,
             ):
                 mock_vga.return_value = GRAPH_ID
                 MockSvc.return_value.get_communities_list = AsyncMock(

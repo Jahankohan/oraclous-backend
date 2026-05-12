@@ -7,8 +7,8 @@ PROVIDERS = {
         "scopes": [
             "openid",
             "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile", 
-            "https://www.googleapis.com/auth/drive.readonly"
+            "https://www.googleapis.com/auth/userinfo.profile",
+            "https://www.googleapis.com/auth/drive.readonly",
         ],
         "scope_descriptions": {
             "openid": "Basic OpenID Connect authentication",
@@ -21,9 +21,9 @@ PROVIDERS = {
             "https://www.googleapis.com/auth/spreadsheets.readonly": "Read-only access to Google Sheets",
             "https://www.googleapis.com/auth/spreadsheets": "Full access to Google Sheets",
             "https://www.googleapis.com/auth/documents.readonly": "Read-only access to Google Docs",
-            "https://www.googleapis.com/auth/documents": "Full access to Google Docs"
+            "https://www.googleapis.com/auth/documents": "Full access to Google Docs",
         },
-        "supports_refresh": True
+        "supports_refresh": True,
     },
     "github": {
         "authorize_url": "https://github.com/login/oauth/authorize",
@@ -45,9 +45,9 @@ PROVIDERS = {
             "gist": "Create gists",
             "notifications": "Access notifications",
             "read:discussion": "Read team discussions",
-            "write:discussion": "Read and write team discussions"
+            "write:discussion": "Read and write team discussions",
         },
-        "supports_refresh": False  # GitHub doesn't support refresh tokens
+        "supports_refresh": False,  # GitHub doesn't support refresh tokens
     },
     "notion": {
         "authorize_url": "https://api.notion.com/v1/oauth/authorize",
@@ -57,8 +57,8 @@ PROVIDERS = {
         "scope_descriptions": {
             "read_content": "Read access to pages and databases",
             "update_content": "Edit access to pages and databases",
-            "insert_content": "Create new pages and database entries"
+            "insert_content": "Create new pages and database entries",
         },
-        "supports_refresh": True
-    }
+        "supports_refresh": True,
+    },
 }

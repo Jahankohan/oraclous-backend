@@ -14,7 +14,7 @@
 ❌ WRONG: chat_service.py + enhanced_chat_service.py + advanced_chat_service.py
 ✅ CORRECT: chat_service.py (enhanced in place)
 
-❌ WRONG: entity_extractor.py + advanced_entity_extractor.py  
+❌ WRONG: entity_extractor.py + advanced_entity_extractor.py
 ✅ CORRECT: entity_extractor.py (enhanced in place)
 
 ❌ WRONG: schema_service.py + dynamic_schema_service.py
@@ -37,7 +37,7 @@ async def chat_with_graph(request: ChatRequest):
     # Enhanced implementation with backward compatibility
     return await chat_service.chat_with_graph(request)
 
-# ❌ WRONG: Multiple endpoints for same functionality  
+# ❌ WRONG: Multiple endpoints for same functionality
 @router.post("/graphs/{graph_id}/chat")           # Old
 @router.post("/graphs/{graph_id}/chat/advanced")  # New
 @router.post("/graphs/{graph_id}/chat/enhanced")  # Newer
@@ -72,7 +72,7 @@ async def chat_with_graph(
 ### **File Naming Convention:**
 ```bash
 ✅ KEEP: chat_service.py (enhanced)
-✅ KEEP: entity_extractor.py (enhanced) 
+✅ KEEP: entity_extractor.py (enhanced)
 ✅ KEEP: schema_service.py (enhanced)
 
 ❌ DELETE: enhanced_chat_service.py
@@ -86,10 +86,10 @@ async def chat_with_graph(
 class ChatService:
     async def chat_with_graph(self, query: str, mode: str = "comprehensive"):
         """Main chat method with enhanced graph reasoning"""
-        
+
     async def _generate_graph_context(self, query: str):
         """Private method for advanced context generation"""
-        
+
     async def _validate_response_grounding(self, response: str):
         """Private method for hallucination prevention"""
 
@@ -182,11 +182,11 @@ class ChatService:
     def __init__(self):
         self.current_graph_id = None
         # ... existing attributes ...
-        
+
         # NEW: Enhanced capabilities
         self.reasoning_modes = ["comprehensive", "focused", "exploratory"]
         self.graph_algorithms = GraphAlgorithms()  # New component
-    
+
     # EXISTING method - enhanced with new parameters
     async def chat_with_graph(
         self,
@@ -197,11 +197,11 @@ class ChatService:
     ) -> Dict[str, Any]:
         # Enhanced implementation that includes new graph reasoning
         # while maintaining compatibility with existing calls
-        
+
     # NEW method - added functionality
     async def explain_reasoning(self, query: str) -> Dict[str, Any]:
         """NEW: Explain reasoning process for query"""
-        
+
     # EXISTING method - refactored for better performance
     async def _generate_response(self, query: str, context: str) -> str:
         # Refactored implementation with improved grounding validation

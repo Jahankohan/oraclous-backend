@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # 1. Neo4j ServiceUnavailable → 503 with Retry-After + KGB-5001
 # ---------------------------------------------------------------------------
@@ -175,7 +174,9 @@ class TestRedisDegradation:
 
         svc = QueryCacheService(r)
         # Must not raise
-        await svc.set("test-graph", "Who is Alice?", "vector_cypher", {"answer": "Alice is..."})
+        await svc.set(
+            "test-graph", "Who is Alice?", "vector_cypher", {"answer": "Alice is..."}
+        )
 
     @pytest.mark.unit
     @pytest.mark.asyncio

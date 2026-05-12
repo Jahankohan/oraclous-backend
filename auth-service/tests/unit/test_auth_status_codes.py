@@ -26,9 +26,9 @@ def test_register_route_declares_201():
         None,
     )
     assert register_route is not None, "/register/ route not found"
-    assert (
-        register_route.status_code == 201
-    ), f"Expected 201 but got {register_route.status_code}"
+    assert register_route.status_code == 201, (
+        f"Expected 201 but got {register_route.status_code}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -121,12 +121,10 @@ def test_login_route_raises_401_on_bad_credentials():
     mock_service.authenticate_user.return_value = None
 
     # Patch _check_request_limit on the bound limiter to skip Redis entirely
-    with patch(
-        "app.routes.auth_routes.limiter._check_request_limit", return_value=None
-    ), patch(
-        "app.routes.auth_routes.get_user_repository", return_value=mock_repo
-    ), patch(
-        "app.routes.auth_routes.AuthService", return_value=mock_service
+    with (
+        patch("app.routes.auth_routes.limiter._check_request_limit", return_value=None),
+        patch("app.routes.auth_routes.get_user_repository", return_value=mock_repo),
+        patch("app.routes.auth_routes.AuthService", return_value=mock_service),
     ):
         client = TestClient(app, raise_server_exceptions=False)
         r = client.post(

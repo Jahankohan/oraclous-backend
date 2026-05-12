@@ -29,7 +29,6 @@ from uuid import uuid4
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -127,8 +126,8 @@ def test_ingest_csv_creates_entity_nodes(graph_ids: list[str]) -> None:
     csv_path = _write_temp_csv(rows)
 
     try:
-        from app.services.csv_extractor import extract_csv
         from app.db.neo4j_client import neo4j_client
+        from app.services.csv_extractor import extract_csv
 
         result = extract_csv(csv_path)
         assert result["row_count"] == 10
@@ -180,8 +179,8 @@ def test_ingest_json_array_creates_entity_nodes(graph_ids: list[str]) -> None:
     json_path = _write_temp_json(data)
 
     try:
-        from app.services.json_extractor import extract_json
         from app.db.neo4j_client import neo4j_client
+        from app.services.json_extractor import extract_json
 
         result = extract_json(json_path)
         assert result["record_count"] == 15
@@ -239,8 +238,8 @@ def test_ingest_markdown_creates_section_nodes_with_contains_edges(
     md_path = _write_temp_md(md)
 
     try:
-        from app.services.md_extractor import extract_markdown
         from app.db.neo4j_client import neo4j_client
+        from app.services.md_extractor import extract_markdown
 
         result = extract_markdown(md_path)
         assert result["title"] == "Root"

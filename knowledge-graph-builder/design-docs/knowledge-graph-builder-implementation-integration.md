@@ -10,7 +10,7 @@
 
 ### Current Ecosystem
 - **auth-service** (Port 8000) - User authentication & OAuth
-- **credential-broker-service** (Port 8002) - Credential management 
+- **credential-broker-service** (Port 8002) - Credential management
 - **oraclous-core-service** (Port 8001) - Tool orchestration & workflow management
 - **knowledge-graph-builder** (Port 8003) - **[NEW SERVICE]**
 
@@ -87,12 +87,12 @@
    # app/core/neo4j_client.py
    from neo4j import AsyncGraphDatabase
    from typing import Optional
-   
+
    class Neo4jClient:
        def __init__(self, uri: str, user: str, password: str, database: str = "neo4j"):
            self.driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
            self.database = database
-       
+
        async def health_check(self) -> bool:
            """Check Neo4j connectivity"""
            try:
@@ -109,7 +109,7 @@
    # app/services/auth_service.py
    import httpx
    from app.core.config import settings
-   
+
    async def get_current_user(token: str):
        async with httpx.AsyncClient() as client:
            response = await client.get(
@@ -152,12 +152,12 @@
    # app/services/llm_service.py
    from langchain_openai import ChatOpenAI
    from langchain_community.graphs.graph_transformer import LLMGraphTransformer
-   
+
    class LLMService:
        def __init__(self):
            self.llm = None
            self.graph_transformer = None
-       
+
        async def initialize_llm(self, provider: str, api_key: str, model: str):
            """Initialize LLM based on provider"""
            if provider == "openai":
@@ -167,7 +167,7 @@
                    temperature=0
                )
            # Add support for other providers (Anthropic, Gemini, etc.)
-           
+
            self.graph_transformer = LLMGraphTransformer(llm=self.llm)
    ```
 
@@ -176,7 +176,7 @@
    # app/services/entity_extractor.py
    from langchain_community.graphs.neo4j_graph import Neo4jGraph
    from langchain.text_splitter import RecursiveCharacterTextSplitter
-   
+
    class EntityExtractor:
        def __init__(self, neo4j_graph: Neo4jGraph, llm_service: LLMService):
            self.neo4j_graph = neo4j_graph
@@ -185,17 +185,17 @@
                chunk_size=1000,
                chunk_overlap=200
            )
-       
+
        async def extract_entities_from_text(
-           self, 
-           text: str, 
+           self,
+           text: str,
            schema: Optional[Dict] = None,
            user_instructions: Optional[str] = None
        ) -> List[GraphDocument]:
            """Extract entities and relationships from text"""
            chunks = self.text_splitter.split_text(text)
            graph_documents = []
-           
+
            for chunk in chunks:
                docs = await self.llm_service.graph_transformer.convert_to_graph_documents(
                    [Document(page_content=chunk)],
@@ -203,7 +203,7 @@
                    include_source=True
                )
                graph_documents.extend(docs)
-           
+
            return graph_documents
    ```
 
@@ -212,12 +212,12 @@
    # app/services/diffbot_service.py
    import httpx
    from typing import List, Dict, Any
-   
+
    class DiffbotService:
        def __init__(self, api_key: str):
            self.api_key = api_key
            self.base_url = "https://nl.diffbot.com/v1/"
-       
+
        async def extract_entities(self, text: str) -> Dict[str, Any]:
            """Extract entities using Diffbot's NLP API"""
            async with httpx.AsyncClient() as client:
@@ -234,16 +234,16 @@
    class SchemaService:
        def __init__(self, neo4j_graph: Neo4jGraph):
            self.neo4j_graph = neo4j_graph
-       
+
        async def learn_schema_from_text(self, text: str, llm_service: LLMService) -> Dict:
            """Auto-learn schema from sample text"""
            # Implementation for schema extraction using LLM
            pass
-       
+
        async def get_existing_schema(self) -> Dict:
            """Get current database schema"""
            return self.neo4j_graph.get_schema
-       
+
        async def consolidate_schema(self, existing_entities: List[str]) -> Dict:
            """Consolidate and clean up schema"""
            pass
@@ -265,10 +265,10 @@
            schema=data.schema,
            user_instructions=data.instructions
        )
-       
+
        # Store in Neo4j
        await graph_service.store_graph_documents(graph_id, graph_documents)
-       
+
        return {"status": "success", "entities_count": len(graph_documents)}
    ```
 
@@ -290,13 +290,13 @@
    # app/services/embedding_service.py
    from langchain_openai import OpenAIEmbeddings
    from langchain_community.vectorstores.neo4j_vector import Neo4jVector
-   
+
    class EmbeddingService:
        def __init__(self, neo4j_graph: Neo4jGraph):
            self.neo4j_graph = neo4j_graph
            self.embeddings = None
            self.vector_store = None
-       
+
        async def initialize_embeddings(self, provider: str, api_key: str):
            """Initialize embedding model"""
            if provider == "openai":
@@ -304,7 +304,7 @@
                    api_key=api_key,
                    model="text-embedding-ada-002"
                )
-           
+
            self.vector_store = Neo4jVector.from_existing_graph(
                embedding=self.embeddings,
                url=self.neo4j_graph.url,
@@ -315,7 +315,7 @@
                text_node_properties=["text"],
                embedding_node_property="embedding"
            )
-       
+
        async def generate_embeddings_for_chunks(self, chunks: List[str]) -> List[List[float]]:
            """Generate embeddings for text chunks"""
            return await self.embeddings.embed_documents(chunks)
@@ -327,7 +327,7 @@
    class VectorService:
        def __init__(self, neo4j_client: Neo4jClient):
            self.neo4j_client = neo4j_client
-       
+
        async def create_vector_indexes(self):
            """Create necessary vector indexes"""
            queries = [
@@ -348,7 +348,7 @@
                }}
                """
            ]
-           
+
            async with self.neo4j_client.driver.session() as session:
                for query in queries:
                    await session.run(query)
@@ -361,27 +361,27 @@
        def __init__(self, vector_service: VectorService, neo4j_graph: Neo4jGraph):
            self.vector_service = vector_service
            self.neo4j_graph = neo4j_graph
-       
+
        async def similarity_search(
-           self, 
-           query: str, 
-           k: int = 5, 
+           self,
+           query: str,
+           k: int = 5,
            filter_dict: Optional[Dict] = None
        ) -> List[Dict]:
            """Perform similarity search"""
            query_embedding = await self.vector_service.embeddings.embed_query(query)
-           
+
            cypher_query = """
            CALL db.index.vector.queryNodes('chunk_embeddings', $k, $query_embedding)
            YIELD node, score
            RETURN node.text as text, score, node.source as source
            ORDER BY score DESC
            """
-           
+
            async with self.neo4j_client.driver.session() as session:
                result = await session.run(
-                   cypher_query, 
-                   k=k, 
+                   cypher_query,
+                   k=k,
                    query_embedding=query_embedding
                )
                return [record.data() async for record in result]
@@ -404,13 +404,13 @@
    # app/services/chat_service.py
    from langchain_community.graphs.neo4j_graph import Neo4jGraph
    from langchain.chains import GraphCypherQAChain
-   
+
    class ChatService:
        def __init__(self, neo4j_graph: Neo4jGraph, llm_service: LLMService):
            self.neo4j_graph = neo4j_graph
            self.llm_service = llm_service
            self.cypher_chain = None
-       
+
        async def initialize_chat(self):
            """Initialize chat chains"""
            self.cypher_chain = GraphCypherQAChain.from_llm(
@@ -419,15 +419,15 @@
                verbose=True,
                return_intermediate_steps=True
            )
-       
+
        async def chat_with_graph(
-           self, 
-           query: str, 
+           self,
+           query: str,
            mode: str = "graph_vector",
            graph_id: str = None
        ) -> Dict[str, Any]:
            """Chat with knowledge graph using different retrieval modes"""
-           
+
            if mode == "vector":
                return await self._vector_search_chat(query, graph_id)
            elif mode == "graph":
@@ -445,17 +445,17 @@
        def __init__(self, neo4j_graph: Neo4jGraph, search_service: SearchService):
            self.neo4j_graph = neo4j_graph
            self.search_service = search_service
-       
+
        async def graph_augmented_retrieval(
-           self, 
-           query: str, 
+           self,
+           query: str,
            max_entities: int = 10
        ) -> Dict[str, Any]:
            """Perform GraphRAG retrieval"""
-           
+
            # 1. Vector search for relevant chunks
            similar_chunks = await self.search_service.similarity_search(query, k=5)
-           
+
            # 2. Extract entities from relevant chunks
            entity_query = """
            MATCH (c:Chunk)-[:CONTAINS]->(e:Entity)
@@ -463,17 +463,17 @@
            RETURN e.name as entity, e.type as type, collect(c.text) as contexts
            LIMIT $max_entities
            """
-           
+
            # 3. Get entity neighborhoods
            neighborhood_query = """
            MATCH (e:Entity {name: $entity_name})-[r]-(related:Entity)
            RETURN type(r) as relationship, related.name as related_entity, related.type as related_type
            LIMIT 5
            """
-           
+
            # 4. Combine context for LLM
            context = self._build_context(similar_chunks, entities, neighborhoods)
-           
+
            return {
                "context": context,
                "chunks": similar_chunks,
@@ -489,24 +489,24 @@
        def __init__(self, neo4j_graph: Neo4jGraph, llm_service: LLMService):
            self.neo4j_graph = neo4j_graph
            self.llm_service = llm_service
-       
+
        async def natural_language_to_cypher(self, question: str) -> Dict[str, Any]:
            """Convert natural language to Cypher query"""
-           
+
            schema = self.neo4j_graph.get_schema
-           
+
            prompt = f"""
            Given the Neo4j graph schema:
            {schema}
-           
+
            Convert this natural language question to a Cypher query:
            "{question}"
-           
+
            Return only the Cypher query, no explanation.
            """
-           
+
            cypher_query = await self.llm_service.llm.invoke(prompt)
-           
+
            # Execute query safely
            try:
                result = await self.neo4j_graph.query(cypher_query.content)
@@ -533,13 +533,13 @@
        current_user: dict = Depends(get_current_user)
    ):
        """Chat with knowledge graph"""
-       
+
        response = await chat_service.chat_with_graph(
            query=chat_request.message,
            mode=chat_request.mode,
            graph_id=graph_id
        )
-       
+
        # Save chat history
        await chat_service.save_chat_history(
            user_id=current_user["id"],
@@ -548,7 +548,7 @@
            response=response["answer"],
            metadata=response.get("metadata", {})
        )
-       
+
        return response
    ```
 
@@ -569,14 +569,14 @@
    ```python
    # To be added to oraclous-core-service
    # app/tools/implementations/analytics/knowledge_graph_builder.py
-   
+
    class KnowledgeGraphBuilder(InternalTool):
        """Knowledge Graph Builder tool for oraclous-core-service"""
-       
+
        def __init__(self, definition: ToolDefinition):
            super().__init__(definition)
            self.service_url = settings.KNOWLEDGE_GRAPH_SERVICE_URL
-       
+
        @classmethod
        def get_tool_definition(cls) -> ToolDefinition:
            return ToolDefinition(
@@ -592,7 +592,7 @@
                        description="Create knowledge graph from text data"
                    ),
                    ToolCapability(
-                       name="query_knowledge_graph", 
+                       name="query_knowledge_graph",
                        description="Query knowledge graph using natural language"
                    ),
                    ToolCapability(
@@ -609,7 +609,7 @@
                            "description": "Action to perform"
                        },
                        "graph_id": {
-                           "type": "string", 
+                           "type": "string",
                            "description": "Graph identifier"
                        },
                        "content": {
@@ -635,7 +635,7 @@
                    ),
                    CredentialRequirement(
                        provider="neo4j",
-                       required=True, 
+                       required=True,
                        description="Neo4j database credentials"
                    )
                ]
@@ -648,7 +648,7 @@
    class OrchestratorService:
        def __init__(self):
            self.core_service_url = settings.CORE_SERVICE_URL
-       
+
        async def register_with_orchestrator(self):
            """Register this service with the orchestrator"""
            registration_data = {
@@ -657,12 +657,12 @@
                "health_endpoint": "/api/v1/health",
                "capabilities": [
                    "graph_creation",
-                   "entity_extraction", 
+                   "entity_extraction",
                    "graph_querying",
                    "semantic_search"
                ]
            }
-           
+
            async with httpx.AsyncClient() as client:
                response = await client.post(
                    f"{self.core_service_url}/api/v1/services/register",
@@ -683,7 +683,7 @@
                "chat_query": 0.02,         # per query
                "embedding_generation": 0.01 # per 1000 tokens
            }
-       
+
        def calculate_credits(self, operation: str, **kwargs) -> Decimal:
            """Calculate credits consumed for operation"""
            if operation == "entity_extraction":
@@ -713,7 +713,7 @@
    class GraphAnalyticsService:
        def __init__(self, neo4j_client: Neo4jClient):
            self.neo4j_client = neo4j_client
-       
+
        async def community_detection(self, graph_id: str) -> Dict[str, Any]:
            """Detect communities in the graph"""
            query = """
@@ -723,11 +723,11 @@
            ORDER BY communityId
            """
            # Implementation
-       
+
        async def centrality_analysis(self, graph_id: str) -> Dict[str, Any]:
            """Calculate node centrality metrics"""
            # PageRank, Betweenness, Degree centrality
-       
+
        async def graph_metrics(self, graph_id: str) -> Dict[str, Any]:
            """Calculate overall graph metrics"""
            return {
@@ -744,27 +744,27 @@
    from functools import wraps
    import asyncio
    from typing import Dict, Any
-   
+
    class CacheService:
        def __init__(self):
            self._cache: Dict[str, Any] = {}
            self._cache_ttl: Dict[str, float] = {}
-       
+
        def cache_result(self, ttl: int = 300):
            """Cache decorator for expensive operations"""
            def decorator(func):
                @wraps(func)
                async def wrapper(*args, **kwargs):
                    cache_key = f"{func.__name__}:{hash(str(args) + str(kwargs))}"
-                   
+
                    if cache_key in self._cache:
                        if time.time() < self._cache_ttl[cache_key]:
                            return self._cache[cache_key]
-                   
+
                    result = await func(*args, **kwargs)
                    self._cache[cache_key] = result
                    self._cache_ttl[cache_key] = time.time() + ttl
-                   
+
                    return result
                return wrapper
            return decorator
@@ -777,27 +777,27 @@
        def __init__(self, neo4j_client: Neo4jClient):
            self.neo4j_client = neo4j_client
            self.batch_size = 100
-       
+
        async def batch_entity_extraction(
-           self, 
-           documents: List[str], 
+           self,
+           documents: List[str],
            schema: Optional[Dict] = None
        ) -> List[GraphDocument]:
            """Process multiple documents in batches"""
            results = []
-           
+
            for i in range(0, len(documents), self.batch_size):
                batch = documents[i:i + self.batch_size]
-               
+
                # Process batch in parallel
                tasks = [
-                   self.extract_entities_from_document(doc, schema) 
+                   self.extract_entities_from_document(doc, schema)
                    for doc in batch
                ]
-               
+
                batch_results = await asyncio.gather(*tasks)
                results.extend(batch_results)
-           
+
            return results
    ```
 
@@ -807,24 +807,24 @@
    from prometheus_client import Counter, Histogram, Gauge
    import time
    from functools import wraps
-   
+
    class MonitoringService:
        def __init__(self):
            self.request_count = Counter(
-               'kg_requests_total', 
-               'Total requests', 
+               'kg_requests_total',
+               'Total requests',
                ['method', 'endpoint', 'status']
            )
            self.request_duration = Histogram(
-               'kg_request_duration_seconds', 
+               'kg_request_duration_seconds',
                'Request duration'
            )
            self.graph_size = Gauge(
-               'kg_graph_size', 
-               'Number of nodes in graph', 
+               'kg_graph_size',
+               'Number of nodes in graph',
                ['graph_id']
            )
-       
+
        def track_request(self, func):
            @wraps(func)
            async def wrapper(*args, **kwargs):
@@ -832,15 +832,15 @@
                try:
                    result = await func(*args, **kwargs)
                    self.request_count.labels(
-                       method='POST', 
-                       endpoint=func.__name__, 
+                       method='POST',
+                       endpoint=func.__name__,
                        status='success'
                    ).inc()
                    return result
                except Exception as e:
                    self.request_count.labels(
-                       method='POST', 
-                       endpoint=func.__name__, 
+                       method='POST',
+                       endpoint=func.__name__,
                        status='error'
                    ).inc()
                    raise
@@ -855,47 +855,47 @@
    # app/core/config.py
    from pydantic_settings import BaseSettings
    from typing import Optional
-   
+
    class Settings(BaseSettings):
        # Service Configuration
        SERVICE_NAME: str = "knowledge-graph-builder"
        SERVICE_VERSION: str = "1.0.0"
        SERVICE_URL: str = "http://localhost:8003"
-       
+
        # Database Configuration
        NEO4J_URI: str = "bolt://localhost:7687"
        NEO4J_USERNAME: str = "neo4j"
        NEO4J_PASSWORD: str = "password"
        NEO4J_DATABASE: str = "neo4j"
-       
+
        POSTGRES_URL: str = "postgresql+asyncpg://user:pass@localhost/kgbuilder"
-       
+
        # External Services
        AUTH_SERVICE_URL: str = "http://localhost:8000"
        CREDENTIAL_BROKER_URL: str = "http://localhost:8002"
        CORE_SERVICE_URL: str = "http://localhost:8001"
-       
+
        # Security
        INTERNAL_SERVICE_KEY: str = "your-internal-service-key"
        JWT_SECRET_KEY: str = "your-jwt-secret"
-       
+
        # LLM Configuration
        OPENAI_API_KEY: Optional[str] = None
        ANTHROPIC_API_KEY: Optional[str] = None
        DIFFBOT_API_KEY: Optional[str] = None
-       
+
        # Performance Settings
        MAX_CONCURRENT_EXTRACTIONS: int = 5
        BATCH_SIZE: int = 100
        CACHE_TTL: int = 300
-       
+
        # Monitoring
        ENABLE_METRICS: bool = True
        LOG_LEVEL: str = "INFO"
-       
+
        class Config:
            env_file = ".env"
-   
+
    settings = Settings()
    ```
 
@@ -1050,28 +1050,28 @@ graph TB
     A[User] --> B[Auth Service]
     B --> C[Core Service]
     C --> D[Knowledge Graph Builder]
-    
+
     D --> E[Credential Broker]
     E --> F[LLM APIs]
     E --> G[Neo4j Database]
-    
+
     D --> H[Entity Extractor]
     D --> I[Embedding Service]
     D --> J[Chat Service]
-    
+
     H --> K[Diffbot API]
     H --> L[LangChain]
-    
+
     I --> M[Vector Indexes]
     J --> N[GraphRAG]
-    
+
     D --> O[PostgreSQL Metadata]
-    
+
     subgraph "External Services"
         F
         K
     end
-    
+
     subgraph "Storage Layer"
         G
         M
@@ -1086,16 +1086,16 @@ graph TB
 async def authenticate_request(request: Request) -> dict:
     """Authenticate request through auth-service"""
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    
+
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{settings.AUTH_SERVICE_URL}/api/v1/auth/verify",
             headers={"Authorization": f"Bearer {token}"}
         )
-        
+
         if response.status_code != 200:
             raise HTTPException(status_code=401, detail="Invalid token")
-        
+
         return response.json()
 ```
 
@@ -1113,13 +1113,13 @@ async def get_llm_credentials(user_id: str, provider: str) -> dict:
                 "scope": "llm"
             }
         )
-        
+
         if response.status_code != 200:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Failed to get {provider} credentials"
             )
-        
+
         return response.json()
 ```
 
@@ -1132,7 +1132,7 @@ async def execute_as_tool(
     execution_context: dict
 ) -> ExecutionResult:
     """Execute knowledge graph operations as a tool"""
-    
+
     try:
         if action == "create_graph":
             result = await create_knowledge_graph(
@@ -1156,10 +1156,10 @@ async def execute_as_tool(
             )
         else:
             raise ValueError(f"Unknown action: {action}")
-        
+
         # Calculate credits consumed
         credits = calculate_credits_for_operation(action, parameters, result)
-        
+
         return ExecutionResult(
             success=True,
             data=result,
@@ -1170,7 +1170,7 @@ async def execute_as_tool(
                 "relationships_created": result.get("relationships_count", 0)
             }
         )
-        
+
     except Exception as e:
         return ExecutionResult(
             success=False,
@@ -1334,7 +1334,7 @@ async def test_full_workflow():
         )
         assert graph_response.status_code == 201
         graph_id = graph_response.json()["id"]
-        
+
         # 2. Ingest data
         ingest_response = await client.post(
             f"/api/v1/graphs/{graph_id}/ingest",
@@ -1348,7 +1348,7 @@ async def test_full_workflow():
             headers={"Authorization": "Bearer test-token"}
         )
         assert ingest_response.status_code == 200
-        
+
         # 3. Query graph
         chat_response = await client.post(
             f"/api/v1/graphs/{graph_id}/chat",

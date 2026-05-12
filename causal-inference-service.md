@@ -94,8 +94,8 @@ class StructuredDataAnalyzer:
             "instrumental_variables",
             "regression_discontinuity"
         }
-    
-    def analyze(self, data: pd.DataFrame, treatment: str, 
+
+    def analyze(self, data: pd.DataFrame, treatment: str,
                 outcome: str, method: str = "propensity_score_matching") -> Dict:
         """Perform causal analysis on structured data"""
         model = CausalModel(
@@ -104,11 +104,11 @@ class StructuredDataAnalyzer:
             outcome=outcome,
             graph=self._generate_graph(treatment, outcome, data.columns)
         )
-        
+
         identified_estimand = model.identify_effect()
-        estimate = model.estimate_effect(identified_estimand, 
+        estimate = model.estimate_effect(identified_estimand,
                                        method_name=method)
-        
+
         return {
             "estimate": estimate.value,
             "confidence_intervals": estimate.confidence_intervals,
@@ -133,23 +133,23 @@ from transformers import pipeline
 class TextDataAnalyzer:
     def __init__(self):
         self.nlp = spacy.load("en_core_web_sm")
-        self.classifier = pipeline("text-classification", 
+        self.classifier = pipeline("text-classification",
                                  model="causal-relationship-model")
-    
+
     def extract_causal_relationships(self, text: str) -> List[Dict]:
         """Extract causal relationships from text"""
         doc = self.nlp(text)
         relationships = []
-        
+
         # Pattern-based extraction
         for sent in doc.sents:
             causal_patterns = self._find_causal_patterns(sent)
             relationships.extend(causal_patterns)
-        
+
         # ML-based classification
         ml_relationships = self._classify_causal_relationships(text)
         relationships.extend(ml_relationships)
-        
+
         return relationships
 ```
 
@@ -170,19 +170,19 @@ class TextDataAnalyzer:
 # Updated LangGraph workflow
 def create_processing_workflow():
     workflow = StateGraph(ProcessingState)
-    
+
     # Existing nodes
     workflow.add_node("ingest_data", ingest_data)
     workflow.add_node("preprocess", preprocess_data)
     workflow.add_node("extract_entities", extract_entities)
-    
+
     # New causal analysis node
     workflow.add_node("causal_analysis", perform_causal_analysis)
-    
+
     # Updated edges
     workflow.add_edge("extract_entities", "causal_analysis")
     workflow.add_edge("causal_analysis", "build_graph")
-    
+
     return workflow.compile()
 
 def perform_causal_analysis(state: ProcessingState) -> ProcessingState:
@@ -239,11 +239,11 @@ class KnowledgeGraphBuilder:
 from statsmodels.tsa.stattools import grangercausalitytests
 
 class TemporalDataAnalyzer:
-    def granger_causality(self, data: pd.DataFrame, 
+    def granger_causality(self, data: pd.DataFrame,
                          max_lag: int = 5) -> Dict[str, Any]:
         """Perform Granger causality test"""
         results = grangercausalitytests(data, maxlag=max_lag, verbose=False)
-        
+
         causality = {}
         for lag in range(1, max_lag + 1):
             p_value = results[lag][0]['ssr_chi2test'][1]
@@ -251,7 +251,7 @@ class TemporalDataAnalyzer:
                 "p_value": p_value,
                 "significant": p_value < 0.05
             }
-        
+
         return causality
 ```
 
@@ -274,16 +274,16 @@ class MultiModalAnalyzer:
         self.model = VisionEncoderDecoderModel.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
         self.feature_extractor = ViTImageProcessor.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
         self.tokenizer = AutoTokenizer.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
-    
+
     def analyze_image(self, image_path: str) -> List[CausalRelationship]:
         """Extract potential causal relationships from images"""
         # Generate caption
         caption = self.generate_image_caption(image_path)
-        
+
         # Analyze caption for causal relationships
         text_analyzer = TextDataAnalyzer()
         relationships = text_analyzer.extract_causal_relationships(caption)
-        
+
         return relationships
 ```
 
@@ -308,22 +308,22 @@ import json
 class OptimizedCausalAnalyzer:
     def __init__(self, redis_url: str):
         self.redis = aioredis.from_url(redis_url)
-    
+
     async def analyze_with_cache(self, data: Dict, analysis_type: str) -> Dict:
         """Perform analysis with caching"""
         cache_key = f"causal_analysis:{analysis_type}:{hash(str(data))}"
-        
+
         # Check cache
         cached_result = await self.redis.get(cache_key)
         if cached_result:
             return json.loads(cached_result)
-        
+
         # Perform analysis
         result = await self._perform_analysis(data, analysis_type)
-        
+
         # Cache result
         await self.redis.setex(cache_key, 3600, json.dumps(result))  # 1 hour cache
-        
+
         return result
 ```
 
@@ -342,8 +342,8 @@ from prometheus_client import Counter, Histogram
 
 class CausalMetrics:
     def __init__(self):
-        self.requests_total = Counter('causal_requests_total', 
-                                    'Total causal analysis requests', 
+        self.requests_total = Counter('causal_requests_total',
+                                    'Total causal analysis requests',
                                     ['type', 'method'])
         self.request_duration = Histogram('causal_request_duration_seconds',
                                         'Causal analysis request duration',
@@ -351,12 +351,12 @@ class CausalMetrics:
         self.relationships_found = Counter('causal_relationships_found',
                                          'Causal relationships identified',
                                          ['type', 'confidence_level'])
-    
-    def record_analysis(self, analysis_type: str, method: str, 
+
+    def record_analysis(self, analysis_type: str, method: str,
                        duration: float, relationships: List):
         self.requests_total.labels(analysis_type, method).inc()
         self.request_duration.labels(analysis_type).observe(duration)
-        
+
         for rel in relationships:
             confidence_level = "high" if rel.confidence > 0.7 else \
                              "medium" if rel.confidence > 0.4 else "low"

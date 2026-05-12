@@ -31,7 +31,9 @@ import app.mcp.server as mcp_module  # noqa: E402
 BASE_URL = "http://localhost:8003"
 
 
-def _mock_response(status_code: int = 200, json_body: dict | list | None = None, *, text: str = ""):
+def _mock_response(
+    status_code: int = 200, json_body: dict | list | None = None, *, text: str = ""
+):
     """Return a mock httpx.Response for the community tools (uses is_success)."""
     resp = MagicMock()
     resp.status_code = status_code
@@ -75,7 +77,11 @@ class TestDetectCommunities:
 
         # URL must include the expected path
         call_kwargs = client.post.call_args
-        url = call_kwargs.args[0] if call_kwargs.args else call_kwargs.kwargs.get("url", "")
+        url = (
+            call_kwargs.args[0]
+            if call_kwargs.args
+            else call_kwargs.kwargs.get("url", "")
+        )
         assert "/api/v1/graphs/g-1/communities/detect" in url
 
         # Auth header must be forwarded
@@ -144,7 +150,11 @@ class TestListCommunities:
             result = await mcp_module.list_communities(graph_id="X", level=2)
 
         call_kwargs = client.get.call_args
-        url = call_kwargs.args[0] if call_kwargs.args else call_kwargs.kwargs.get("url", "")
+        url = (
+            call_kwargs.args[0]
+            if call_kwargs.args
+            else call_kwargs.kwargs.get("url", "")
+        )
         params = call_kwargs.kwargs.get("params", {})
 
         assert "/api/v1/graphs/X/communities" in url
@@ -201,7 +211,11 @@ class TestGetCommunity:
             result = await mcp_module.get_community(graph_id="X", community_id="C1")
 
         call_kwargs = client.get.call_args
-        url = call_kwargs.args[0] if call_kwargs.args else call_kwargs.kwargs.get("url", "")
+        url = (
+            call_kwargs.args[0]
+            if call_kwargs.args
+            else call_kwargs.kwargs.get("url", "")
+        )
         assert "/communities/C1" in url
 
         # Result is the raw JSON from the API
@@ -243,9 +257,7 @@ class TestChatExtensions:
         }
 
     def _successful_client(self):
-        return _mock_client(
-            post_return=_mock_response(200, self._chat_api_response())
-        )
+        return _mock_client(post_return=_mock_response(200, self._chat_api_response()))
 
     # ------------------------------------------------------------------
     # Scenario 9: retriever_type included in body
@@ -294,7 +306,9 @@ class TestChatExtensions:
     # Scenario 11: temporal_mode=changes_since
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    async def test_temporal_mode_changes_since_includes_temporal_since_not_temporal_at(self):
+    async def test_temporal_mode_changes_since_includes_temporal_since_not_temporal_at(
+        self,
+    ):
         """chat: temporal_mode='changes_since' + temporal_since in body;
         temporal_at must NOT be present."""
         client = self._successful_client()

@@ -389,15 +389,15 @@ class GraphAnalyticsService:
         query = """
         MATCH (entity)
         WHERE entity.id IN $entity_ids AND entity.graph_id = $graph_id
-        
+
         MATCH (entity)-[r1]-(neighbor)-[r2]-(community_member)
         WHERE r1.graph_id = $graph_id AND r2.graph_id = $graph_id
         AND neighbor.graph_id = $graph_id AND community_member.graph_id = $graph_id
         AND community_member.id <> entity.id
-        
+
         WITH entity, neighbor, collect(DISTINCT community_member) as members
         WHERE size(members) >= 2
-        
+
         RETURN entity.id as entity_id,
             entity.name as entity_name,
             neighbor.name as hub_name,
@@ -448,9 +448,7 @@ class GraphAnalyticsService:
             logger.error(f"Failed to create community nodes: {e}")
             return await self._create_simple_communities(graph_id)
 
-    async def _run_leiden_community_detection(
-        self, graph_id: UUID
-    ) -> dict[str, Any]:
+    async def _run_leiden_community_detection(self, graph_id: UUID) -> dict[str, Any]:
         """
         Run leidenalg at 5 resolutions and store hierarchical communities.
 
@@ -541,7 +539,9 @@ class GraphAnalyticsService:
             # Group entities by community
             community_groups: dict[int, list[str]] = {}
             for idx, comm_id in enumerate(membership):
-                entity_id = nodes_result[idx].get("entity_id") or nodes_result[idx]["eid"]
+                entity_id = (
+                    nodes_result[idx].get("entity_id") or nodes_result[idx]["eid"]
+                )
                 community_groups.setdefault(comm_id, []).append(entity_id)
 
             for comm_id, member_entity_ids in community_groups.items():
@@ -597,8 +597,12 @@ class GraphAnalyticsService:
                         None,
                     )
                     if first_idx is not None:
-                        parent_comm_id = all_communities[level - 1]["membership"][first_idx]
-                        parent_node_id = f"{graph_id_str}_l{level - 1}_c{parent_comm_id}"
+                        parent_comm_id = all_communities[level - 1]["membership"][
+                            first_idx
+                        ]
+                        parent_node_id = (
+                            f"{graph_id_str}_l{level - 1}_c{parent_comm_id}"
+                        )
                         await neo4j_client.execute_query(
                             """
                             MATCH (child:__Community__ {id: $child_id, graph_id: $graph_id})
@@ -643,19 +647,19 @@ class GraphAnalyticsService:
             # Find entities with shared neighbors using more flexible matching
             shared_neighbors_query = """
             MATCH (a)-[r1]-(common)-[r2]-(b)
-            WHERE a.graph_id = $graph_id 
-            AND b.graph_id = $graph_id 
+            WHERE a.graph_id = $graph_id
+            AND b.graph_id = $graph_id
             AND common.graph_id = $graph_id
             AND a.id < b.id  // Avoid duplicates
             AND a.id IS NOT NULL
             AND b.id IS NOT NULL
-            
+
             WITH a, b, count(DISTINCT common) as shared_count
             WHERE shared_count >= 2  // At least 2 shared neighbors
-            
-            RETURN a.id as entity_a_id, 
+
+            RETURN a.id as entity_a_id,
                 coalesce(a.name, a.id) as entity_a_name,
-                b.id as entity_b_id, 
+                b.id as entity_b_id,
                 coalesce(b.name, b.id) as entity_b_name,
                 shared_count
             ORDER BY shared_count DESC
@@ -741,7 +745,10 @@ class GraphAnalyticsService:
             }
 
         except Exception as e:
-            logger.error(f"Failed to create simple communities for {graph_id}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to create simple communities for {graph_id}: {e}",
+                exc_info=True,
+            )
             return {
                 "communities_created": 0,
                 "relationships_created": 0,
@@ -831,15 +838,15 @@ class GraphAnalyticsService:
             MATCH (community:__Community__)
             WHERE community.graph_id = $graph_id
             AND (
-                community.summary CONTAINS $query_text 
-                OR any(word IN split(toLower($query_text), ' ') 
+                community.summary CONTAINS $query_text
+                OR any(word IN split(toLower($query_text), ' ')
                        WHERE community.summary CONTAINS word)
             )
-            
+
             // Get community members
             MATCH (entity:__Entity__)-[:IN_COMMUNITY]->(community)
             WHERE entity.graph_id = $graph_id
-            
+
             RETURN community.id as community_id,
                    community.summary as summary,
                    community.entity_count as entity_count,
@@ -909,29 +916,29 @@ class GraphAnalyticsService:
                     'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" RETURN id(a) AS source, id(b) AS target'
                 )
                 YIELD graphName
-                
+
                 // Run PageRank algorithm
                 CALL gds.pageRank.stream('temp-pagerank-' + $graph_id)
                 YIELD nodeId, score
-                
+
                 // Get original nodes with scores
                 MATCH (node)
                 WHERE id(node) = nodeId AND node.graph_id = $graph_id
-                
+
                 WITH node, score
                 ORDER BY score DESC
                 LIMIT 10
-                
+
                 RETURN node.id as entity_id,
                     node.name as entity_name,
                     score as pagerank_score,
                     labels(node) as labels
             }
-            
+
             // Clean up temporary graph
             CALL gds.graph.drop('temp-pagerank-' + $graph_id, false)
             YIELD graphName as droppedGraph
-            
+
             RETURN entity_id, entity_name, pagerank_score, labels
             """
 
@@ -975,17 +982,17 @@ class GraphAnalyticsService:
         cypher_query = """
         MATCH (n)
         WHERE n.graph_id = $graph_id
-        
+
         OPTIONAL MATCH (n)-[r]-()
         WHERE r.graph_id = $graph_id
-        
+
         WITH n, count(r) as degree
         WHERE degree > 3  // Nodes with more than 3 connections
         ORDER BY degree DESC
         LIMIT 10
-        
-        RETURN n.name as name, 
-            n.id as id, 
+
+        RETURN n.name as name,
+            n.id as id,
             degree,
             labels(n) as labels,
             n{.*} as properties
@@ -1033,20 +1040,20 @@ class GraphAnalyticsService:
         query = """
         MATCH (start)
         WHERE start.id IN $entity_ids AND start.graph_id = $graph_id
-        
+
         MATCH (start)-[r1]-(neighbor1)
         WHERE r1.graph_id = $graph_id AND neighbor1.graph_id = $graph_id
-        
+
         OPTIONAL MATCH (neighbor1)-[r2]-(neighbor2)
         WHERE r2.graph_id = $graph_id AND neighbor2.graph_id = $graph_id
         AND neighbor2.id <> start.id
-        
-        WITH start, r1, neighbor1, 
+
+        WITH start, r1, neighbor1,
             collect(DISTINCT {
                 node: neighbor2{.id, .name, labels: labels(neighbor2)},
                 relationship: type(r2)
             })[..3] as second_hop
-        
+
         RETURN start.id as center_id,
             start.name as center_name,
             {
@@ -1146,11 +1153,11 @@ class GraphAnalyticsService:
         query = """
         MATCH (start {id: $start_id, graph_id: $graph_id})
         MATCH (end {id: $end_id, graph_id: $graph_id})
-        
+
         MATCH path = shortestPath((start)-[*1..3]-(end))
         WHERE ALL(r IN relationships(path) WHERE r.graph_id = $graph_id)
         AND ALL(n IN nodes(path) WHERE n.graph_id = $graph_id)
-        
+
         RETURN [n.name FOR n IN nodes(path)] as node_names,
                [type(r) FOR r IN relationships(path)] as relationship_types,
                length(path) as path_length
@@ -1192,15 +1199,15 @@ class GraphAnalyticsService:
         query = """
         MATCH (start {id: $start_id, graph_id: $graph_id})
         MATCH (end {id: $end_id, graph_id: $graph_id})
-        
+
         CALL apoc.path.allSimplePaths(start, end, '', $max_depth) YIELD path
         WHERE ALL(n IN nodes(path) WHERE n.graph_id = $graph_id)
         AND ALL(r IN relationships(path) WHERE r.graph_id = $graph_id)
-        
+
         WITH path, length(path) as path_length
         ORDER BY path_length
         LIMIT 5
-        
+
         RETURN [n.name FOR n IN nodes(path)] as path_nodes,
                [{type: type(r), properties: properties(r)} FOR r IN relationships(path)] as path_relationships,
                path_length
@@ -1251,14 +1258,14 @@ class GraphAnalyticsService:
         # Look for date-related properties in relationships and nodes
         query = """
         MATCH (n)-[r]-(m)
-        WHERE n.id IN $entity_ids 
-        AND n.graph_id = $graph_id 
-        AND r.graph_id = $graph_id 
+        WHERE n.id IN $entity_ids
+        AND n.graph_id = $graph_id
+        AND r.graph_id = $graph_id
         AND m.graph_id = $graph_id
         AND (
-            r.start_date IS NOT NULL OR 
-            r.end_date IS NOT NULL OR 
-            r.date IS NOT NULL OR 
+            r.start_date IS NOT NULL OR
+            r.end_date IS NOT NULL OR
+            r.date IS NOT NULL OR
             r.year IS NOT NULL OR
             r.created_at IS NOT NULL OR
             r.timestamp IS NOT NULL OR
@@ -1267,23 +1274,23 @@ class GraphAnalyticsService:
             m.birth_date IS NOT NULL OR
             m.founded IS NOT NULL
         )
-        
+
         WITH n, r, m,
             coalesce(
-                r.start_date, 
-                r.end_date, 
-                r.date, 
-                r.year, 
+                r.start_date,
+                r.end_date,
+                r.date,
+                r.year,
                 r.created_at,
                 r.timestamp,
-                n.birth_date, 
+                n.birth_date,
                 n.founded,
                 m.birth_date,
                 m.founded
             ) as date_info
-        
+
         WHERE date_info IS NOT NULL
-        
+
         RETURN n.name as entity_name,
             type(r) as relationship_type,
             m.name as connected_entity,
@@ -1332,24 +1339,24 @@ class GraphAnalyticsService:
             MATCH (n)
             WHERE n.graph_id = $graph_id
             WITH count(n) as node_count
-            
+
             MATCH ()-[r]-()
             WHERE r.graph_id = $graph_id
             WITH node_count, count(r) as rel_count
-            
+
             MATCH (n)
             WHERE n.graph_id = $graph_id
             WITH node_count, rel_count, labels(n) as node_labels
             UNWIND node_labels as label
             WITH node_count, rel_count, label
             WHERE label <> 'Entity'  // Skip generic labels
-            
+
             WITH node_count, rel_count, collect(DISTINCT label) as entity_types
-            
+
             MATCH ()-[r]-()
             WHERE r.graph_id = $graph_id
             WITH node_count, rel_count, entity_types, type(r) as rel_type
-            
+
             RETURN node_count,
                 rel_count,
                 entity_types,

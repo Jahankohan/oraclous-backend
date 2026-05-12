@@ -9,14 +9,12 @@ Covers:
 """
 
 import csv
-import io
 import os
 import tempfile
 
 import pytest
 
 from app.services.csv_extractor import _infer_type, extract_csv
-
 
 # ─── _infer_type unit tests ───────────────────────────────────────────────────
 

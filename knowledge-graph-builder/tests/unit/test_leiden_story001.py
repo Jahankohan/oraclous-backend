@@ -15,8 +15,6 @@ All external I/O is mocked; no real Neo4j, Redis, Postgres, or LLM calls.
 
 from __future__ import annotations
 
-import asyncio
-from collections import Counter
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -35,7 +33,9 @@ class TestLeidenHierarchyStructure:
         import leidenalg
 
         g = igraph.Graph(10)
-        g.add_edges([(0, 1), (1, 2), (2, 3), (3, 4), (5, 6), (6, 7), (7, 8), (8, 9), (4, 5)])
+        g.add_edges(
+            [(0, 1), (1, 2), (2, 3), (3, 4), (5, 6), (6, 7), (7, 8), (8, 9), (4, 5)]
+        )
 
         for resolution in [0.5, 2.0]:
             partition = leidenalg.find_partition(
@@ -55,7 +55,9 @@ class TestLeidenHierarchyStructure:
         import leidenalg
 
         g = igraph.Graph(10)
-        g.add_edges([(0, 1), (1, 2), (2, 3), (3, 4), (5, 6), (6, 7), (7, 8), (8, 9), (4, 5)])
+        g.add_edges(
+            [(0, 1), (1, 2), (2, 3), (3, 4), (5, 6), (6, 7), (7, 8), (8, 9), (4, 5)]
+        )
 
         for resolution in [0.5, 2.0]:
             partition = leidenalg.find_partition(
@@ -81,7 +83,9 @@ class TestLeidenHierarchyStructure:
         import leidenalg
 
         g = igraph.Graph(10)
-        g.add_edges([(0, 1), (1, 2), (2, 3), (3, 4), (5, 6), (6, 7), (7, 8), (8, 9), (4, 5)])
+        g.add_edges(
+            [(0, 1), (1, 2), (2, 3), (3, 4), (5, 6), (6, 7), (7, 8), (8, 9), (4, 5)]
+        )
 
         partition_coarse = leidenalg.find_partition(
             g,
@@ -406,7 +410,10 @@ class TestSummaryPromptContent:
         # Level-2 prompt (third call) must contain "overarching" or "insights"
         if len(captured_prompts) >= 3:
             level2_prompt = captured_prompts[2]
-            assert "overarching" in level2_prompt.lower() or "insights" in level2_prompt.lower(), (
+            assert (
+                "overarching" in level2_prompt.lower()
+                or "insights" in level2_prompt.lower()
+            ), (
                 f"Level-2 prompt must contain 'overarching' or 'insights'; "
                 f"got: {level2_prompt!r}"
             )
@@ -425,9 +432,11 @@ class TestSummaryPromptContent:
         mock_client.execute_query = AsyncMock(side_effect=capturing_execute)
 
         mock_openai = MagicMock()
-        mock_openai.chat.completions.create = AsyncMock(return_value=MagicMock(
-            choices=[MagicMock(message=MagicMock(content="summary"))]
-        ))
+        mock_openai.chat.completions.create = AsyncMock(
+            return_value=MagicMock(
+                choices=[MagicMock(message=MagicMock(content="summary"))]
+            )
+        )
 
         with (
             patch("app.services.analytics_service.neo4j_client", mock_client),
@@ -586,7 +595,7 @@ class TestEndToEndCommunityPipeline:
 
         entity_ids = [f"e{i}" for i in range(10)]
         # Chain: e0—e1—e2—e3—e4—e5—e6—e7—e8—e9
-        edges = [(f"e{i}", f"e{i+1}", 1) for i in range(9)]
+        edges = [(f"e{i}", f"e{i + 1}", 1) for i in range(9)]
 
         result = _run_leiden(
             entity_ids=entity_ids,
@@ -614,7 +623,7 @@ class TestEndToEndCommunityPipeline:
         from app.tasks.community_tasks import _build_hierarchy, _run_leiden
 
         entity_ids = [f"e{i}" for i in range(10)]
-        edges = [(f"e{i}", f"e{i+1}", 1) for i in range(9)]
+        edges = [(f"e{i}", f"e{i + 1}", 1) for i in range(9)]
 
         level_map = _run_leiden(
             entity_ids=entity_ids,
@@ -651,9 +660,7 @@ class TestEndToEndCommunityPipeline:
         mock_driver = MagicMock()
         mock_driver.execute_query = AsyncMock(side_effect=fake_execute_query)
 
-        with patch(
-            "app.services.retriever_factory.neo4j_client"
-        ) as mock_client:
+        with patch("app.services.retriever_factory.neo4j_client") as mock_client:
             mock_client.async_driver = mock_driver
 
             retriever = CommunitySummaryRetriever(
@@ -738,7 +745,9 @@ class TestStalenessAfterReIngestion:
             execution_log.append("llm_call")
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
-            mock_response.choices[0].message.content = "Fresh summary after re-ingestion"
+            mock_response.choices[
+                0
+            ].message.content = "Fresh summary after re-ingestion"
             return mock_response
 
         mock_client = MagicMock()
@@ -766,8 +775,7 @@ class TestStalenessAfterReIngestion:
         stale_idx = execution_log.index("stale_clear")
         llm_idx = execution_log.index("llm_call")
         assert stale_idx < llm_idx, (
-            f"stale_clear must happen before llm_call; "
-            f"order was: {execution_log}"
+            f"stale_clear must happen before llm_call; order was: {execution_log}"
         )
 
     @pytest.mark.unit

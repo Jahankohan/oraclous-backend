@@ -1,7 +1,8 @@
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from app.repositories.workflow_repository import WorkflowRepository
 from app.models.workflow import WorkflowDB, WorkflowExecutionDB, WorkflowTemplateDB
-from app.schemas.workflow import Workflow, CreateWorkflowRequest, UpdateWorkflowRequest
+from app.schemas.workflow import Workflow, CreateWorkflowRequest
+
 
 class WorkflowService:
     def __init__(self, repository: WorkflowRepository):
@@ -10,7 +11,9 @@ class WorkflowService:
     async def generate_from_prompt(self, prompt: str) -> WorkflowDB:
         # Placeholder for LangGraph integration
         # Should call PipelineGenerator in future
-        workflow_request = CreateWorkflowRequest(name=f"Generated Workflow from prompt", generation_prompt=prompt)
+        workflow_request = CreateWorkflowRequest(
+            name="Generated Workflow from prompt", generation_prompt=prompt
+        )
         return await self.repository.create_workflow(workflow_request)
 
     async def validate_workflow(self, workflow: Workflow) -> bool:
@@ -19,13 +22,17 @@ class WorkflowService:
             return False
         return True
 
-    async def execute_workflow(self, workflow_id: str, params: Optional[Dict[str, Any]] = None) -> WorkflowExecutionDB:
+    async def execute_workflow(
+        self, workflow_id: str, params: Optional[Dict[str, Any]] = None
+    ) -> WorkflowExecutionDB:
         # Create execution record and trigger job processor (to be integrated)
         execution = await self.repository.create_execution(workflow_id, params or {})
         # TODO: Integrate with job processor for actual execution
         return execution
 
-    async def create_from_template(self, template_id: str, user_id: str, params: Optional[Dict[str, Any]] = None) -> WorkflowDB:
+    async def create_from_template(
+        self, template_id: str, user_id: str, params: Optional[Dict[str, Any]] = None
+    ) -> WorkflowDB:
         # Find template and create workflow from it
         template: WorkflowTemplateDB = await self.repository.get_template(template_id)
         if not template:
@@ -37,7 +44,7 @@ class WorkflowService:
             edges=template.template_edges,
             settings=params or {},
             tags=template.tags,
-            category=template.category
+            category=template.category,
         )
         return await self.repository.create_workflow(workflow_request)
 

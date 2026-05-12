@@ -2,6 +2,7 @@ from app.models.base_model import Base
 from sqlalchemy import Column, String, Text, ARRAY, TIMESTAMP, MetaData
 from sqlalchemy import ForeignKey
 
+
 class OauthTokens(Base):
     __tablename__ = "oauth_tokens"
 

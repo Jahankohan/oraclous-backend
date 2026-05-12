@@ -144,7 +144,7 @@ class FullTextIndexManager:
                 await neo4j_client.connect_async()
 
             query = """
-            SHOW FULLTEXT INDEXES 
+            SHOW FULLTEXT INDEXES
             YIELD name, labelsOrTypes, properties, state, type
             WHERE type = 'FULLTEXT'
             """

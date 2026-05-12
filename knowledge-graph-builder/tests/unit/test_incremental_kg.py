@@ -423,9 +423,9 @@ def test_backfill_script_queries_are_correct():
     source_code = script_path.read_text()
 
     # Must set contentHash to LEGACY_UNKNOWN (not delete or overwrite with real data)
-    assert (
-        "LEGACY_UNKNOWN" in source_code
-    ), "Backfill must mark legacy docs with LEGACY_UNKNOWN"
+    assert "LEGACY_UNKNOWN" in source_code, (
+        "Backfill must mark legacy docs with LEGACY_UNKNOWN"
+    )
 
     # Must never use DELETE
     assert "DETACH DELETE" not in source_code, "Backfill must not delete nodes"

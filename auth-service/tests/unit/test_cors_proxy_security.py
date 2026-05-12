@@ -23,6 +23,7 @@ from app.core.rate_limiter import rate_limit_exceeded_handler
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _build_cors_app(allowed_origins: list[str]) -> TestClient:
     """Minimal app with CORSMiddleware using explicit allowed_origins."""
     app = FastAPI()
@@ -74,6 +75,7 @@ _TESTCLIENT_HOST = "testclient"
 # ---------------------------------------------------------------------------
 # Bug 1 — CORS: no wildcard + credentials
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_cors_allowed_origin_receives_header():
@@ -136,6 +138,7 @@ def test_cors_preflight_returns_correct_methods():
 # ---------------------------------------------------------------------------
 # Bug 2 — Proxy-aware rate limiting
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_proxy_trusted_uses_forwarded_for_ip():

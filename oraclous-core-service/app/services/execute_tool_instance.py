@@ -4,7 +4,10 @@ from app.services.credential_client import CredentialClient
 from app.tools.factory import ToolFactory
 from app.schemas.tool_instance import ExecutionContext
 
-async def execute_tool_instance(instance_id: str, input_data: dict, job_id: str = "manual-job"):
+
+async def execute_tool_instance(
+    instance_id: str, input_data: dict, job_id: str = "manual-job"
+):
     # 1. Fetch the ToolInstance
     async with get_session() as db:
         instance_repo = InstanceRepository(db)
@@ -21,11 +24,13 @@ async def execute_tool_instance(instance_id: str, input_data: dict, job_id: str 
                 credentials[cred_type] = await cred_client.get_runtime_token(
                     user_id=str(instance.user_id),
                     provider=provider,
-                    required_scopes=required_scopes
+                    required_scopes=required_scopes,
                 )
             else:
                 # For other credential types, fetch the credential data
-                credentials[cred_type] = await cred_client._get_credential_data(cred_identifier)
+                credentials[cred_type] = await cred_client._get_credential_data(
+                    cred_identifier
+                )
 
         # 3. Prepare ExecutionContext
         context = ExecutionContext(
@@ -35,7 +40,7 @@ async def execute_tool_instance(instance_id: str, input_data: dict, job_id: str 
             job_id=job_id,
             credentials=credentials,
             configuration=instance.configuration,
-            settings=instance.settings
+            settings=instance.settings,
         )
 
         # 4. Execute the tool using the factory
