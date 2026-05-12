@@ -220,6 +220,8 @@ async def tail_run_events(
         # actually subscribed at, which is useful when `since` was clipped.
         yield _format_comment(f"tail_run open since={since}")
 
+        # subscribe() is synchronous: registration happens immediately so
+        # publish() calls that race us are still delivered.
         subscription = broker.subscribe(graph_id, run_id, since=since)
         try:
             while True:
