@@ -23,8 +23,8 @@ USER_B_ID = str(uuid.uuid4())
 GRAPH_A_ID = str(uuid.uuid4())  # owned by User A
 GRAPH_B_ID = str(uuid.uuid4())  # owned by User B
 
-CHAT_ENDPOINT = "/api/v1/api/v1/chat"
-STREAM_ENDPOINT = "/api/v1/api/v1/chat/stream"
+CHAT_ENDPOINT = "/api/v1/chat"
+STREAM_ENDPOINT = "/api/v1/chat/stream"
 
 AUTH_HEADER = {"Authorization": "Bearer test-token"}
 

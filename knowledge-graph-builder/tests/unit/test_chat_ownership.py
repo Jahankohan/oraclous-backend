@@ -45,7 +45,7 @@ class TestChatOwnership:
                     status_code=403, detail="Access denied"
                 )
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json=CHAT_PAYLOAD,
                     headers=AUTH_HEADER,
                 )
@@ -68,7 +68,7 @@ class TestChatOwnership:
                     status_code=403, detail="Access denied"
                 )
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json=CHAT_PAYLOAD,
                     headers=AUTH_HEADER,
                 )
@@ -106,7 +106,7 @@ class TestChatOwnership:
                 mock_rag_cls.return_value = rag_instance
 
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json=CHAT_PAYLOAD,
                     headers=AUTH_HEADER,
                 )
@@ -129,7 +129,7 @@ class TestChatOwnership:
                     status_code=403, detail="Access denied"
                 )
                 await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={"query": "Q", "graph_id": "specific-graph-id"},
                     headers=AUTH_HEADER,
                 )
@@ -158,7 +158,7 @@ class TestChatStreamOwnership:
                     status_code=403, detail="Access denied"
                 )
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat/stream",
+                    "/api/v1/chat/stream",
                     json=CHAT_PAYLOAD,
                     headers=AUTH_HEADER,
                 )
@@ -183,7 +183,7 @@ class TestChatStreamOwnership:
                     status_code=403, detail="Access denied"
                 )
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat/stream",
+                    "/api/v1/chat/stream",
                     json=CHAT_PAYLOAD,
                     headers=AUTH_HEADER,
                 )
@@ -221,7 +221,7 @@ class TestChatStreamOwnership:
                 mock_rag_cls.return_value = rag_instance
 
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat/stream",
+                    "/api/v1/chat/stream",
                     json=CHAT_PAYLOAD,
                     headers=AUTH_HEADER,
                 )
