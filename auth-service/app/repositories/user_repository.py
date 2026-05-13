@@ -90,3 +90,14 @@ class UserRepository:
             if user:
                 user.password_hash = new_hashed_password
                 await session.commit()
+
+    async def set_home_graph_id(self, user_id: str, home_graph_id: str):
+        async with self.Session() as session:
+            user = await session.execute(select(User).where(User.id == user_id))
+            user = user.scalars().first()
+            if not user:
+                return None
+            user.home_graph_id = home_graph_id
+            await session.commit()
+            await session.refresh(user)
+            return user

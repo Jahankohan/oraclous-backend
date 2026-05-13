@@ -15,6 +15,7 @@ from app.api.v1.endpoints import (
     llm_configs,
     memories,
     multimodal,
+    onboarding,
     permissions,
     service_accounts,
     webhooks,
@@ -46,3 +47,4 @@ api_router.include_router(webhooks.router, prefix="/api/v1", tags=["webhooks"])
 api_router.include_router(
     service_accounts.router, prefix="/api/v1", tags=["service-accounts"]
 )
+api_router.include_router(onboarding.router, prefix="/api/v1", tags=["onboarding"])
