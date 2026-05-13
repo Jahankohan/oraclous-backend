@@ -3,9 +3,6 @@ from fastapi import APIRouter
 from app.api import schema
 from app.api.v1.endpoints import (
     agents,
-    assessments,
-    assessments_reads,
-    assessments_sse,
     chat,
     code_graphs,
     communities,
@@ -48,11 +45,4 @@ api_router.include_router(connectors.router, prefix="/api/v1", tags=["connectors
 api_router.include_router(webhooks.router, prefix="/api/v1", tags=["webhooks"])
 api_router.include_router(
     service_accounts.router, prefix="/api/v1", tags=["service-accounts"]
-)
-api_router.include_router(assessments.router, prefix="/api/v1", tags=["assessments"])
-api_router.include_router(
-    assessments_reads.router, prefix="/api/v1", tags=["assessments"]
-)
-api_router.include_router(
-    assessments_sse.router, prefix="/api/v1", tags=["assessments"]
 )
