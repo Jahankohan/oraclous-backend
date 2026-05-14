@@ -92,6 +92,15 @@ class Settings(BaseSettings):
     # is unchanged; opt-in per deployment.
     SIMILARITY_AUTO_TRIGGER_ON_INGEST: bool = False
 
+    # STORY-6: post-ingest entity dedup + relationship consolidation.
+    # ``entity_dedup_service.deduplicate`` is the explicit entry point
+    # (via POST /graphs/{id}/entities/deduplicate). This setting gates
+    # whether the ingest pipeline should call it automatically after
+    # the existing MultiTenantEntityDeduplicator runs. Default False —
+    # opt-in so existing ingest performance is unchanged; the on-demand
+    # path is fine for graphs that don't need automatic cleanup.
+    ENTITY_DEDUP_AUTO_TRIGGER_ON_INGEST: bool = False
+
     # Performance Settings
     MAX_CONCURRENT_EXTRACTIONS: int = 5
     BATCH_SIZE: int = 100
