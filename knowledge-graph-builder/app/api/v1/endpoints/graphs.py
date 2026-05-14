@@ -1657,6 +1657,21 @@ async def summarize_communities(
     except UnknownCommunityKindError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
+    # STORY-4c — embed any community that now has a summary but no
+    # embedding yet. Embedding failures don't roll back the summary write;
+    # they're surfaced in failed_embeddings and the caller can retry.
+    try:
+        embed_report = await summarizer.embed_summaries(
+            str(graph_id),
+            request.kind,
+            force_rebuild=request.force_rebuild,
+        )
+        report.embedded = embed_report.embedded
+        report.skipped_existing_embeddings = embed_report.skipped_existing
+        report.failed_embeddings = embed_report.failed
+    except UnknownCommunityKindError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
     return CommunitySummarizeResponse(
         kind=report.kind,
         total=report.total,
@@ -1664,6 +1679,9 @@ async def summarize_communities(
         skipped_existing=report.skipped_existing,
         skipped_singleton=report.skipped_singleton,
         failed=report.failed,
+        embedded=report.embedded,
+        skipped_existing_embeddings=report.skipped_existing_embeddings,
+        failed_embeddings=report.failed_embeddings,
     )
 
 

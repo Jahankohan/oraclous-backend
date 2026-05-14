@@ -74,6 +74,15 @@ async def lifespan(app: FastAPI):
 
         await ensure_memory_indexes()
 
+        # Ensure community summary vector indexes (STORY-4c, idempotent).
+        # One index per registered community kind so find_communities
+        # (STORY-4d) can do vector search over summary embeddings.
+        from app.services.community_summarizer import (
+            ensure_community_vector_indexes,
+        )
+
+        await ensure_community_vector_indexes()
+
         # Initialize Database Connector Neo4j constraints + indexes (ORA-77)
         from app.services.database_connector_service import database_connector_service
 
