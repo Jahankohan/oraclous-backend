@@ -180,9 +180,10 @@ def _rel_type_for_fk(
         # Column name matches table name → generic BELONGS_TO
         return "BELONGS_TO"
 
-    # If bare is something meaningful and different from the table name,
-    # build: BELONGS_TO_<TABLE_UPPER>
-    target_upper = _to_pascal_case(fk_table).upper()
+    # The function currently always returns the generic "BELONGS_TO" —
+    # enriching with the target table name (BELONGS_TO_<TABLE_UPPER>) is a
+    # follow-up TASK-019 item; the target_upper computation has been removed
+    # since it was assigned but never used.
     rel = "BELONGS_TO"
     return rel
 

@@ -35,7 +35,7 @@ _OCR_AVAILABLE = False
 
 try:
     import pytesseract  # noqa: F811  (intentional re-assignment)
-    from PIL import Image as _PilImage
+    from PIL import Image as _PilImage  # noqa: F401  (probe — availability check only)
 
     _OCR_AVAILABLE = True
 except ImportError:

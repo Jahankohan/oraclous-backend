@@ -10,6 +10,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from app.schemas.agent_schemas import AgentCreate, AgentUpdate
 from app.services.agent_service import AgentService
@@ -66,7 +67,7 @@ class TestAgentSchemaValidation:
         assert set(a.tools) == {"graph_search", "neighbors"}
 
     def test_invalid_reasoning_mode_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             AgentCreate(
                 name="Agent",
                 system_prompt="x",
