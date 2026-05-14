@@ -14,6 +14,7 @@ VALID_TOOLS = frozenset(
         "shortest_path",
         "taint_trace",
         "temporal_slice",
+        "cypher_query",
     }
 )
 

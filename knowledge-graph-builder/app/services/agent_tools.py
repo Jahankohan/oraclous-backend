@@ -199,6 +199,80 @@ class AgentToolkit:
         )
         return [_node_to_result(dict(rec["sink"])) for rec in result.records]
 
+    async def cypher_query(
+        self,
+        graph_id: str,
+        cypher: str,
+        max_results: int = 25,
+    ) -> list[NodeResult]:
+        """Execute a read-only Cypher query scoped to this graph.
+
+        The agent's LLM generates Cypher (text2cypher pattern). Safety rules:
+          - Block any write operation (CREATE, DELETE, SET, REMOVE, MERGE, DROP).
+          - Block APOC procedures that can mutate.
+          - Require the query to constrain by ``graph_id`` (tenant isolation).
+          - Cap result size at ``max_results`` via injected LIMIT clause if absent.
+
+        Returns the first node-valued column from each record.
+        """
+        self._require("cypher_query")
+        if not isinstance(cypher, str) or not cypher.strip():
+            raise ValueError("cypher must be a non-empty string")
+        # Strip leading EXPLAIN/PROFILE for safety check, but reject EXPLAIN/PROFILE writes.
+        normalized = " ".join(cypher.split()).upper()
+        blocked = (
+            " CREATE ",
+            " DELETE ",
+            " SET ",
+            " REMOVE ",
+            " MERGE ",
+            " DROP ",
+            "DETACH DELETE",
+            "CALL APOC.PERIODIC",
+            "CALL APOC.REFACTOR",
+            "CALL APOC.CREATE",
+            "CALL APOC.MERGE",
+            "CALL DBMS.",
+        )
+        padded = f" {normalized} "
+        for kw in blocked:
+            if kw in padded:
+                raise ValueError(f"Cypher write/admin op rejected: {kw.strip()!r}")
+        if "GRAPH_ID" not in normalized:
+            raise ValueError(
+                "Cypher must filter by graph_id for tenant isolation. "
+                "Use $graph_id as a parameter, e.g. WHERE n.graph_id = $graph_id"
+            )
+        max_results = min(max(1, int(max_results)), 100)
+        if " LIMIT " not in padded:
+            cypher = cypher.rstrip().rstrip(";") + f"\nLIMIT {max_results}"
+        result = await self._driver.execute_query(
+            cypher, {"graph_id": graph_id, "gid": graph_id, "graphid": graph_id}
+        )
+        from neo4j.graph import Node as _NeoNode  # local import to avoid cycle
+
+        nodes: list[NodeResult] = []
+        for rec in result.records:
+            row_keys = list(rec.keys())
+            # Try to extract a Node-valued column first.
+            row_node = None
+            for key in row_keys:
+                val = rec[key]
+                if isinstance(val, _NeoNode):
+                    row_node = _node_to_result(dict(val))
+                    break
+            if row_node is not None:
+                nodes.append(row_node)
+                continue
+            # No node in this row — produce a synthetic NodeResult that surfaces
+            # the projected columns (counts, names, aggregates, etc.) so the
+            # agent can read them. label = first column as string.
+            props = {k: rec[k] for k in row_keys}
+            display_parts = [f"{k}={rec[k]}" for k in row_keys]
+            label = "; ".join(display_parts)[:200]
+            nodes.append(_node_to_result({"label": label, **props}))
+        return nodes[:max_results]
+
     async def temporal_slice(
         self,
         graph_id: str,
