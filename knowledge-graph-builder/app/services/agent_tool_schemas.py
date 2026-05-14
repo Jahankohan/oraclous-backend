@@ -324,6 +324,63 @@ _TOOL_SCHEMAS: dict[str, _ToolSchema] = {
             "required": ["query"],
         },
     ),
+    # STORY-8: enriched retrieval tools (chat-engine unification)
+    "vector_cypher_search": _ToolSchema(
+        name="vector_cypher_search",
+        description=(
+            "Vector similarity search + graph traversal. For each chunk "
+            "that matches the query semantically, also returns the "
+            "entities mentioned in that chunk and their one-hop "
+            "relationships. Use this when you want grounded context "
+            "enriched with graph structure — typically the default "
+            "retrieval for chat-style questions."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural-language query to embed and match.",
+                },
+                "top_k": _int_param(
+                    "How many top-scoring chunks to return.",
+                    default=5,
+                    minimum=1,
+                    maximum=20,
+                ),
+            },
+            "required": ["query"],
+        },
+    ),
+    "hybrid_cypher_search": _ToolSchema(
+        name="hybrid_cypher_search",
+        description=(
+            "Hybrid (vector similarity + fulltext BM25) search plus "
+            "graph traversal. Same enrichment as vector_cypher_search "
+            "but the initial retrieval catches exact-term matches "
+            "(proper nouns, IDs, technical jargon) alongside semantic "
+            "matches. Use this when the query contains specific names "
+            "or terms that should match literally. Requires the "
+            "fulltext_chunks Neo4j index — if absent, prefer "
+            "vector_cypher_search."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural-language query to embed and match.",
+                },
+                "top_k": _int_param(
+                    "How many top-scoring chunks to return.",
+                    default=5,
+                    minimum=1,
+                    maximum=20,
+                ),
+            },
+            "required": ["query"],
+        },
+    ),
     "describe_community": _ToolSchema(
         name="describe_community",
         description=(

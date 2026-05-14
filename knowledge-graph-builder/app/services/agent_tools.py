@@ -544,3 +544,138 @@ class AgentToolkit:
 
         # No kind matched
         return []
+
+    # ── STORY-8: enriched retrieval tools (chat-engine unification) ──────────
+
+    async def vector_cypher_search(
+        self,
+        graph_id: str,
+        query: str,
+        top_k: int = 5,
+    ) -> list[NodeResult]:
+        """Vector similarity search + graph traversal (the 'enhanced' mode).
+
+        Wraps neo4j_graphrag's VectorCypherRetriever. For each chunk that
+        scores above the vector threshold, this also pulls connected
+        entities and one-hop neighbour relationships so the LLM has
+        graph-derived context, not just text. This is the default
+        retriever for ``POST /chat`` after STORY-8.
+
+        Returns a list of NodeResult where each result's ``label`` is the
+        chunk text and ``properties`` carries ``score``, ``entities``,
+        and ``relationships``. The agent (or chat adapter) can quote
+        these directly.
+        """
+        self._require("vector_cypher_search")
+        # Imported lazily so the toolkit can be used in tests without
+        # constructing the full retriever stack.
+        from app.schemas.retriever_schemas import (
+            DefaultRetrieverConfigs,
+            RetrieverConfig,
+            RetrieverType,
+        )
+        from app.services.retriever_factory import retriever_factory
+
+        cfg = DefaultRetrieverConfigs.get_vector_cypher_config(graph_id)
+        cfg.top_k = top_k
+        retriever = await retriever_factory.create_retriever(
+            RetrieverConfig(type=RetrieverType.VECTOR_CYPHER, config=cfg),
+            graph_id,
+        )
+        # neo4j_graphrag retrievers are sync — call via to_thread to
+        # avoid blocking the executor's event loop. Explicit
+        # ``query_text=`` keyword — the first positional arg on
+        # ``search`` is the embedding vector, not the query string.
+        import asyncio as _asyncio
+
+        def _do_search():
+            return retriever.search(
+                query_text=query,
+                top_k=top_k,
+                query_params={"graph_id": graph_id},
+            )
+
+        result = await _asyncio.to_thread(_do_search)
+        return _retriever_items_to_node_results(result)
+
+    async def hybrid_cypher_search(
+        self,
+        graph_id: str,
+        query: str,
+        top_k: int = 5,
+    ) -> list[NodeResult]:
+        """Hybrid (vector + fulltext) search + graph traversal.
+
+        Wraps neo4j_graphrag's HybridCypherRetriever. Like
+        ``vector_cypher_search`` but the initial retrieval is a hybrid
+        of vector similarity AND fulltext BM25 matching, so exact-term
+        queries (proper nouns, identifiers) get caught alongside
+        semantic matches. The graph-traversal half is identical to the
+        vector-cypher version.
+
+        Requires the ``fulltext_chunks`` index to exist. If it doesn't,
+        the underlying retriever will error — callers should fall back
+        to ``vector_cypher_search`` on failure.
+        """
+        self._require("hybrid_cypher_search")
+        from app.schemas.retriever_schemas import (
+            DefaultRetrieverConfigs,
+            RetrieverConfig,
+            RetrieverType,
+        )
+        from app.services.retriever_factory import retriever_factory
+
+        cfg = DefaultRetrieverConfigs.get_hybrid_cypher_config(graph_id)
+        cfg.top_k = top_k
+        retriever = await retriever_factory.create_retriever(
+            RetrieverConfig(type=RetrieverType.HYBRID_CYPHER, config=cfg),
+            graph_id,
+        )
+        import asyncio as _asyncio
+
+        def _do_search():
+            return retriever.search(
+                query_text=query,
+                top_k=top_k,
+                query_params={"graph_id": graph_id},
+            )
+
+        result = await _asyncio.to_thread(_do_search)
+        return _retriever_items_to_node_results(result)
+
+
+def _retriever_items_to_node_results(retriever_result: Any) -> list[NodeResult]:
+    """Adapt a neo4j_graphrag RetrieverResult to ``list[NodeResult]`` —
+    the shape every other AgentToolkit method returns and the executor
+    expects.
+
+    RetrieverResult.items each have ``content`` (the chunk text, possibly
+    formatted with embedded entity/relationship metadata) and
+    ``metadata`` (a dict with at minimum a ``score``). The chunk's
+    Neo4j id isn't carried through neo4j_graphrag's surface, so we
+    synthesize a stable id from the content hash. That keeps the
+    NodeResult.id non-empty for citation matching downstream.
+    """
+    import hashlib
+
+    items = getattr(retriever_result, "items", None) or []
+    out: list[NodeResult] = []
+    for item in items:
+        content = getattr(item, "content", "") or ""
+        metadata = dict(getattr(item, "metadata", {}) or {})
+        # Synthesize a stable id so downstream citation matching has
+        # something to anchor on. Real chunk ids aren't exposed by the
+        # neo4j_graphrag retriever surface.
+        synth_id = "chunk_" + hashlib.sha1(content.encode("utf-8")).hexdigest()[:16]
+        out.append(
+            NodeResult(
+                id=synth_id,
+                qualified_name=None,
+                label=content[:200] if content else "(empty chunk)",
+                properties={
+                    "text": content,
+                    **metadata,
+                },
+            )
+        )
+    return out
