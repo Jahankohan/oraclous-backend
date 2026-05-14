@@ -381,6 +381,22 @@ class GraphAnalyticsService:
             )
         if include_summary:
             return_fields.append("c.summary AS summary")
+            # Chunk communities (STORY-4b) also have summary_keywords +
+            # summary_excerpt; entity-Leiden returns NULL for these.
+            if spec.kind == "chunk":
+                return_fields.extend(
+                    [
+                        "c.summary_keywords AS summary_keywords",
+                        "c.summary_excerpt AS summary_excerpt",
+                    ]
+                )
+            else:
+                return_fields.extend(
+                    [
+                        "NULL AS summary_keywords",
+                        "NULL AS summary_excerpt",
+                    ]
+                )
         fields = ", ".join(return_fields)
 
         # ORDER BY: hierarchical kinds sort by level first (so callers can
@@ -419,6 +435,18 @@ class GraphAnalyticsService:
             }
             if include_summary:
                 item["summary"] = r.get("summary")
+                # Parse summary_keywords (stored as JSON string in Neo4j).
+                raw_kw = r.get("summary_keywords")
+                if raw_kw:
+                    try:
+                        import json as _json
+
+                        parsed_kw = _json.loads(raw_kw)
+                        if isinstance(parsed_kw, list):
+                            item["summary_keywords"] = parsed_kw
+                    except (ValueError, TypeError):
+                        item["summary_keywords"] = None
+                item["summary_excerpt"] = r.get("summary_excerpt")
             communities.append(item)
 
         status_info = await self.get_community_status(graph_id, kind=kind)
@@ -489,11 +517,26 @@ class GraphAnalyticsService:
                 spec=spec,
             )
 
+        # Parse summary_keywords (stored as JSON string in Neo4j).
+        keywords: list[str] | None = None
+        raw_kw = community_row.get("summary_keywords")
+        if raw_kw:
+            try:
+                import json as _json
+
+                parsed = _json.loads(raw_kw)
+                if isinstance(parsed, list):
+                    keywords = parsed
+            except (ValueError, TypeError):
+                keywords = None
+
         return {
             "community_id": community_row["community_id"],
             "kind": spec.kind,
             "level": community_row.get("level"),
             "summary": community_row.get("summary"),
+            "summary_keywords": keywords,
+            "summary_excerpt": community_row.get("summary_excerpt"),
             "entity_count": community_row.get("entity_count"),
             "algorithm": community_row.get("algorithm"),
             "status": community_row.get("status"),
@@ -526,11 +569,22 @@ class GraphAnalyticsService:
                 "NULL AS status, c.updated_at AS last_updated"
             )
 
+        # STORY-4b chunk-community summary fields. Entity-Leiden returns
+        # NULL for these today.
+        if spec.kind == "chunk":
+            summary_extras = (
+                "c.summary_keywords AS summary_keywords, "
+                "c.summary_excerpt AS summary_excerpt"
+            )
+        else:
+            summary_extras = "NULL AS summary_keywords, NULL AS summary_excerpt"
+
         query = (
             f"MATCH (c:`{spec.community_label}` "
             f"{{`{spec.id_property}`: $community_id, graph_id: $graph_id}}) "
             f"RETURN c.`{spec.id_property}` AS community_id, "
             f"c.summary AS summary, "
+            f"{summary_extras}, "
             f"c.`{spec.size_property}` AS entity_count, "
             f"c.created_at AS created_at, "
             f"{extra_fields}"

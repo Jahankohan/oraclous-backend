@@ -161,6 +161,8 @@ async def list_communities(
             size=item.get("entity_count", 0) or 0,
             member_label=spec.member_label,
             summary=item.get("summary"),
+            summary_keywords=item.get("summary_keywords"),
+            summary_excerpt=item.get("summary_excerpt"),
         )
         for item in items
     ]

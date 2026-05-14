@@ -45,6 +45,8 @@ from app.schemas.graph_schemas import (
     CommunityDetectRequest,
     CommunityDetectResponse,
     CommunityStatusResponse,
+    CommunitySummarizeRequest,
+    CommunitySummarizeResponse,
     DocumentResponse,
     GraphCreate,
     GraphInstructions,
@@ -1422,6 +1424,7 @@ from app.schemas.community_kinds import (
     get_kind,
 )
 from app.services.analytics_service import GraphAnalyticsService
+from app.services.community_summarizer import CommunitySummarizer
 from app.tasks.community_tasks import COMMUNITY_DETECTION_MIN_ENTITIES
 
 
@@ -1598,6 +1601,70 @@ async def get_community_detail(
             status_code=status.HTTP_404_NOT_FOUND, detail="Community not found"
         )
     return CommunityDetailResponse(**result)
+
+
+@router.post(
+    "/graphs/{graph_id}/communities/summarize",
+    response_model=CommunitySummarizeResponse,
+    summary="Generate summaries for communities of a given kind (STORY-4b)",
+    responses={
+        400: {"description": "Unknown or unsupported community kind"},
+    },
+)
+async def summarize_communities(
+    graph_id: UUID,
+    request: CommunitySummarizeRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Generate LLM summaries for every community of the given kind.
+
+    Today only ``kind=chunk`` is accepted via this endpoint — the
+    ``entity`` kind has summaries generated automatically by the
+    Celery detect task. Other read-only flat kinds added in the future
+    will route through here.
+
+    Singletons (size=1) are skipped entirely (Louvain often produces
+    such artefacts; a single-chunk "community" doesn't warrant an LLM
+    call). The response counts singletons under ``skipped_singleton``.
+
+    Existing summaries are preserved unless ``force_rebuild=true``.
+    """
+    await _verify_graph_ownership(graph_id, user_id)
+
+    try:
+        spec = get_kind(request.kind)
+    except UnknownCommunityKindError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    summarizer = CommunitySummarizer()
+    if spec.kind not in summarizer.supported_kinds():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Summarising kind={request.kind!r} is not supported by this "
+                f"endpoint. Supported here: {list(summarizer.supported_kinds())}. "
+                "Entity-Leiden summaries are generated automatically by the "
+                "detect Celery task."
+            ),
+        )
+
+    try:
+        report = await summarizer.summarize_all(
+            str(graph_id),
+            request.kind,
+            force_rebuild=request.force_rebuild,
+        )
+    except UnknownCommunityKindError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    return CommunitySummarizeResponse(
+        kind=report.kind,
+        total=report.total,
+        summarized=report.summarized,
+        skipped_existing=report.skipped_existing,
+        skipped_singleton=report.skipped_singleton,
+        failed=report.failed,
+    )
 
 
 # ==================== TEMPORAL ENDPOINTS ====================

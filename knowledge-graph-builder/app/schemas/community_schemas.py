@@ -58,6 +58,23 @@ class Community(BaseModel):
         default=None,
         description="Optional LLM-generated summary of the community's members",
     )
+    summary_keywords: list[str] | None = Field(
+        default=None,
+        description=(
+            "Key entities / concepts / topics extracted alongside the "
+            "summary. Populated for chunk communities by STORY-4b's "
+            "summarize endpoint; entity-Leiden summaries don't have this "
+            "field yet."
+        ),
+    )
+    summary_excerpt: str | None = Field(
+        default=None,
+        description=(
+            "Up to ~500 chars from one representative member, quoted "
+            "verbatim. Lets agent tools return concrete evidence without "
+            "an extra round trip to fetch members."
+        ),
+    )
 
 
 class CommunityKindInfo(BaseModel):

@@ -914,6 +914,21 @@ class CommunityDetailResponse(BaseModel):
         default=None, description="Hierarchy level (None for flat kinds)"
     )
     summary: str | None = None
+    summary_keywords: list[str] | None = Field(
+        default=None,
+        description=(
+            "Key entities / concepts extracted alongside the summary "
+            "(STORY-4b). Populated for chunk communities; entity-Leiden "
+            "currently returns None."
+        ),
+    )
+    summary_excerpt: str | None = Field(
+        default=None,
+        description=(
+            "Up to ~500 chars from one representative member, quoted "
+            "verbatim. Lets agent tools return concrete evidence (STORY-4b)."
+        ),
+    )
     entity_count: int
     algorithm: str | None = None
     status: str | None = None
@@ -932,6 +947,60 @@ class CommunityStatusResponse(BaseModel):
     entity_count_at_detection: int = 0
     current_entity_count: int = 0
     staleness_pct: float = 0.0
+
+
+# ==================== STORY-4b SUMMARIZE SCHEMAS ====================
+
+
+class CommunitySummarizeRequest(BaseModel):
+    """POST /graphs/{id}/communities/summarize body."""
+
+    kind: str = Field(
+        ...,
+        description=(
+            "Which community kind to summarise. Only kinds that don't have "
+            "summaries generated automatically by the detector are valid "
+            "here — i.e. read-only kinds like 'chunk'. The 'entity' kind "
+            "is summarised by the detect Celery task; calling this with "
+            "kind='entity' returns HTTP 400."
+        ),
+    )
+    force_rebuild: bool = Field(
+        False,
+        description=(
+            "When True, overwrites existing summaries. When False (default), "
+            "communities with a non-empty summary are skipped."
+        ),
+    )
+
+
+class CommunitySummarizeResponse(BaseModel):
+    kind: str
+    total: int = Field(..., description="Communities of this kind on the graph")
+    summarized: int = Field(
+        ..., description="Communities for which a new summary was written"
+    )
+    skipped_existing: int = Field(
+        ...,
+        description=(
+            "Communities skipped because they already had a summary and "
+            "force_rebuild was False."
+        ),
+    )
+    skipped_singleton: int = Field(
+        ...,
+        description=(
+            "Communities skipped because they have only one member (e.g. "
+            "Louvain singleton artefacts that don't warrant an LLM call)."
+        ),
+    )
+    failed: int = Field(
+        ...,
+        description=(
+            "Communities the LLM failed to summarise (parse error, API error, "
+            "or zero-content sample)."
+        ),
+    )
 
 
 # ==================== VERSIONING SCHEMAS ====================
