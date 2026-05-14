@@ -324,9 +324,9 @@ class TestErrorCodeConsistency:
         ]
         for attr in attrs:
             code, _ = getattr(KGBError, attr)
-            assert code.startswith("KGB-"), (
-                f"{attr}: code '{code}' must start with KGB-"
-            )
+            assert code.startswith(
+                "KGB-"
+            ), f"{attr}: code '{code}' must start with KGB-"
 
     @pytest.mark.unit
     def test_error_codes_are_unique_no_collisions(self):
@@ -342,6 +342,6 @@ class TestErrorCodeConsistency:
             KGBError.PERMISSION_DENIED[0],
             KGBError.RATE_LIMIT_EXCEEDED[0],
         ]
-        assert len(all_codes) == len(set(all_codes)), (
-            f"Duplicate error codes found: {all_codes}"
-        )
+        assert len(all_codes) == len(
+            set(all_codes)
+        ), f"Duplicate error codes found: {all_codes}"

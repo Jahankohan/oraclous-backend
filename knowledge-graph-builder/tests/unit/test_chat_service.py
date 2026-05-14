@@ -260,6 +260,12 @@ class TestChatServiceSearch:
     @pytest.mark.unit
     @pytest.mark.chat
     async def test_search_uses_strict_grounding_prompt(self):
+        """STRICT_GROUNDING_PROMPT is wired into GraphRAG via its constructor's
+        prompt_template arg (RagTemplate), not via .search() kwargs. neo4j_graphrag
+        1.9 moved the argument and ChatService.initialize() now wraps the prompt
+        in RagTemplate at GraphRAG init time. This test verifies the prompt is
+        not silently dropped from .search() calls (callers should rely on the
+        init-time template)."""
         svc = self._build_service()
         items = [_make_retriever_item(score=0.85)]
         mock_rag_result = _make_rag_result("Some grounded answer", items)
@@ -270,7 +276,8 @@ class TestChatServiceSearch:
         await svc.search("A question")
 
         call_kwargs = mock_rag.search.call_args[1]
-        assert call_kwargs.get("prompt_template") == STRICT_GROUNDING_PROMPT
+        # prompt_template MUST NOT be on .search() — it lives on GraphRAG.__init__.
+        assert "prompt_template" not in call_kwargs
 
     @pytest.mark.unit
     @pytest.mark.chat
@@ -741,6 +748,9 @@ class TestStreamSearch:
     @pytest.mark.unit
     @pytest.mark.chat
     async def test_stream_uses_strict_grounding_prompt(self):
+        """Mirrors test_search_uses_strict_grounding_prompt for the streaming
+        path. neo4j_graphrag 1.9 moved prompt_template to GraphRAG.__init__,
+        so .search() must NOT carry it."""
         svc = self._build_service()
         items = [_make_retriever_item(score=0.8)]
         mock_rag_result = _make_rag_result("Answer", items)
@@ -751,7 +761,8 @@ class TestStreamSearch:
         _ = [c async for c in svc.stream_search("Q")]
 
         call_kwargs = mock_rag.search.call_args[1]
-        assert call_kwargs.get("prompt_template") == STRICT_GROUNDING_PROMPT
+        # prompt_template MUST NOT be on .search() — it lives on GraphRAG.__init__.
+        assert "prompt_template" not in call_kwargs
 
     @pytest.mark.unit
     @pytest.mark.chat
