@@ -272,5 +272,123 @@ class TestReportShape:
             "skipped_singleton",
             "failed",
             "per_level",
+            # STORY-4c embedding fields
+            "embedded",
+            "skipped_existing_embeddings",
+            "failed_embeddings",
         ):
             assert k in d
+
+
+# ── STORY-4c — embedding tests ────────────────────────────────────────────────
+
+
+class TestEmbedSummaries:
+    @pytest.mark.unit
+    async def test_writes_to_kind_specific_property(self, fake_openai_client):
+        """chunk → cc.summary_embedding; entity → c.embedding. The Cypher
+        SET clause must use the registry's ``embedding_property``, not a
+        hardcoded name."""
+        rows_listing = [
+            {"community_id": "cc_1", "summary": "A summary about X."},
+        ]
+        mock_client = MagicMock()
+        # list → count skipped → write
+        mock_client.execute_query = AsyncMock(
+            side_effect=[rows_listing, [{"cnt": 5}], None]
+        )
+
+        with (
+            patch("app.services.community_summarizer.neo4j_client", mock_client),
+            patch("neo4j_graphrag.embeddings.OpenAIEmbeddings") as MockEmbedder,
+        ):
+            MockEmbedder.return_value.embed_query = MagicMock(return_value=[0.1] * 3072)
+            summ = CommunitySummarizer(openai_client=fake_openai_client)
+            report = await summ.embed_summaries("g1", "chunk")
+
+        assert report.embedded == 1
+        assert report.skipped_existing == 5
+        write_call = mock_client.execute_query.await_args_list[-1]
+        cypher = write_call.args[0]
+        assert "summary_embedding" in cypher
+        params = write_call.args[1]
+        assert params["community_id"] == "cc_1"
+        assert len(params["embedding"]) == 3072
+
+    @pytest.mark.unit
+    async def test_force_rebuild_pulls_all_with_summary(self, fake_openai_client):
+        rows_listing = [
+            {"community_id": "cc_x", "summary": "y"},
+            {"community_id": "cc_z", "summary": "w"},
+        ]
+        mock_client = MagicMock()
+        # No skip-counting call when force=True; one list + two writes
+        mock_client.execute_query = AsyncMock(side_effect=[rows_listing, None, None])
+
+        with (
+            patch("app.services.community_summarizer.neo4j_client", mock_client),
+            patch("neo4j_graphrag.embeddings.OpenAIEmbeddings") as MockEmbedder,
+        ):
+            MockEmbedder.return_value.embed_query = MagicMock(return_value=[0.0] * 3072)
+            summ = CommunitySummarizer(openai_client=fake_openai_client)
+            report = await summ.embed_summaries("g1", "chunk", force_rebuild=True)
+
+        assert report.embedded == 2
+
+    @pytest.mark.unit
+    async def test_embedding_failure_counted_in_failed(self, fake_openai_client):
+        rows_listing = [{"community_id": "cc_y", "summary": "summary text"}]
+        mock_client = MagicMock()
+        mock_client.execute_query = AsyncMock(side_effect=[rows_listing, [{"cnt": 0}]])
+        with (
+            patch("app.services.community_summarizer.neo4j_client", mock_client),
+            patch("neo4j_graphrag.embeddings.OpenAIEmbeddings") as MockEmbedder,
+        ):
+            MockEmbedder.return_value.embed_query = MagicMock(
+                side_effect=RuntimeError("boom")
+            )
+            summ = CommunitySummarizer(openai_client=fake_openai_client)
+            report = await summ.embed_summaries("g1", "chunk")
+
+        assert report.failed == 1
+        assert report.embedded == 0
+
+
+class TestEnsureCommunityVectorIndexes:
+    @pytest.mark.unit
+    async def test_creates_one_index_per_registered_kind(self):
+        """For each entry in COMMUNITY_KINDS, exactly one
+        CREATE VECTOR INDEX query runs."""
+        from app.services.community_summarizer import (
+            ensure_community_vector_indexes,
+        )
+
+        mock_client = MagicMock()
+        mock_client.execute_write_query = AsyncMock(return_value=None)
+        with patch("app.services.community_summarizer.neo4j_client", mock_client):
+            await ensure_community_vector_indexes()
+
+        # One call per registered kind (entity + chunk = 2)
+        assert mock_client.execute_write_query.await_count == 2
+        for call in mock_client.execute_write_query.await_args_list:
+            cypher = call.args[0]
+            assert "CREATE VECTOR INDEX" in cypher
+            assert "IF NOT EXISTS" in cypher
+            assert "3072" in cypher
+            assert "cosine" in cypher.lower()
+
+    @pytest.mark.unit
+    async def test_continues_on_individual_index_failure(self):
+        """A single index-creation failure shouldn't crash startup."""
+        from app.services.community_summarizer import (
+            ensure_community_vector_indexes,
+        )
+
+        mock_client = MagicMock()
+        mock_client.execute_write_query = AsyncMock(
+            side_effect=[RuntimeError("first fails"), None]
+        )
+        with patch("app.services.community_summarizer.neo4j_client", mock_client):
+            await ensure_community_vector_indexes()  # should not raise
+
+        assert mock_client.execute_write_query.await_count == 2
