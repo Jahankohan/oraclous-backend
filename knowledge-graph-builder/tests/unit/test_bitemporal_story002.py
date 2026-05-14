@@ -773,8 +773,8 @@ class TestBitemporalMigrationTask:
     @pytest.fixture(autouse=True)
     def _check_presence(self):
         try:
-            from app.services.background_jobs import (
-                run_bitemporal_migration_v1,  # noqa: F401
+            from app.services.background_jobs import (  # noqa: F401
+                run_bitemporal_migration_v1,
             )
         except (ImportError, AttributeError):
             pytest.skip(
