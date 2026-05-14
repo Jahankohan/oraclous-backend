@@ -317,3 +317,230 @@ class AgentToolkit:
             query, {"gid": graph_id, "at_time": at_time, "max_results": max_results}
         )
         return [_node_to_result(dict(rec["n"])) for rec in result.records]
+
+    # ── STORY-4d: community discovery + description tools ────────────────────
+
+    async def find_communities(
+        self,
+        graph_id: str,
+        query: str,
+        kind: str | None = None,
+        top_k: int = 5,
+    ) -> list[NodeResult]:
+        """Find communities related to a query via vector search over summaries.
+
+        ``kind=None`` searches every registered kind that has a populated
+        vector index, then merges results by score. ``kind="chunk"`` or
+        ``kind="entity"`` restricts to one kind.
+
+        Each result's ``properties`` carries ``kind``, ``score``,
+        ``summary``, ``keywords`` (chunk only), ``excerpt`` (chunk only),
+        ``size``. The ``label`` field surfaces the summary preview so
+        agent prompts can read the result in a glance.
+        """
+        self._require("find_communities")
+        from app.schemas.community_kinds import all_kinds, get_kind
+
+        if kind is not None:
+            specs = [get_kind(kind)]
+        else:
+            specs = list(all_kinds())
+
+        embedding = await self._embed(query)
+        per_index_k = max(top_k, 10) if len(specs) > 1 else top_k
+
+        merged: list[tuple[float, dict[str, Any]]] = []
+        for spec in specs:
+            # Index name, label, and property names come from the registry —
+            # compile-time constants, safe for f-string interpolation. The
+            # graph_id filter is parameterized so tenant isolation holds.
+            cypher = (
+                f"CALL db.index.vector.queryNodes('{spec.index_name}', "
+                f"$top_k, $embedding) YIELD node, score "
+                f"WHERE node.graph_id = $gid AND node.summary IS NOT NULL "
+                f"RETURN node.`{spec.id_property}` AS community_id, "
+                f"node.summary AS summary, "
+                f"node.`{spec.size_property}` AS size, "
+                "node.summary_keywords AS keywords, "
+                "node.summary_excerpt AS excerpt, "
+                "score "
+                "ORDER BY score DESC"
+            )
+            try:
+                result = await self._driver.execute_query(
+                    cypher,
+                    {
+                        "gid": graph_id,
+                        "top_k": per_index_k,
+                        "embedding": embedding,
+                    },
+                )
+            except Exception as exc:
+                # An index missing on one kind shouldn't break the whole
+                # query — log and try the next kind. The LLM-facing tool
+                # result is still useful if at least one kind responded.
+                logger.warning(
+                    "find_communities index %s failed: %s", spec.index_name, exc
+                )
+                continue
+
+            for rec in result.records:
+                # Parse keywords JSON for chunk; entity returns NULL.
+                kw_raw = rec.get("keywords")
+                keywords: list[str] | None = None
+                if kw_raw:
+                    try:
+                        import json as _json
+
+                        parsed = _json.loads(kw_raw)
+                        if isinstance(parsed, list):
+                            keywords = parsed
+                    except (ValueError, TypeError):
+                        keywords = None
+                community_id = rec["community_id"]
+                merged.append(
+                    (
+                        rec["score"],
+                        {
+                            "id": community_id,
+                            "label": (rec.get("summary") or "")[:160],
+                            "qualified_name": None,
+                            "properties": {
+                                "kind": spec.kind,
+                                "score": rec["score"],
+                                "summary": rec.get("summary"),
+                                "keywords": keywords,
+                                "excerpt": rec.get("excerpt"),
+                                "size": rec.get("size"),
+                            },
+                        },
+                    )
+                )
+
+        # Highest score first; cap at top_k overall when multi-kind.
+        merged.sort(key=lambda x: x[0], reverse=True)
+        return [
+            NodeResult(
+                id=p["id"],
+                qualified_name=p["qualified_name"],
+                label=p["label"],
+                properties=p["properties"],
+            )
+            for _score, p in merged[:top_k]
+        ]
+
+    async def describe_community(
+        self,
+        graph_id: str,
+        community_id: str,
+        kind: str | None = None,
+    ) -> list[NodeResult]:
+        """Return metadata for one community: summary, keywords, excerpt,
+        size, plus up to 5 sample member names.
+
+        Auto-detects kind by probing the registry (entity first → one
+        round trip on the common case) when ``kind`` is None. The agent
+        can also pass ``kind`` explicitly to skip the probe.
+
+        Returns a single-element ``list[NodeResult]`` for shape
+        consistency with the other agent tools. The result's
+        ``properties`` carry every relevant field; the ``label`` is a
+        summary preview.
+        """
+        self._require("describe_community")
+        from app.schemas.community_kinds import all_kinds, get_kind
+
+        if kind is not None:
+            specs = [get_kind(kind)]
+        else:
+            specs = list(all_kinds())
+
+        for spec in specs:
+            # Fetch core community fields. Property names come from the
+            # registry; the chunk-only fields (keywords/excerpt) are
+            # selected with NULL fallbacks so the result shape is uniform.
+            if spec.kind == "chunk":
+                summary_extras = (
+                    "c.summary_keywords AS keywords, c.summary_excerpt AS excerpt"
+                )
+            else:
+                summary_extras = "NULL AS keywords, NULL AS excerpt"
+
+            cypher = (
+                f"MATCH (c:`{spec.community_label}` "
+                f"{{`{spec.id_property}`: $cid, graph_id: $gid}}) "
+                f"RETURN c.`{spec.id_property}` AS community_id, "
+                "c.summary AS summary, "
+                f"c.`{spec.size_property}` AS size, "
+                f"{summary_extras}"
+            )
+            result = await self._driver.execute_query(
+                cypher, {"cid": community_id, "gid": graph_id}
+            )
+            if not result.records:
+                continue
+
+            rec = result.records[0]
+
+            # Top-5 sample members. For entity, use ``name``; for chunk,
+            # use a short text snippet so the agent has concrete evidence
+            # without calling community_members for the full list.
+            if spec.kind == "chunk":
+                members_cypher = (
+                    f"MATCH (m:`{spec.member_label}` {{graph_id: $gid}})"
+                    f"-[:`{spec.member_rel}`]->"
+                    f"(c:`{spec.community_label}` "
+                    f"{{`{spec.id_property}`: $cid, graph_id: $gid}}) "
+                    "RETURN m.id AS member_id, "
+                    "substring(coalesce(m.text, ''), 0, 80) AS member_preview "
+                    "ORDER BY m.id LIMIT 5"
+                )
+            else:
+                members_cypher = (
+                    f"MATCH (m:`{spec.member_label}` {{graph_id: $gid}})"
+                    f"-[:`{spec.member_rel}`]->"
+                    f"(c:`{spec.community_label}` "
+                    f"{{`{spec.id_property}`: $cid, graph_id: $gid}}) "
+                    "RETURN coalesce(m.id, elementId(m)) AS member_id, "
+                    "coalesce(m.name, '') AS member_preview "
+                    "ORDER BY m.name LIMIT 5"
+                )
+            mres = await self._driver.execute_query(
+                members_cypher, {"cid": community_id, "gid": graph_id}
+            )
+            sample_members = [
+                {"id": m["member_id"], "preview": m["member_preview"]}
+                for m in mres.records
+            ]
+
+            # Parse keywords (chunk only).
+            kw_raw = rec.get("keywords")
+            keywords: list[str] | None = None
+            if kw_raw:
+                try:
+                    import json as _json
+
+                    parsed = _json.loads(kw_raw)
+                    if isinstance(parsed, list):
+                        keywords = parsed
+                except (ValueError, TypeError):
+                    keywords = None
+
+            return [
+                NodeResult(
+                    id=rec["community_id"],
+                    qualified_name=None,
+                    label=(rec.get("summary") or "")[:160],
+                    properties={
+                        "kind": spec.kind,
+                        "summary": rec.get("summary"),
+                        "keywords": keywords,
+                        "excerpt": rec.get("excerpt"),
+                        "size": rec.get("size"),
+                        "sample_members": sample_members,
+                    },
+                )
+            ]
+
+        # No kind matched
+        return []
