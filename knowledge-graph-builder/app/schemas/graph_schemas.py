@@ -1025,6 +1025,76 @@ class CommunitySummarizeResponse(BaseModel):
     )
 
 
+# ==================== STORY-7 SIMILARITY SCHEMAS ====================
+
+
+class SimilarityBuildRequest(BaseModel):
+    """POST /graphs/{id}/similarity/build body."""
+
+    target: str = Field(
+        "all",
+        description=(
+            "Which node kind to compute SIMILAR_TO edges for. "
+            "'chunks' = :Chunk; 'entities' = :__Entity__; "
+            "'all' = both."
+        ),
+    )
+    threshold_chunks: float | None = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Cosine threshold for :Chunk pairs. Default 0.85. Chunk text "
+            "embeddings are semantically uniform so this catches genuinely "
+            "similar passages."
+        ),
+    )
+    threshold_entities: float | None = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Cosine threshold for :__Entity__ pairs. Default 0.92 (tighter "
+            "than chunks because short entity-name embeddings false-positive "
+            "easily)."
+        ),
+    )
+    top_k: int = Field(
+        5,
+        ge=1,
+        le=20,
+        description=(
+            "Max neighbours considered per source node. Higher = denser "
+            "graph but more edges to store."
+        ),
+    )
+    force_rebuild: bool = Field(
+        False,
+        description=(
+            "When True, delete all existing SIMILAR_TO edges for the "
+            "target(s) before computing fresh ones."
+        ),
+    )
+    job_id: str | None = Field(
+        None,
+        description=(
+            "Optional ingestion job id. When provided, the resulting "
+            "edge count is added to the job's similarity_relationships "
+            "Postgres column."
+        ),
+    )
+
+
+class SimilarityBuildResponse(BaseModel):
+    target: str
+    chunk_edges_created: int
+    entity_edges_created: int
+    chunks_processed: int
+    entities_processed: int
+    elapsed_seconds: float
+    force_rebuild: bool
+
+
 # ==================== VERSIONING SCHEMAS ====================
 
 

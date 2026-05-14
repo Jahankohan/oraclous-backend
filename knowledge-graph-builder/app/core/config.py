@@ -80,8 +80,17 @@ class Settings(BaseSettings):
     LLM_SUMMARY_CONCURRENCY: int = 5
 
     # Legacy flags (disabled for modern approach)
-    ENABLE_SIMILARITY_PROCESSING: bool = True
     ENABLE_COMMUNITY_DETECTION: bool = True
+
+    # STORY-7: SIMILAR_TO edge generation. The historic
+    # ``ENABLE_SIMILARITY_PROCESSING`` flag was set to True but never
+    # consumed anywhere in the code — no SIMILAR_TO edges ever materialised.
+    # ``similarity_service.build_similarities`` is now the explicit
+    # entry point (via POST /graphs/{id}/similarity/build). This setting
+    # gates whether the ingest pipeline should call that service after
+    # entity deduplication. Default False so existing ingest performance
+    # is unchanged; opt-in per deployment.
+    SIMILARITY_AUTO_TRIGGER_ON_INGEST: bool = False
 
     # Performance Settings
     MAX_CONCURRENT_EXTRACTIONS: int = 5
