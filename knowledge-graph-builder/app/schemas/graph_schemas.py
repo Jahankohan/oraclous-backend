@@ -1095,6 +1095,80 @@ class SimilarityBuildResponse(BaseModel):
     force_rebuild: bool
 
 
+# ==================== STORY-6 ENTITY DEDUP SCHEMAS ====================
+
+
+class EntityDeduplicateRequest(BaseModel):
+    """POST /graphs/{id}/entities/deduplicate body."""
+
+    passes: list[str] | None = Field(
+        None,
+        description=(
+            "Which dedup passes to run. Subset of "
+            "['canonical', 'merge_canonical', 'embedding', 'relationships']. "
+            "Omit (or None) to run all four. Order is enforced internally — "
+            "canonical -> merge_canonical -> embedding -> relationships."
+        ),
+    )
+    fuzzy_threshold: float = Field(
+        0.92,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Cosine threshold for the embedding-based fuzzy merge. "
+            "Default 0.92 — entity name embeddings false-positive easily "
+            "at lower thresholds."
+        ),
+    )
+    dry_run: bool = Field(
+        False,
+        description=(
+            "When True, the report reflects what each pass WOULD do but "
+            "no writes happen. Useful for assessing impact before "
+            "committing to an irreversible merge."
+        ),
+    )
+
+
+class EntityDeduplicateResponse(BaseModel):
+    passes_run: list[str]
+    canonical_names_added: int = Field(
+        ..., description="Entities that gained a canonical_name property in pass 1"
+    )
+    canonical_merges: int = Field(
+        ...,
+        description=(
+            "Duplicate entities removed via same-canonical_name merging "
+            "(pass 2). For a canonical group of N entities, contributes N-1."
+        ),
+    )
+    embedding_merges: int = Field(
+        ...,
+        description=(
+            "Duplicate entities removed via embedding-based fuzzy merging (pass 3)."
+        ),
+    )
+    relationship_consolidations: int = Field(
+        ...,
+        description=(
+            "Parallel edges removed (pass 4). For a triple with N parallel "
+            "edges of the same type, contributes N-1 — the keeper edge "
+            "gains a ``count`` property."
+        ),
+    )
+    entities_processed: int
+    relationships_processed: int
+    skipped_bad_names: int = Field(
+        ...,
+        description=(
+            "Entities skipped because their ``name`` couldn't be "
+            "normalized to a string (e.g. corrupt StringArray values)."
+        ),
+    )
+    elapsed_seconds: float
+    dry_run: bool
+
+
 # ==================== VERSIONING SCHEMAS ====================
 
 

@@ -48,6 +48,8 @@ from app.schemas.graph_schemas import (
     CommunitySummarizeRequest,
     CommunitySummarizeResponse,
     DocumentResponse,
+    EntityDeduplicateRequest,
+    EntityDeduplicateResponse,
     GraphCreate,
     GraphInstructions,
     GraphInstructionsResponse,
@@ -1427,6 +1429,7 @@ from app.schemas.community_kinds import (
 )
 from app.services.analytics_service import GraphAnalyticsService
 from app.services.community_summarizer import CommunitySummarizer
+from app.services.entity_dedup_service import entity_dedup_service
 from app.services.similarity_service import similarity_service
 from app.tasks.community_tasks import COMMUNITY_DETECTION_MIN_ENTITIES
 
@@ -1747,6 +1750,52 @@ async def build_similarity(
         entities_processed=report.entities_processed,
         elapsed_seconds=report.elapsed_seconds,
         force_rebuild=report.force_rebuild,
+    )
+
+
+# ==================== STORY-6: ENTITY DEDUP ENDPOINT ====================
+
+
+@router.post(
+    "/graphs/{graph_id}/entities/deduplicate",
+    response_model=EntityDeduplicateResponse,
+    summary="Run post-ingest entity + relationship deduplication",
+)
+async def deduplicate_entities(
+    graph_id: UUID,
+    request: EntityDeduplicateRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Run the four-pass dedup over the graph's entities and relationships.
+
+    Idempotent — running again after a successful pass finds nothing to
+    do. Use ``dry_run=true`` to preview impact without writing.
+
+    Synchronous. For an Eurail-sized graph (~2,900 entities) the four
+    passes complete in 10–30 seconds. Larger graphs may want Celery
+    wrapping; not in scope for STORY-6.
+    """
+    await _verify_graph_ownership(graph_id, user_id)
+    try:
+        report = await entity_dedup_service.deduplicate(
+            graph_id=str(graph_id),
+            passes=request.passes,
+            fuzzy_threshold=request.fuzzy_threshold,
+            dry_run=request.dry_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return EntityDeduplicateResponse(
+        passes_run=report.passes_run,
+        canonical_names_added=report.canonical_names_added,
+        canonical_merges=report.canonical_merges,
+        embedding_merges=report.embedding_merges,
+        relationship_consolidations=report.relationship_consolidations,
+        entities_processed=report.entities_processed,
+        relationships_processed=report.relationships_processed,
+        skipped_bad_names=report.skipped_bad_names,
+        elapsed_seconds=report.elapsed_seconds,
+        dry_run=report.dry_run,
     )
 
 
