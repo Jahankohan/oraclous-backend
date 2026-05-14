@@ -1001,6 +1001,28 @@ class CommunitySummarizeResponse(BaseModel):
             "or zero-content sample)."
         ),
     )
+    # STORY-4c — embedding stats (the endpoint also computes embeddings)
+    embedded: int = Field(
+        default=0,
+        description=(
+            "Communities for which a summary embedding was computed and "
+            "written. STORY-4c."
+        ),
+    )
+    skipped_existing_embeddings: int = Field(
+        default=0,
+        description=(
+            "Communities skipped during embedding because they already had "
+            "an embedding stored and force_rebuild was False."
+        ),
+    )
+    failed_embeddings: int = Field(
+        default=0,
+        description=(
+            "Communities where the embedding call failed (provider error, "
+            "network glitch, etc.). Their summary is still written."
+        ),
+    )
 
 
 # ==================== VERSIONING SCHEMAS ====================

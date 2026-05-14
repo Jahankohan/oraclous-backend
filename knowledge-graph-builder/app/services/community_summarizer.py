@@ -48,7 +48,11 @@ from openai import AsyncOpenAI
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
-from app.schemas.community_kinds import UnknownCommunityKindError, get_kind
+from app.schemas.community_kinds import (
+    COMMUNITY_KINDS,
+    UnknownCommunityKindError,
+    get_kind,
+)
 
 logger = get_logger(__name__)
 
@@ -92,6 +96,10 @@ class SummarizeReport:
     skipped_singleton: int = 0
     failed: int = 0
     per_level: dict[str, int] = field(default_factory=dict)
+    # STORY-4c — when the endpoint embeds summaries in the same call:
+    embedded: int = 0
+    skipped_existing_embeddings: int = 0
+    failed_embeddings: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -102,7 +110,21 @@ class SummarizeReport:
             "skipped_singleton": self.skipped_singleton,
             "failed": self.failed,
             "per_level": self.per_level,
+            "embedded": self.embedded,
+            "skipped_existing_embeddings": self.skipped_existing_embeddings,
+            "failed_embeddings": self.failed_embeddings,
         }
+
+
+@dataclass(slots=True)
+class EmbedReport:
+    """What happened when embed_summaries ran for one graph + kind."""
+
+    kind: str
+    total: int = 0
+    embedded: int = 0
+    skipped_existing: int = 0
+    failed: int = 0
 
 
 class CommunitySummarizer:
@@ -351,6 +373,119 @@ class CommunitySummarizer:
         # fields empty so callers can detect partial output.
         return {"summary": str(raw)[:2000], "keywords": [], "excerpt": ""}
 
+    # ── Embedding (STORY-4c) ─────────────────────────────────────────────────
+
+    async def embed_summaries(
+        self,
+        graph_id: str,
+        kind: str,
+        *,
+        force_rebuild: bool = False,
+    ) -> EmbedReport:
+        """Compute summary embeddings for the given kind.
+
+        Looks up the per-kind ``embedding_property`` from the registry —
+        entity uses ``embedding`` (Celery-detector convention, pre-existing),
+        chunk uses ``summary_embedding`` (under the ``summary_*`` namespace).
+        Skips communities that already have an embedding unless
+        ``force_rebuild`` is True.
+
+        The vector index ``spec.index_name`` should already exist (created
+        on app startup via ``ensure_community_vector_indexes``).
+        """
+        spec = get_kind(kind)
+        emb_prop = spec.embedding_property
+        community_label = spec.community_label
+        id_property = spec.id_property
+
+        # Pull communities that have a summary AND (no embedding OR force).
+        # Property names come from the registry — compile-time constants,
+        # safe for f-string interpolation.
+        condition = f"AND c.`{emb_prop}` IS NULL"
+        if force_rebuild:
+            condition = ""
+        rows = await neo4j_client.execute_query(
+            (
+                f"MATCH (c:`{community_label}` {{graph_id: $graph_id}}) "
+                f"WHERE c.summary IS NOT NULL {condition} "
+                f"RETURN c.`{id_property}` AS community_id, "
+                "c.summary AS summary"
+            ),
+            {"graph_id": graph_id},
+        )
+        report = EmbedReport(kind=kind, total=len(rows))
+
+        # Count communities that already have an embedding so the response
+        # is informative even when there's nothing left to do. Always
+        # compute this when not force_rebuild — it's the diagnostic that
+        # tells the caller "you already ran this".
+        if not force_rebuild:
+            counts = await neo4j_client.execute_query(
+                (
+                    f"MATCH (c:`{community_label}` {{graph_id: $graph_id}}) "
+                    f"WHERE c.summary IS NOT NULL AND "
+                    f"c.`{emb_prop}` IS NOT NULL "
+                    "RETURN count(c) AS cnt"
+                ),
+                {"graph_id": graph_id},
+            )
+            report.skipped_existing = counts[0]["cnt"] if counts else 0
+
+        if not rows:
+            return report
+
+        embedder = self._get_embedder()
+
+        async def _embed_one(community_id: str, summary_text: str) -> bool:
+            async with self._semaphore:
+                try:
+                    # Embedder may be sync or async depending on SDK
+                    raw = embedder.embed_query(summary_text)
+                    embedding = await raw if hasattr(raw, "__await__") else raw
+                except Exception as exc:
+                    logger.warning(
+                        "embedding failed for %s/%s: %s", kind, community_id, exc
+                    )
+                    return False
+                await neo4j_client.execute_query(
+                    (
+                        f"MATCH (c:`{community_label}` "
+                        f"{{`{id_property}`: $community_id, graph_id: $graph_id}}) "
+                        f"SET c.`{emb_prop}` = $embedding, "
+                        "    c.summary_embedded_at = datetime()"
+                    ),
+                    {
+                        "community_id": community_id,
+                        "graph_id": graph_id,
+                        "embedding": embedding,
+                    },
+                )
+                return True
+
+        results = await asyncio.gather(
+            *(_embed_one(r["community_id"], r["summary"]) for r in rows),
+            return_exceptions=True,
+        )
+        report.embedded = sum(1 for x in results if x is True)
+        report.failed = sum(
+            1 for x in results if x is False or isinstance(x, Exception)
+        )
+        return report
+
+    def _get_embedder(self):
+        """Lazy-construct the embedder. neo4j_graphrag.OpenAIEmbeddings
+        is the same path the chat retriever and entity-Leiden detector use,
+        so we match dimensions (3072 for text-embedding-3-large) and
+        provider routing."""
+        if getattr(self, "_embedder", None) is None:
+            from neo4j_graphrag.embeddings import OpenAIEmbeddings
+
+            model = getattr(settings, "EMBEDDING_MODEL", "text-embedding-3-large")
+            self._embedder = OpenAIEmbeddings(
+                api_key=settings.OPENAI_API_KEY, model=model
+            )
+        return self._embedder
+
     # ── LLM call plumbing ─────────────────────────────────────────────────────
 
     async def _call_llm_json(self, prompt: str) -> str:
@@ -375,3 +510,44 @@ class CommunitySummarizer:
                 response_format={"type": "json_object"},
             )
             return (resp.choices[0].message.content or "").strip()
+
+
+# ── Vector index ensure (called on app startup) ─────────────────────────────
+
+
+async def ensure_community_vector_indexes() -> None:
+    """Create the vector index for every registered community kind.
+
+    Idempotent (``CREATE VECTOR INDEX … IF NOT EXISTS``). Called from
+    ``main.py`` lifespan so the index exists by the time the first
+    summarize / embed / find_communities call lands.
+
+    Dimensions match ``text-embedding-3-large`` (3072) — the embedding
+    model used by every other path in the codebase. If a deployment uses
+    a different embedding model, this is the place to thread that in
+    (the registry could carry ``embedding_dim`` too, but a single
+    deployment-wide model is the only configuration we support today).
+    """
+    dim = getattr(settings, "EMBEDDING_DIMENSIONS", 3072)
+    for spec in COMMUNITY_KINDS.values():
+        query = (
+            f"CREATE VECTOR INDEX {spec.index_name} IF NOT EXISTS "
+            f"FOR (c:`{spec.community_label}`) "
+            f"ON (c.`{spec.embedding_property}`) "
+            "OPTIONS {indexConfig: { "
+            f"`vector.dimensions`: {dim}, "
+            "`vector.similarity_function`: 'cosine' "
+            "}}"
+        )
+        try:
+            await neo4j_client.execute_write_query(query)
+            logger.info(
+                "Ensured community vector index %s on :%s(%s)",
+                spec.index_name,
+                spec.community_label,
+                spec.embedding_property,
+            )
+        except Exception as exc:
+            # Index creation failures during startup shouldn't crash the
+            # whole service — log + continue. Subsequent runs retry.
+            logger.warning("Could not create %s vector index: %s", spec.index_name, exc)
