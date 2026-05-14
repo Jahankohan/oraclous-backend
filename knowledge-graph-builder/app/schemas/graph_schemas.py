@@ -1130,6 +1130,102 @@ class EntityDeduplicateRequest(BaseModel):
     )
 
 
+# ==================== STORY-9 STRUCTURED INGEST SCHEMAS ====================
+
+
+class StructuredIngestRelationshipMapping(BaseModel):
+    """One field-to-edge rule for the structured ingest body."""
+
+    from_field: str = Field(
+        ...,
+        description=(
+            "Property on each record whose value identifies a target "
+            "entity. e.g. 'company_id' on an EvidenceRecord points at "
+            "a Company entity."
+        ),
+    )
+    to_label: str = Field(
+        ...,
+        description=("Neo4j label of the target entity. Alphanumeric + underscore."),
+    )
+    rel_type: str = Field(
+        ...,
+        description="Relationship type. ALL_CAPS_WITH_UNDERSCORES.",
+    )
+    to_id_field: str = Field(
+        "id",
+        description=(
+            "Property on the target entity that matches the source's "
+            "from_field value. Defaults to 'id'."
+        ),
+    )
+
+
+class StructuredIngestRequest(BaseModel):
+    """POST /graphs/{id}/ingest-records body."""
+
+    records: list[dict[str, Any]] = Field(
+        ...,
+        description=(
+            "List of JSON records. Each dict becomes one entity. The "
+            "field named by ``id_field`` (default 'id') identifies the "
+            "entity for MERGE — re-running the same record is a no-op."
+        ),
+    )
+    label: str = Field(
+        ...,
+        description=(
+            "Neo4j label for the resulting entities. Alphanumeric + "
+            "underscore only. Examples: 'EvidenceRecord', 'Company', "
+            "'Product'."
+        ),
+    )
+    id_field: str = Field(
+        "id",
+        description="Record key that holds the entity id. Default 'id'.",
+    )
+    relationships: list[StructuredIngestRelationshipMapping] = Field(
+        default_factory=list,
+        description=(
+            "Optional edge mappings. For each record's ``from_field`` "
+            "value, MERGE a target entity of ``to_label`` and create "
+            "the typed edge."
+        ),
+    )
+
+
+class StructuredIngestResponse(BaseModel):
+    label: str
+    records_processed: int = Field(
+        ...,
+        description=(
+            "Records the service successfully MERGED into the graph "
+            "(excluding skipped)."
+        ),
+    )
+    entities_created_or_updated: int = Field(
+        ..., description="Source entities MERGED (one per processed record)."
+    )
+    relationships_created: int = Field(
+        ...,
+        description=(
+            "Edges created or matched by the relationship mappings. "
+            "Re-running with the same records bumps the ``count`` "
+            "property on each matched edge rather than creating new edges."
+        ),
+    )
+    related_entities_created: int = Field(
+        ...,
+        description=(
+            "Newly-created target entities from relationship mappings "
+            "(MERGEd target nodes that didn't exist before)."
+        ),
+    )
+    skipped: int
+    skip_reasons: dict[str, int]
+    elapsed_seconds: float
+
+
 class EntityDeduplicateResponse(BaseModel):
     passes_run: list[str]
     canonical_names_added: int = Field(
