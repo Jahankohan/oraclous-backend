@@ -858,27 +858,44 @@ class CommunityDetectRequest(BaseModel):
     min_entities: int | None = Field(
         None, description="Override minimum entity threshold"
     )
+    kind: str = Field(
+        "entity",
+        description=(
+            "Community kind to detect. Must be a kind from GET "
+            "/communities/kinds whose ``detection_supported`` is True; "
+            "read-only kinds return HTTP 405."
+        ),
+    )
 
 
 class CommunityDetectResponse(BaseModel):
     job_id: str
     graph_id: str
+    kind: str = Field(
+        default="entity",
+        description="The community kind being detected.",
+    )
     status: str
     estimated_entities: int | None = None
 
 
 class CommunityItem(BaseModel):
     community_id: str
-    level: int
+    kind: str = Field(default="entity", description="Community kind from the registry")
+    level: int | None = Field(
+        default=None,
+        description="Hierarchy level (None for flat kinds)",
+    )
     entity_count: int
     weight: float | None = None
     summary: str | None = None
     parent_id: str | None = None
-    status: str
+    status: str | None = None
 
 
 class CommunityListResponse(BaseModel):
     communities: list[CommunityItem]
+    kind: str = Field(default="entity", description="Community kind in the list")
     total: int
     detection_status: str
     last_detected_at: str | None = None
@@ -892,7 +909,10 @@ class CommunityMember(BaseModel):
 
 class CommunityDetailResponse(BaseModel):
     community_id: str
-    level: int
+    kind: str = Field(default="entity", description="Community kind from the registry")
+    level: int | None = Field(
+        default=None, description="Hierarchy level (None for flat kinds)"
+    )
     summary: str | None = None
     entity_count: int
     algorithm: str | None = None
@@ -905,11 +925,13 @@ class CommunityDetailResponse(BaseModel):
 
 
 class CommunityStatusResponse(BaseModel):
+    kind: str = Field(default="entity", description="Community kind being reported on")
     status: str
     last_detected_at: str | None = None
     communities_by_level: dict[str, int] = {}
     entity_count_at_detection: int = 0
     current_entity_count: int = 0
+    staleness_pct: float = 0.0
 
 
 # ==================== VERSIONING SCHEMAS ====================

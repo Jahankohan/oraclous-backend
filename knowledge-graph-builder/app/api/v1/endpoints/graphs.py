@@ -10,6 +10,7 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
+    Query,
     Request,
     UploadFile,
     status,
@@ -1416,6 +1417,10 @@ async def retroactive_apply_ontology(
 
 # ==================== COMMUNITY DETECTION ENDPOINTS ====================
 
+from app.schemas.community_kinds import (
+    UnknownCommunityKindError,
+    get_kind,
+)
 from app.services.analytics_service import GraphAnalyticsService
 from app.tasks.community_tasks import COMMUNITY_DETECTION_MIN_ENTITIES
 
@@ -1438,7 +1443,12 @@ async def _verify_graph_ownership(
     "/graphs/{graph_id}/communities/detect",
     response_model=CommunityDetectResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Trigger hierarchical community detection",
+    summary="Trigger community detection",
+    responses={
+        400: {"description": "Unknown kind or insufficient member nodes"},
+        405: {"description": "Detection not supported for this kind (read-only)"},
+        409: {"description": "Detection already in progress"},
+    },
 )
 async def detect_communities(
     graph_id: UUID,
@@ -1447,46 +1457,79 @@ async def detect_communities(
     analytics: GraphAnalyticsService = Depends(_get_analytics_service),
 ):
     """
-    Queue a background Leiden community detection job for the graph.
+    Queue a background community detection job for the graph.
+
+    The ``kind`` field of the request body selects which kind to detect.
+    Kinds whose ``detection_supported`` is False (e.g. ``chunk`` today)
+    return HTTP 405 — those communities are read-only.
 
     Returns 202 with job_id when queued.
     Returns 409 when a detection job is already running.
-    Returns 400 when graph has fewer than the minimum required entities.
+    Returns 400 when graph has fewer than the minimum required member nodes.
     """
     await _verify_graph_ownership(graph_id, user_id)
 
-    # Check current status
-    current_status = await analytics.get_community_status(graph_id)
+    kind = request.kind
+    try:
+        spec = get_kind(kind)
+    except UnknownCommunityKindError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    if spec.detector_task_name is None:
+        raise HTTPException(
+            status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+            detail=(
+                f"Detection for community kind {kind!r} is not supported; "
+                f"existing {spec.community_label} nodes are read-only."
+            ),
+        )
+
+    current_status = await analytics.get_community_status(graph_id, kind=kind)
     if current_status["status"] == "rebuilding" and not request.force_rebuild:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Community detection already in progress",
         )
 
-    # Check entity count
+    # Count the member-node population the detector needs. Label comes
+    # from the registry (compile-time constant), so f-string is safe.
     count_result = await neo4j_client.execute_query(
-        "MATCH (e:__Entity__ {graph_id: $graph_id}) RETURN count(e) AS cnt",
+        f"MATCH (n:`{spec.member_label}` {{graph_id: $graph_id}}) "
+        "RETURN count(n) AS cnt",
         {"graph_id": str(graph_id)},
     )
-    entity_count = count_result[0]["cnt"] if count_result else 0
+    member_count = count_result[0]["cnt"] if count_result else 0
     min_entities = request.min_entities or COMMUNITY_DETECTION_MIN_ENTITIES
-    if entity_count < min_entities:
+    if member_count < min_entities:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Graph has {entity_count} entities — minimum is {min_entities} for community detection",
+            detail=(
+                f"Graph has {member_count} {spec.member_label} nodes — "
+                f"minimum is {min_entities} for community detection"
+            ),
         )
 
-    result = await analytics.detect_communities_async(
-        graph_id=graph_id,
-        levels=request.levels,
-        force_rebuild=request.force_rebuild,
-    )
+    try:
+        result = await analytics.detect_communities_async(
+            graph_id=graph_id,
+            levels=request.levels,
+            force_rebuild=request.force_rebuild,
+            kind=kind,
+        )
+    except NotImplementedError as exc:
+        # Defense-in-depth — the detector_task_name check above already
+        # catches this. Re-raise as 405 if the analytics layer guards a
+        # case we didn't filter for at the endpoint.
+        raise HTTPException(
+            status_code=status.HTTP_405_METHOD_NOT_ALLOWED, detail=str(exc)
+        ) from None
 
     return CommunityDetectResponse(
         job_id=result["job_id"],
         graph_id=result["graph_id"],
+        kind=result.get("kind", kind),
         status=result["status"],
-        estimated_entities=entity_count,
+        estimated_entities=member_count,
     )
 
 
@@ -1494,15 +1537,26 @@ async def detect_communities(
     "/graphs/{graph_id}/communities/status",
     response_model=CommunityStatusResponse,
     summary="Get community detection status for a graph",
+    responses={400: {"description": "Unknown community kind"}},
 )
 async def get_community_status(
     graph_id: UUID,
+    kind: str = Query(
+        default="entity",
+        description=(
+            "Which community kind to report status for. Default `entity` "
+            "preserves the pre-registry response shape."
+        ),
+    ),
     user_id: str = Depends(get_current_user_id),
     analytics: GraphAnalyticsService = Depends(_get_analytics_service),
 ):
-    """Return current detection status, entity counts, and staleness."""
+    """Return current detection status, member counts, and staleness for one kind."""
     await _verify_graph_ownership(graph_id, user_id)
-    result = await analytics.get_community_status(graph_id)
+    try:
+        result = await analytics.get_community_status(graph_id, kind=kind)
+    except UnknownCommunityKindError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     return CommunityStatusResponse(**result)
 
 
@@ -1517,16 +1571,28 @@ async def get_community_status(
     "/graphs/{graph_id}/communities/{community_id}",
     response_model=CommunityDetailResponse,
     summary="Get a single community with its members",
+    responses={400: {"description": "Unknown community kind"}},
 )
 async def get_community_detail(
     graph_id: UUID,
     community_id: str,
+    kind: str | None = Query(
+        default=None,
+        description=(
+            "Optional kind hint. Omit to let the server probe every "
+            "registered kind for a matching community node (one extra "
+            "round trip per registered kind in the worst case)."
+        ),
+    ),
     user_id: str = Depends(get_current_user_id),
     analytics: GraphAnalyticsService = Depends(_get_analytics_service),
 ):
     """Return community detail including member entities and parent/child hierarchy."""
     await _verify_graph_ownership(graph_id, user_id)
-    result = await analytics.get_community_detail(graph_id, community_id)
+    try:
+        result = await analytics.get_community_detail(graph_id, community_id, kind=kind)
+    except UnknownCommunityKindError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     if not result:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Community not found"
