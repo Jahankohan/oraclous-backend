@@ -52,13 +52,51 @@ def _make_toolkit(graph_search_returns=None) -> AgentToolkit:
 
 
 def _make_llm(responses: list[str]) -> MagicMock:
-    """Build a mock AsyncOpenAI client returning responses in order."""
+    """Build a mock AsyncOpenAI client returning responses in order.
+
+    Each ``responses`` entry is a plain string with no tool_calls.
+    For tool-use scenarios use ``_make_llm_with_tool_calls`` instead.
+    """
     client = MagicMock()
     completions = []
     for text in responses:
         mock_resp = MagicMock()
         mock_resp.choices = [MagicMock()]
         mock_resp.choices[0].message.content = text
+        mock_resp.choices[0].message.tool_calls = None
+        completions.append(mock_resp)
+    client.chat.completions.create = AsyncMock(side_effect=completions)
+    return client
+
+
+def _tool_call(call_id: str, name: str, args: dict) -> MagicMock:
+    """Build a mock OpenAI-shape tool_call object."""
+    tc = MagicMock()
+    tc.id = call_id
+    tc.function = MagicMock()
+    tc.function.name = name
+    tc.function.arguments = json.dumps(args)
+    return tc
+
+
+def _make_llm_with_tool_calls(turns: list[dict]) -> MagicMock:
+    """Build a mock AsyncOpenAI client where each turn either invokes
+    tools or returns final text.
+
+    Each ``turn`` is one of:
+      - {"text": "...final answer..."}
+      - {"tool_calls": [(call_id, name, args), ...], "text": ""}
+    """
+    client = MagicMock()
+    completions = []
+    for turn in turns:
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = turn.get("text", "") or ""
+        raw_tcs = turn.get("tool_calls") or []
+        mock_resp.choices[0].message.tool_calls = (
+            [_tool_call(*t) for t in raw_tcs] if raw_tcs else None
+        )
         completions.append(mock_resp)
     client.chat.completions.create = AsyncMock(side_effect=completions)
     return client
@@ -170,126 +208,149 @@ class TestDirectMode:
         assert "node-xyz" in result.provenance.nodes_used_in_response
 
 
-# ── Research mode (ReAct) ─────────────────────────────────────────────────────
+# ── Research mode (native tool-use loop, STORY-5) ─────────────────────────────
 
 
 class TestResearchMode:
-    def _react_responses(
-        self, tool_calls: list[tuple[str, dict]], answer: str
-    ) -> list[str]:
-        """Build JSON response sequence for the ReAct loop."""
-        resp = []
-        for name, args in tool_calls:
-            resp.append(json.dumps({"action": name, "args": args}))
-        resp.append(json.dumps({"action": "answer", "text": answer}))
-        return resp
-
     async def test_executes_at_least_two_tool_calls(self):
         tk = _make_toolkit()
-        responses = self._react_responses(
+        llm = _make_llm_with_tool_calls(
             [
-                ("graph_search", {"query": "step1"}),
-                ("graph_search", {"query": "step2"}),
-            ],
-            "Final answer",
+                {"tool_calls": [("c1", "graph_search", {"query": "step1"})]},
+                {"tool_calls": [("c2", "graph_search", {"query": "step2"})]},
+                {"text": "Final answer"},
+            ]
         )
         agent = _make_agent(mode="research", tools=["graph_search"])
-        ex = _executor(agent=agent, toolkit=tk, responses=responses)
+        ex = _executor(agent=agent, toolkit=tk, llm=llm)
         await ex.run("What is Y?", session_id=None)
         assert tk.graph_search.call_count >= 2
 
-    async def test_returns_answer_from_json(self):
+    async def test_returns_final_text_when_no_tool_calls(self):
         tk = _make_toolkit()
-        responses = self._react_responses(
-            [("graph_search", {"query": "info"})],
-            "The definitive answer.",
+        llm = _make_llm_with_tool_calls(
+            [
+                {"tool_calls": [("c1", "graph_search", {"query": "info"})]},
+                {"text": "The definitive answer."},
+            ]
         )
         agent = _make_agent(mode="research", tools=["graph_search"])
-        ex = _executor(agent=agent, toolkit=tk, responses=responses)
+        ex = _executor(agent=agent, toolkit=tk, llm=llm)
         result = await ex.run("question", session_id=None)
         assert result.response == "The definitive answer."
 
     async def test_caps_at_five_iterations(self):
         tk = _make_toolkit()
-        # Always call a tool — never answer. Should cap at 5 and generate final answer.
-        looping = [json.dumps({"action": "graph_search", "args": {"query": "x"}})] * 6
-        looping.append("Final fallback answer")  # used when cap is reached
+        # Always emit a tool call — never a no-tool-call turn. Should cap at 5.
+        looping = [
+            {"tool_calls": [(f"c{i}", "graph_search", {"query": "x"})]}
+            for i in range(10)
+        ]
         agent = _make_agent(mode="research", tools=["graph_search"])
-        ex = _executor(agent=agent, toolkit=tk, responses=looping)
-        result = await ex.run("q", session_id=None)
-        # At most 5 tool calls from ReAct + 1 final LLM call
+        ex = _executor(agent=agent, toolkit=tk, llm=_make_llm_with_tool_calls(looping))
+        await ex.run("q", session_id=None)
+        # _MAX_TOOL_ITERATIONS is 5
         assert tk.graph_search.call_count <= 5
-        assert result.response  # non-empty
 
     async def test_provenance_records_all_tool_calls(self):
         tk = _make_toolkit()
-        responses = self._react_responses(
-            [("graph_search", {"query": "a"}), ("graph_search", {"query": "b"})],
-            "Done",
+        llm = _make_llm_with_tool_calls(
+            [
+                {"tool_calls": [("c1", "graph_search", {"query": "a"})]},
+                {"tool_calls": [("c2", "graph_search", {"query": "b"})]},
+                {"text": "Done"},
+            ]
         )
         agent = _make_agent(mode="research", tools=["graph_search"])
-        ex = _executor(agent=agent, toolkit=tk, responses=responses)
+        ex = _executor(agent=agent, toolkit=tk, llm=llm)
         result = await ex.run("q", session_id=None)
         assert result.provenance.tools_called.count("graph_search") == 2
 
-    async def test_unparseable_llm_response_treated_as_answer(self):
+    async def test_provenance_records_tool_call_id(self):
+        """Each tool_call entry should carry the LLM-provided id."""
         tk = _make_toolkit()
+        llm = _make_llm_with_tool_calls(
+            [
+                {"tool_calls": [("call_abc", "graph_search", {"query": "x"})]},
+                {"text": "Done"},
+            ]
+        )
         agent = _make_agent(mode="research", tools=["graph_search"])
-        ex = _executor(agent=agent, toolkit=tk, responses=["not json at all"])
+        ex = _executor(agent=agent, toolkit=tk, llm=llm)
         result = await ex.run("q", session_id=None)
-        assert result.response == "not json at all"
+        ids = [tc["id"] for tc in result.provenance.tool_calls]
+        assert "call_abc" in ids
 
     async def test_tool_error_continues_loop(self):
+        """Tool exception is fed back as a tool-result error; loop continues."""
         tk = _make_toolkit()
         tk.graph_search = AsyncMock(side_effect=ToolNotPermittedError("graph_search"))
-        responses = [
-            json.dumps({"action": "graph_search", "args": {"query": "x"}}),
-            json.dumps({"action": "answer", "text": "Recovered answer"}),
-        ]
+        llm = _make_llm_with_tool_calls(
+            [
+                {"tool_calls": [("c1", "graph_search", {"query": "x"})]},
+                {"text": "Recovered answer"},
+            ]
+        )
         agent = _make_agent(mode="research", tools=[])
-        ex = _executor(agent=agent, toolkit=tk, responses=responses)
+        ex = _executor(agent=agent, toolkit=tk, llm=llm)
         result = await ex.run("q", session_id=None)
         assert result.response == "Recovered answer"
 
+    async def test_no_tool_calls_returns_text_immediately(self):
+        """First-turn text answer (no tool_calls) returns directly."""
+        tk = _make_toolkit()
+        llm = _make_llm_with_tool_calls([{"text": "Immediate answer"}])
+        agent = _make_agent(mode="research", tools=["graph_search"])
+        ex = _executor(agent=agent, toolkit=tk, llm=llm)
+        result = await ex.run("q", session_id=None)
+        assert result.response == "Immediate answer"
 
-# ── Analytical mode ───────────────────────────────────────────────────────────
+
+# ── Analytical mode (now a tool-use loop too, STORY-5) ────────────────────────
 
 
 class TestAnalyticalMode:
     async def test_returns_response(self):
         agent = _make_agent(mode="analytical")
         ex = _executor(
-            agent=agent, responses=["Reasoning:\nStep 1...\n\nFinal Answer: X"]
+            agent=agent, responses=["Step 1: examined. Step 2: weighed. Conclusion: X"]
         )
         result = await ex.run("Analyse this.", session_id=None)
-        assert "Reasoning" in result.response or result.response
+        assert result.response
 
-    async def test_prompt_contains_step_by_step_instruction(self):
+    async def test_prompt_contains_structured_reasoning_instruction(self):
+        """System prompt should nudge structured reasoning."""
         tk = _make_toolkit()
-        llm = _make_llm(["analysis result"])
+        llm = _make_llm(["Step 1: ... Conclusion: y"])
         agent = _make_agent(mode="analytical")
         ex = _executor(agent=agent, toolkit=tk, llm=llm)
         await ex.run("q", session_id=None)
-        call_kwargs = llm.chat.completions.create.call_args
-        messages = (
-            call_kwargs[1]["messages"]
-            if "messages" in call_kwargs[1]
-            else call_kwargs[0][0]
-        )
-        full_text = " ".join(m["content"] for m in messages)
-        assert "step by step" in full_text.lower()
+        # System message is the first message in OpenAI-shape calls
+        system_msg = llm.chat.completions.create.call_args[1]["messages"][0]["content"]
+        assert "step by step" in system_msg.lower()
 
-    async def test_calls_graph_search_when_available(self):
+    async def test_does_not_force_graph_search(self):
+        """Unlike pre-STORY-5 analytical, the loop only invokes tools the
+        model chooses. With no tool_calls in the response, graph_search
+        is NOT called automatically."""
         tk = _make_toolkit()
         agent = _make_agent(mode="analytical", tools=["graph_search"])
-        ex = _executor(agent=agent, toolkit=tk, responses=["result"])
+        ex = _executor(agent=agent, toolkit=tk, responses=["analysis result"])
         await ex.run("q", session_id=None)
-        tk.graph_search.assert_called_once()
+        tk.graph_search.assert_not_called()
 
-    async def test_provenance_has_graph_search(self):
-        agent = _make_agent(mode="analytical")
-        ex = _executor(agent=agent, responses=["ok"])
+    async def test_dispatches_tool_when_model_calls_it(self):
+        tk = _make_toolkit()
+        llm = _make_llm_with_tool_calls(
+            [
+                {"tool_calls": [("c1", "graph_search", {"query": "x"})]},
+                {"text": "Analysis complete"},
+            ]
+        )
+        agent = _make_agent(mode="analytical", tools=["graph_search"])
+        ex = _executor(agent=agent, toolkit=tk, llm=llm)
         result = await ex.run("q", session_id=None)
+        assert tk.graph_search.call_count == 1
         assert "graph_search" in result.provenance.tools_called
 
 

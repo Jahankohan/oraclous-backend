@@ -171,10 +171,13 @@ class TestCallLlmDispatch:
         llm = MagicMock(spec=AsyncOpenAI)
         resp = MagicMock()
         resp.choices[0].message.content = "hello"
+        resp.choices[0].message.tool_calls = None
         llm.chat.completions.create = AsyncMock(return_value=resp)
         ex = self._executor(llm)
         result = await ex._call_llm([{"role": "user", "content": "hi"}])
-        assert result == "hello"
+        # _call_llm now returns _LLMResponse(text, tool_calls)
+        assert result.text == "hello"
+        assert result.tool_calls == []
         llm.chat.completions.create.assert_called_once()
 
     async def test_anthropic_uses_messages_create(self):
@@ -184,13 +187,16 @@ class TestCallLlmDispatch:
             pytest.skip("anthropic SDK not installed")
 
         llm = MagicMock(spec=AsyncAnthropic)
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = "anthropic response"
         resp = MagicMock()
-        resp.content = [MagicMock()]
-        resp.content[0].text = "anthropic response"
+        resp.content = [text_block]
         llm.messages.create = AsyncMock(return_value=resp)
         ex = self._executor(llm)
         result = await ex._call_llm([{"role": "user", "content": "hi"}])
-        assert result == "anthropic response"
+        assert result.text == "anthropic response"
+        assert result.tool_calls == []
         llm.messages.create.assert_called_once()
         call_kwargs = llm.messages.create.call_args[1]
         assert "system" in call_kwargs

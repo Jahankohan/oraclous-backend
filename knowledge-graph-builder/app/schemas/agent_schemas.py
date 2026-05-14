@@ -117,6 +117,12 @@ class ProvenancePayload(BaseModel):
     total_nodes_traversed: int = 0
     reasoning_steps: int = 0
     tools_called: list[str] = []
+    # One entry per dispatched tool call. Each is {"id", "name", "node_count"}.
+    # Lets the frontend reconstruct the LLM's actual call chain instead of
+    # just seeing the flat tool-name list. ``id`` mirrors the LLM-provided
+    # tool_call_id when the native tool-use protocol is in use; falls back
+    # to a synthetic id for legacy (direct-mode graph_search) dispatches.
+    tool_calls: list[dict] = []
 
 
 class AgentChatResponse(BaseModel):
