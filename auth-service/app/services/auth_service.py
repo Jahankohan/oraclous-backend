@@ -2,9 +2,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import HTTPException, status
-from passlib.context import CryptContext
-
 from app.core.config import settings
 from app.core.jwt_handler import (
     create_access_token,
@@ -16,6 +13,8 @@ from app.models.user_model import User
 from app.repositories.user_repository import UserRepository
 from app.schema import auth_schemas
 from app.services.email_service import send_email
+from fastapi import HTTPException, status
+from passlib.context import CryptContext
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 logging.basicConfig(level=logging.DEBUG)
@@ -54,7 +53,6 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
-                "home_graph_id": db_user.home_graph_id,
             }
         )
         refresh_token = await self.create_refresh_token(
@@ -62,7 +60,6 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
-                "home_graph_id": db_user.home_graph_id,
             }
         )
         token_schema = auth_schemas.Token(
@@ -85,7 +82,6 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
-                "home_graph_id": db_user.home_graph_id,
             }
         )
         refresh_token = await self.create_refresh_token(
@@ -93,7 +89,6 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
-                "home_graph_id": db_user.home_graph_id,
             }
         )
         token_schema = auth_schemas.Token(
@@ -217,7 +212,6 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
-                "home_graph_id": db_user.home_graph_id,
             }
         )
         refresh_token = await self.create_refresh_token(
@@ -225,7 +219,6 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
-                "home_graph_id": db_user.home_graph_id,
             }
         )
 
