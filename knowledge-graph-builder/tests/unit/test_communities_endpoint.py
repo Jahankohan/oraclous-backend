@@ -58,7 +58,8 @@ class TestCommunitySchema:
         )
         data = c.model_dump(mode="json")
         # kind defaults to "entity"; member_label is optional and stays None
-        # unless an explicit value is passed.
+        # unless an explicit value is passed. STORY-4b added summary_keywords
+        # and summary_excerpt fields (None by default).
         assert data == {
             "community_id": "c-1",
             "kind": "entity",
@@ -67,6 +68,8 @@ class TestCommunitySchema:
             "size": 10,
             "member_label": None,
             "summary": "Tech companies",
+            "summary_keywords": None,
+            "summary_excerpt": None,
         }
 
     @pytest.mark.unit
