@@ -91,12 +91,12 @@ def fn(param):
     assignment_edges = [e for e in edges if e.via == "assignment"]
     return_edges = [e for e in edges if e.via == "return"]
 
-    assert len(assignment_edges) >= 1, (
-        f"Expected >=1 assignment edge for `x = param`, got {assignment_edges}"
-    )
-    assert len(return_edges) >= 1, (
-        f"Expected >=1 return edge for `return x`, got {return_edges}"
-    )
+    assert (
+        len(assignment_edges) >= 1
+    ), f"Expected >=1 assignment edge for `x = param`, got {assignment_edges}"
+    assert (
+        len(return_edges) >= 1
+    ), f"Expected >=1 return edge for `return x`, got {return_edges}"
 
     # Verify assignment edge: param → x
     assign_edge = assignment_edges[0]
@@ -148,9 +148,9 @@ def process(data):
 
     edge = assignment_edges[0]
     assert edge.via == "assignment"
-    assert "result" in edge.target_qualified_name, (
-        f"Expected target to contain 'result', got {edge.target_qualified_name}"
-    )
+    assert (
+        "result" in edge.target_qualified_name
+    ), f"Expected target to contain 'result', got {edge.target_qualified_name}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -174,16 +174,16 @@ def fn(x):
     edges, _ = _edges_from_source(source, "mod", "mod.py")
 
     arg_edges = [e for e in edges if e.via == "argument"]
-    assert len(arg_edges) >= 1, (
-        f"Expected >=1 argument edge for `foo(x)`, got {arg_edges}"
-    )
+    assert (
+        len(arg_edges) >= 1
+    ), f"Expected >=1 argument edge for `foo(x)`, got {arg_edges}"
 
     edge = arg_edges[0]
     assert edge.via == "argument"
     # Source is the function node (parameter flows from fn)
-    assert "fn" in edge.source_qualified_name, (
-        f"Source of argument edge should reference 'fn', got: {edge.source_qualified_name}"
-    )
+    assert (
+        "fn" in edge.source_qualified_name
+    ), f"Source of argument edge should reference 'fn', got: {edge.source_qualified_name}"
 
 
 @pytest.mark.unit
@@ -234,13 +234,13 @@ def list_items(request):
 """
     _, taint_marks = _edges_from_source(source, "api.endpoints", "api/endpoints.py")
 
-    assert len(taint_marks) >= 1, (
-        "Expected taint marks for @router.get decorated function"
-    )
+    assert (
+        len(taint_marks) >= 1
+    ), "Expected taint marks for @router.get decorated function"
     taint_qnames = [m.qualified_name for m in taint_marks]
-    assert any("request" in qn for qn in taint_qnames), (
-        f"Expected 'request' param in taint marks, got: {taint_qnames}"
-    )
+    assert any(
+        "request" in qn for qn in taint_qnames
+    ), f"Expected 'request' param in taint marks, got: {taint_qnames}"
 
 
 @pytest.mark.unit
@@ -292,9 +292,9 @@ def handle_request(req, context):
 
     assert len(taint_marks) >= 1, "Expected taint mark for handle_request"
     taint_qnames = [m.qualified_name for m in taint_marks]
-    assert any("req" in qn for qn in taint_qnames), (
-        f"Expected 'req' in taint marks, got: {taint_qnames}"
-    )
+    assert any(
+        "req" in qn for qn in taint_qnames
+    ), f"Expected 'req' in taint marks, got: {taint_qnames}"
 
 
 @pytest.mark.unit
@@ -336,13 +336,13 @@ class MyView:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             analysis = _analyze_function_ast(node, "myapp.MyView", "myapp.py")
             taint_qnames = [m.qualified_name for m in analysis.taint_marks]
-            assert not any("self" in qn for qn in taint_qnames), (
-                f"'self' must not appear in taint marks: {taint_qnames}"
-            )
+            assert not any(
+                "self" in qn for qn in taint_qnames
+            ), f"'self' must not appear in taint marks: {taint_qnames}"
             if analysis.taint_marks:
-                assert any("request" in qn for qn in taint_qnames), (
-                    f"'request' should be taint-marked, got: {taint_qnames}"
-                )
+                assert any(
+                    "request" in qn for qn in taint_qnames
+                ), f"'request' should be taint-marked, got: {taint_qnames}"
             break
 
 
@@ -376,9 +376,9 @@ def fn(param):
         edge_names.add(e.source_qualified_name)
         edge_names.add(e.target_qualified_name)
 
-    assert not any("unrelated" in name for name in edge_names), (
-        f"'unrelated' (never derived from param) must not appear in edges: {edge_names}"
-    )
+    assert not any(
+        "unrelated" in name for name in edge_names
+    ), f"'unrelated' (never derived from param) must not appear in edges: {edge_names}"
 
 
 @pytest.mark.unit
@@ -396,9 +396,9 @@ def fn():
     return x
 """
     edges, _ = _edges_from_source(source, "mod", "mod.py")
-    assert len(edges) == 0, (
-        f"Expected 0 edges for function with no params, got: {edges}"
-    )
+    assert (
+        len(edges) == 0
+    ), f"Expected 0 edges for function with no params, got: {edges}"
 
 
 @pytest.mark.unit
@@ -417,13 +417,13 @@ def fn(x):
     edge_targets = [e.target_qualified_name for e in edges]
     # 'd' is assigned from 'b' (not tracked), so the local var 'd' must not be a flow target.
     # Check with a trailing-dot or end-of-string anchor to avoid matching 'd' inside other names.
-    assert not any(t.endswith(".d") or t == "d" for t in edge_targets), (
-        f"'d' (derived from non-param 'b') must not be a flow target: {edge_targets}"
-    )
+    assert not any(
+        t.endswith(".d") or t == "d" for t in edge_targets
+    ), f"'d' (derived from non-param 'b') must not be a flow target: {edge_targets}"
     # 'c' is assigned from 'a' (tracked), so it must appear as a target
-    assert any(t.endswith(".c") or t == "c" for t in edge_targets), (
-        f"'c' (derived from param-tracked 'a') must appear as flow target: {edge_targets}"
-    )
+    assert any(
+        t.endswith(".c") or t == "c" for t in edge_targets
+    ), f"'c' (derived from param-tracked 'a') must appear as flow target: {edge_targets}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -449,9 +449,9 @@ def test_graph_id_in_mark_taint_cypher():
     """
     Multi-tenancy invariant: taint mark Cypher must also scope by $graph_id.
     """
-    assert "$graph_id" in _MARK_TAINT, (
-        "_MARK_TAINT Cypher must use $graph_id (multi-tenancy invariant)"
-    )
+    assert (
+        "$graph_id" in _MARK_TAINT
+    ), "_MARK_TAINT Cypher must use $graph_id (multi-tenancy invariant)"
 
 
 @pytest.mark.unit
@@ -461,12 +461,12 @@ def test_graph_id_not_hardcoded_in_cypher():
     Both Cypher templates must use the $ parameter syntax only.
     """
     # Check MERGE_FLOWS_TO does not hardcode any graph_id value
-    assert "graph_id: '" not in _MERGE_FLOWS_TO, (
-        "MERGE_FLOWS_TO must not hardcode graph_id values"
-    )
-    assert 'graph_id: "' not in _MERGE_FLOWS_TO, (
-        "MERGE_FLOWS_TO must not hardcode graph_id values"
-    )
+    assert (
+        "graph_id: '" not in _MERGE_FLOWS_TO
+    ), "MERGE_FLOWS_TO must not hardcode graph_id values"
+    assert (
+        'graph_id: "' not in _MERGE_FLOWS_TO
+    ), "MERGE_FLOWS_TO must not hardcode graph_id values"
     assert "graph_id: '" not in _MARK_TAINT
     assert 'graph_id: "' not in _MARK_TAINT
 
@@ -491,9 +491,9 @@ def process(user_input):
 
     # `result = user_input` → 1 assignment edge
     # `return result` → 1 return edge
-    assert count >= 2, (
-        f"Expected >=2 edges for `result = user_input; return result`, got {count}"
-    )
+    assert (
+        count >= 2
+    ), f"Expected >=2 edges for `result = user_input; return result`, got {count}"
 
 
 @pytest.mark.unit
@@ -509,9 +509,9 @@ def test_flows_to_edge_graph_id_passed_as_parameter():
     assert "$graph_id" in _MERGE_FLOWS_TO
     # It should NOT contain graph_id as a formatted string literal
     hardcoded_pattern = re.compile(r"graph_id:\s*['\"]")
-    assert not hardcoded_pattern.search(_MERGE_FLOWS_TO), (
-        "MERGE_FLOWS_TO must use $graph_id parameter, not hardcoded string"
-    )
+    assert not hardcoded_pattern.search(
+        _MERGE_FLOWS_TO
+    ), "MERGE_FLOWS_TO must use $graph_id parameter, not hardcoded string"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -569,9 +569,9 @@ def compute_average(numbers):
     return total
 """
     _, taint_marks = _edges_from_source(source)
-    assert len(taint_marks) == 0, (
-        f"Expected no taint marks for non-taint function, got: {taint_marks}"
-    )
+    assert (
+        len(taint_marks) == 0
+    ), f"Expected no taint marks for non-taint function, got: {taint_marks}"
 
 
 @pytest.mark.unit

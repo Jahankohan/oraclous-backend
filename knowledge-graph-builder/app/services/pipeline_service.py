@@ -1629,7 +1629,8 @@ class MultiTenantGraphRAGPipeline:
             or (hasattr(n, "labels") and "__Entity__" in getattr(n, "labels", []))
             or (
                 # neo4j_graphrag uses `label` as a single string
-                getattr(n, "label", None) == "__Entity__"
+                getattr(n, "label", None)
+                == "__Entity__"
             )
         ]
 
@@ -1876,9 +1877,9 @@ class PipelineService:
 
     def __init__(self):
         """Initialize pipeline service."""
-        self._pipeline_cache: dict[
-            str, MultiTenantGraphRAGPipeline
-        ] = {}  # Cache pipelines per graph_id
+        self._pipeline_cache: dict[str, MultiTenantGraphRAGPipeline] = (
+            {}
+        )  # Cache pipelines per graph_id
         logger.info("PipelineService initialized")
 
     def get_pipeline(

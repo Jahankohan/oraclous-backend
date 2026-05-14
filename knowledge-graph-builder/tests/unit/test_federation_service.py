@@ -175,12 +175,12 @@ async def test_validate_uses_owner_user_id_not_user_id():
     from app.services.federation_service import FederationService
 
     source = inspect.getsource(FederationService._validate_and_filter)
-    assert "g.owner_user_id" in source, (
-        "Regression: _validate_and_filter must read g.owner_user_id (not g.user_id)"
-    )
-    assert "g.user_id AS user_id" not in source, (
-        "Regression: _validate_and_filter must NOT read g.user_id (it is always None)"
-    )
+    assert (
+        "g.owner_user_id" in source
+    ), "Regression: _validate_and_filter must read g.owner_user_id (not g.user_id)"
+    assert (
+        "g.user_id AS user_id" not in source
+    ), "Regression: _validate_and_filter must NOT read g.user_id (it is always None)"
 
 
 @pytest.mark.unit
@@ -196,9 +196,9 @@ async def test_validate_matches_system_namespace():
     from app.services.federation_service import FederationService
 
     source = inspect.getsource(FederationService._validate_and_filter)
-    assert "__system__" in source, (
-        "Regression: _validate_and_filter must filter by namespace='__system__'"
-    )
+    assert (
+        "__system__" in source
+    ), "Regression: _validate_and_filter must filter by namespace='__system__'"
 
 
 # ─── Query builder tests ──────────────────────────────────────────────────────
@@ -460,9 +460,9 @@ async def test_entity_union_cypher_uses_single_outer_call():
     # joined at the top level: CALL{} UNION ALL CALL{}
     # The fixed pattern has one outer CALL containing all branches.
     # Verify the branch-building loop does NOT produce per-branch CALL wrappers.
-    assert 'f"CALL {\\n"' not in source and "f'CALL {\\n'" not in source, (
-        "ORA-217 regression: branches must NOT be individually wrapped in CALL"
-    )
+    assert (
+        'f"CALL {\\n"' not in source and "f'CALL {\\n'" not in source
+    ), "ORA-217 regression: branches must NOT be individually wrapped in CALL"
 
 
 @pytest.mark.unit
@@ -506,15 +506,15 @@ async def test_entity_union_cypher_structure_single_call_wrapping():
     call_start = cypher.index("CALL {")
     call_close = cypher.rindex("}")
     inner_body = cypher[call_start + len("CALL {") : call_close]
-    assert "UNION ALL" in inner_body, (
-        f"UNION ALL must be inside the outer CALL block: {cypher!r}"
-    )
+    assert (
+        "UNION ALL" in inner_body
+    ), f"UNION ALL must be inside the outer CALL block: {cypher!r}"
 
     # Outer RETURN must follow the closing brace
     tail = cypher[call_close + 1 :].strip()
-    assert tail.startswith("RETURN"), (
-        f"Query must conclude with RETURN after CALL block: {cypher!r}"
-    )
+    assert tail.startswith(
+        "RETURN"
+    ), f"Query must conclude with RETURN after CALL block: {cypher!r}"
 
     # All graph_id params parameterized
     params = captured_params[0]

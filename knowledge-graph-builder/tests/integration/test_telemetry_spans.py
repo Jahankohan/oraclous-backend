@@ -165,9 +165,9 @@ async def test_chat_search_emits_span():
 
     spans = exporter.get_finished_spans()
     chat_spans = [s for s in spans if s.name == "chat.query"]
-    assert len(chat_spans) == 1, (
-        f"Expected 1 chat.query span, got {[s.name for s in spans]}"
-    )
+    assert (
+        len(chat_spans) == 1
+    ), f"Expected 1 chat.query span, got {[s.name for s in spans]}"
 
     span = chat_spans[0]
     assert span.attributes["graph_id"] == graph_id

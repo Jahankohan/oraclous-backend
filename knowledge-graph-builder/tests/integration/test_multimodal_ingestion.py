@@ -154,9 +154,9 @@ def test_ingest_csv_creates_entity_nodes(graph_ids: list[str]) -> None:
                 gid=graph_id,
             ).single()["n"]
 
-        assert count == len(result["sample_rows"]), (
-            f"Expected {len(result['sample_rows'])} __Entity__ nodes, got {count}"
-        )
+        assert count == len(
+            result["sample_rows"]
+        ), f"Expected {len(result['sample_rows'])} __Entity__ nodes, got {count}"
     finally:
         os.unlink(csv_path)
 

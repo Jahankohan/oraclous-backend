@@ -54,9 +54,9 @@ def _make_async_session(neighbor_rows: list[dict] | None = None) -> MagicMock:
 def test_multi_signal_weight_sum():
     """The four signal weights must sum exactly to 1.0."""
     weights = [EMBEDDING_WEIGHT, NAME_WEIGHT, TYPE_WEIGHT, CONTEXT_WEIGHT]
-    assert abs(sum(weights) - 1.0) < 1e-9, (
-        f"Weights must sum to 1.0, got {sum(weights)}"
-    )
+    assert (
+        abs(sum(weights) - 1.0) < 1e-9
+    ), f"Weights must sum to 1.0, got {sum(weights)}"
 
 
 # ── Test 2 — IBM alias resolution ─────────────────────────────────────────────
@@ -126,9 +126,9 @@ async def test_type_mismatch_prevents_merge():
     session = _make_async_session(neighbor_rows=[])
 
     type_score = EntityResolver._type_score(entity_a, entity_b)
-    assert type_score == 0.0, (
-        f"Expected type_score=0.0 for Organization vs Fruit, got {type_score}"
-    )
+    assert (
+        type_score == 0.0
+    ), f"Expected type_score=0.0 for Organization vs Fruit, got {type_score}"
 
     final_score = await EntityResolver.score(
         entity_a=entity_a,
@@ -138,9 +138,9 @@ async def test_type_mismatch_prevents_merge():
         graph_id_b="graph-b",
     )
 
-    assert final_score < STORE_THRESHOLD, (
-        f"Expected final_score < {STORE_THRESHOLD} due to type mismatch, got {final_score:.3f}"
-    )
+    assert (
+        final_score < STORE_THRESHOLD
+    ), f"Expected final_score < {STORE_THRESHOLD} due to type mismatch, got {final_score:.3f}"
 
 
 # ── Test 4 — Jaro-Winkler partial name match in ambiguous zone ────────────────
@@ -156,9 +156,9 @@ async def test_jaro_winkler_partial_name_ambiguous_zone():
     name_b_norm = _normalize_name("John Smith")
     jw_score = jellyfish.jaro_winkler_similarity(name_a_norm, name_b_norm)
 
-    assert jw_score > 0.75, (
-        f"Expected jaro-winkler > 0.75 for 'J. Smith' vs 'John Smith', got {jw_score:.3f}"
-    )
+    assert (
+        jw_score > 0.75
+    ), f"Expected jaro-winkler > 0.75 for 'J. Smith' vs 'John Smith', got {jw_score:.3f}"
 
     entity_a = {"name": "J. Smith", "type": "Person", "entity_id": "id-a"}
     entity_b = {
@@ -180,9 +180,9 @@ async def test_jaro_winkler_partial_name_ambiguous_zone():
         graph_id_b="graph-b",
     )
 
-    assert AMBIGUOUS_LOWER <= final_score < STORE_THRESHOLD, (
-        f"Expected final_score in [{AMBIGUOUS_LOWER}, {STORE_THRESHOLD}), got {final_score:.3f}"
-    )
+    assert (
+        AMBIGUOUS_LOWER <= final_score < STORE_THRESHOLD
+    ), f"Expected final_score in [{AMBIGUOUS_LOWER}, {STORE_THRESHOLD}), got {final_score:.3f}"
 
 
 # ── Test 5 — Zero neighbors: no ZeroDivisionError ────────────────────────────
@@ -228,9 +228,9 @@ async def test_candidate_threshold_filters_low_similarity():
         FederationService,
     )
 
-    assert _SAME_AS_CANDIDATE_THRESHOLD == 0.60, (
-        f"Expected candidate threshold to be 0.60, got {_SAME_AS_CANDIDATE_THRESHOLD}"
-    )
+    assert (
+        _SAME_AS_CANDIDATE_THRESHOLD == 0.60
+    ), f"Expected candidate threshold to be 0.60, got {_SAME_AS_CANDIDATE_THRESHOLD}"
 
     # Mock the driver so the exact-match path returns None (no exact match)
     mock_result_empty = AsyncMock()
@@ -401,9 +401,9 @@ async def test_llm_disambiguation_yes_path():
         )
 
     assert len(links_created) == 1, "Expected one SAME_AS link to be created"
-    assert links_created[0]["method"] == "llm-disambiguated", (
-        f"Expected method='llm-disambiguated', got {links_created[0]['method']!r}"
-    )
+    assert (
+        links_created[0]["method"] == "llm-disambiguated"
+    ), f"Expected method='llm-disambiguated', got {links_created[0]['method']!r}"
 
 
 # ── Test 8 — LLM disambiguation NO path ──────────────────────────────────────
@@ -598,9 +598,9 @@ async def test_exact_match_fast_path_confidence():
         )
 
     assert len(candidates) == 1, "Expected one candidate from exact-match fast path"
-    assert candidates[0]["method"] == "exact", (
-        f"Expected method='exact', got {candidates[0]['method']!r}"
-    )
-    assert candidates[0]["score"] >= 0.99, (
-        f"Exact-match fast path must produce confidence >= 0.99, got {candidates[0]['score']}"
-    )
+    assert (
+        candidates[0]["method"] == "exact"
+    ), f"Expected method='exact', got {candidates[0]['method']!r}"
+    assert (
+        candidates[0]["score"] >= 0.99
+    ), f"Exact-match fast path must produce confidence >= 0.99, got {candidates[0]['score']}"

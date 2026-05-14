@@ -340,9 +340,9 @@ def test_raw_symbol_carries_file_path_for_tenant_scoping():
     meta = _make_file_meta("app/service.py", "def hello(): pass")
     symbols = parse_file(meta)
     for sym in symbols:
-        assert sym.file_path == "app/service.py", (
-            f"Symbol {sym.name} missing file_path (needed for graph_id scoping)"
-        )
+        assert (
+            sym.file_path == "app/service.py"
+        ), f"Symbol {sym.name} missing file_path (needed for graph_id scoping)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

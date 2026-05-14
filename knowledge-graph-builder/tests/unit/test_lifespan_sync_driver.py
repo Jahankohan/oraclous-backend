@@ -149,12 +149,12 @@ def test_main_py_calls_connect_sync_after_connect():
     call_names = [name for _, name in calls]
 
     assert "connect" in call_names, "lifespan must call neo4j_client.connect()"
-    assert "connect_sync" in call_names, (
-        "lifespan must call neo4j_client.connect_sync() — ORA-218 regression guard"
-    )
+    assert (
+        "connect_sync" in call_names
+    ), "lifespan must call neo4j_client.connect_sync() — ORA-218 regression guard"
 
     connect_idx = call_names.index("connect")
     connect_sync_idx = call_names.index("connect_sync")
-    assert connect_idx < connect_sync_idx, (
-        "connect_sync() must be called after connect()"
-    )
+    assert (
+        connect_idx < connect_sync_idx
+    ), "connect_sync() must be called after connect()"

@@ -40,9 +40,9 @@ from app.services.code_parser_service import (
 
 def test_migration_file_exists_on_disk():
     """The rename migration `.cypher` file must ship in the repo."""
-    assert _RENAME_MIGRATION_PATH.is_file(), (
-        f"rename migration not present at {_RENAME_MIGRATION_PATH}"
-    )
+    assert (
+        _RENAME_MIGRATION_PATH.is_file()
+    ), f"rename migration not present at {_RENAME_MIGRATION_PATH}"
 
 
 def test_migration_parses_to_nonempty_statement_list():
@@ -66,31 +66,29 @@ def test_migration_declares_expected_statements():
         for u in upper
     ), "missing `DROP INDEX code_symbol_search IF EXISTS`"
     # 3. Label promotion — explicit SET …:CodeModule REMOVE …:Module
-    assert any("SET M:CODEMODULE" in u and "REMOVE M:MODULE" in u for u in upper), (
-        "missing `SET m:CodeModule REMOVE m:Module` statement"
-    )
+    assert any(
+        "SET M:CODEMODULE" in u and "REMOVE M:MODULE" in u for u in upper
+    ), "missing `SET m:CodeModule REMOVE m:Module` statement"
     # 4. Re-declare constraint on `:CodeModule`
     assert any(
         u.startswith("CREATE CONSTRAINT CODE_MODULE_UNIQUE")
         and "(M:CODEMODULE)" in u.replace(" ", "")
         and "IF NOT EXISTS" in u
         for u in upper
-    ), (
-        "missing `CREATE CONSTRAINT code_module_unique IF NOT EXISTS FOR (m:CodeModule) …`"
-    )
+    ), "missing `CREATE CONSTRAINT code_module_unique IF NOT EXISTS FOR (m:CodeModule) …`"
     # 5. Re-declare fulltext index referencing `:CodeModule` (not `:Module`)
     fulltext_stmts = [u for u in upper if "FULLTEXT INDEX CODE_SYMBOL_SEARCH" in u]
     assert fulltext_stmts, "missing `CREATE FULLTEXT INDEX code_symbol_search …`"
     for ft in fulltext_stmts:
-        assert "CODEMODULE" in ft, (
-            "fulltext index must reference :CodeModule after rename"
-        )
+        assert (
+            "CODEMODULE" in ft
+        ), "fulltext index must reference :CodeModule after rename"
         # The label list must NOT include bare `:Module` anymore.
         # Tolerate `:CodeModule` matches by checking for `|MODULE|` or
         # trailing `|MODULE` patterns specifically.
-        assert "|MODULE|" not in ft and not ft.rstrip(")]").endswith("|MODULE"), (
-            "fulltext index still references the old `:Module` label"
-        )
+        assert "|MODULE|" not in ft and not ft.rstrip(")]").endswith(
+            "|MODULE"
+        ), "fulltext index still references the old `:Module` label"
 
 
 def test_migration_label_promotion_filters_out_assessment_modules():
@@ -102,9 +100,9 @@ def test_migration_label_promotion_filters_out_assessment_modules():
     promotion_stmts = [
         s for s in stmts if "SET m:CodeModule" in s and "REMOVE m:Module" in s
     ]
-    assert len(promotion_stmts) == 1, (
-        f"expected exactly one promotion statement, got {len(promotion_stmts)}"
-    )
+    assert (
+        len(promotion_stmts) == 1
+    ), f"expected exactly one promotion statement, got {len(promotion_stmts)}"
     promotion = promotion_stmts[0]
     assert "__Platform__" in promotion, (
         "promotion statement must filter on `__Platform__` so it skips "
@@ -126,15 +124,15 @@ def test_migration_is_idempotent_by_construction():
     for stmt in stmts:
         upper = stmt.upper()
         if upper.startswith("DROP CONSTRAINT") or upper.startswith("DROP INDEX"):
-            assert "IF EXISTS" in upper, (
-                f"DROP not idempotent (missing IF EXISTS): {stmt[:80]!r}"
-            )
+            assert (
+                "IF EXISTS" in upper
+            ), f"DROP not idempotent (missing IF EXISTS): {stmt[:80]!r}"
         elif upper.startswith("CREATE CONSTRAINT") or upper.startswith(
             "CREATE FULLTEXT INDEX"
         ):
-            assert "IF NOT EXISTS" in upper, (
-                f"CREATE not idempotent (missing IF NOT EXISTS): {stmt[:80]!r}"
-            )
+            assert (
+                "IF NOT EXISTS" in upper
+            ), f"CREATE not idempotent (missing IF NOT EXISTS): {stmt[:80]!r}"
 
 
 def test_splitter_handles_comments_and_blank_lines():
@@ -183,13 +181,13 @@ class TestRenameMigrationAppliesCleanly:
         async with neo4j_test_driver.session() as session:
             res = await session.run("SHOW CONSTRAINTS YIELD name")
             names = {row["name"] async for row in res}
-        assert "code_module_unique" in names, (
-            f"code_module_unique constraint missing after migration: {sorted(names)}"
-        )
+        assert (
+            "code_module_unique" in names
+        ), f"code_module_unique constraint missing after migration: {sorted(names)}"
         # The old constraint must be gone.
-        assert "module_unique" not in names, (
-            "old `module_unique` constraint still present — rename did not drop it"
-        )
+        assert (
+            "module_unique" not in names
+        ), "old `module_unique` constraint still present — rename did not drop it"
 
 
 @pytest.mark.integration
@@ -278,9 +276,9 @@ class TestRenameDoesNotTouchAssessmentModules:
                 {"gid": self._sentinel_tenant},
             )
             row = await res.single()
-            assert row["c"] == 3, (
-                f"expected 3 :CodeModule rows for {self._sentinel_tenant}, got {row['c']}"
-            )
+            assert (
+                row["c"] == 3
+            ), f"expected 3 :CodeModule rows for {self._sentinel_tenant}, got {row['c']}"
 
             # No code-parser rows still carry the old `:Module` label.
             res = await session.run(
@@ -291,9 +289,9 @@ class TestRenameDoesNotTouchAssessmentModules:
                 {"gid": self._sentinel_tenant},
             )
             row = await res.single()
-            assert row["c"] == 0, (
-                f"expected 0 leftover :Module rows for {self._sentinel_tenant}, got {row['c']}"
-            )
+            assert (
+                row["c"] == 0
+            ), f"expected 0 leftover :Module rows for {self._sentinel_tenant}, got {row['c']}"
 
             # 2. Assessment-substrate modules are unchanged.
             res = await session.run(
@@ -346,9 +344,9 @@ class TestRenameDoesNotTouchAssessmentModules:
                 {"gid": self._sentinel_tenant},
             )
             row = await res.single()
-            assert row["c"] == 1, (
-                f"expected exactly 1 :CodeModule after two ensure runs, got {row['c']}"
-            )
+            assert (
+                row["c"] == 1
+            ), f"expected exactly 1 :CodeModule after two ensure runs, got {row['c']}"
             res = await session.run(
                 "MATCH (m:Module {graph_id: $gid}) RETURN count(m) AS c",
                 {"gid": self._sentinel_tenant},

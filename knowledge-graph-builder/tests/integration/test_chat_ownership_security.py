@@ -161,9 +161,9 @@ class TestTC_SEC_001_CrossTenantChatBlocked:
         assert response.status_code == 403
         # Ensure no graph-specific data is leaked in the response body
         body = response.text
-        assert "SECRET_GRAPH_NAME_B" not in body, (
-            "Graph name leaked in 403 response body"
-        )
+        assert (
+            "SECRET_GRAPH_NAME_B" not in body
+        ), "Graph name leaked in 403 response body"
         assert USER_B_ID not in body, "User B's ID leaked in 403 response body"
 
     @pytest.mark.integration
@@ -239,9 +239,9 @@ class TestTC_SEC_002_CrossTenantStreamBlocked:
         assert response.status_code == 403
         # Response body should not contain SSE event data
         body = response.text
-        assert "data:" not in body, (
-            "SSE data events were emitted before the 403 — potential data leakage"
-        )
+        assert (
+            "data:" not in body
+        ), "SSE data events were emitted before the 403 — potential data leakage"
         assert (
             '"type"' not in body
             or "error" in body.lower()

@@ -132,9 +132,11 @@ async def _async_webhook_core(
                         "agent_id": agent_id,
                         "session_id": result.session_id,
                         "response": result.response,
-                        "provenance": result.provenance.model_dump()
-                        if result.provenance
-                        else None,
+                        "provenance": (
+                            result.provenance.model_dump()
+                            if result.provenance
+                            else None
+                        ),
                         "context_echo": context,
                         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     },

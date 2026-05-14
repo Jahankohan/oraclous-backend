@@ -193,9 +193,9 @@ class Neo4jSchemaManager:
                 sample_count = int(count_records[0]["count"]) if count_records else 0
 
                 # Get indexes for this label (simplified)
-                indexes: list[
-                    str
-                ] = []  # Would need to query SHOW INDEXES for actual indexes
+                indexes: list[str] = (
+                    []
+                )  # Would need to query SHOW INDEXES for actual indexes
 
                 nodes[label] = NodeSchema(
                     label=label,
