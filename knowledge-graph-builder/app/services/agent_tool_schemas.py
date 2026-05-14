@@ -283,6 +283,77 @@ _TOOL_SCHEMAS: dict[str, _ToolSchema] = {
             "required": ["node_label", "at_time"],
         },
     ),
+    # STORY-4d: community discovery + description
+    "find_communities": _ToolSchema(
+        name="find_communities",
+        description=(
+            "Find communities (clusters of related nodes) in the graph "
+            "via vector search over their summaries. Use this to answer "
+            "'what topics does this graph cover' or 'find clusters about "
+            "X'. Each result includes a summary, key entities, a "
+            "representative excerpt, and a similarity score.\n\n"
+            "Omit ``kind`` to search across all community kinds and rank "
+            "by similarity. Pass ``kind='chunk'`` for chunk-level clusters "
+            "(richer per-cluster metadata) or ``kind='entity'`` for "
+            "entity-level Leiden communities. The full list of supported "
+            "kinds is published at GET /communities/kinds."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Natural-language query to match against community summaries."
+                    ),
+                },
+                "kind": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Optional community-kind filter. Omit to search "
+                        "every kind and merge by score."
+                    ),
+                },
+                "top_k": _int_param(
+                    "How many top-scoring communities to return.",
+                    default=5,
+                    minimum=1,
+                    maximum=20,
+                ),
+            },
+            "required": ["query"],
+        },
+    ),
+    "describe_community": _ToolSchema(
+        name="describe_community",
+        description=(
+            "Return metadata for one community: its summary, key "
+            "entities/concepts, a representative excerpt, the member "
+            "count, and up to 5 sample member names so you can cite "
+            "concrete evidence. Use this after ``find_communities`` "
+            "spots a relevant cluster, or when another tool returns a "
+            "community_id you want to investigate.\n\n"
+            "Call ``community_members`` when you need the full member "
+            "list (this tool caps at 5 to keep the response compact)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "community_id": {
+                    "type": "string",
+                    "description": ("Stable id of the community to describe."),
+                },
+                "kind": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Optional kind hint. Omit to let the server "
+                        "auto-detect across registered kinds."
+                    ),
+                },
+            },
+            "required": ["community_id"],
+        },
+    ),
 }
 
 
