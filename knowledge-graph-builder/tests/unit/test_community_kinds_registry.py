@@ -29,6 +29,9 @@ class TestRegistryEntries:
         assert spec.hierarchical is True
         assert spec.member_rel_has_level is True
         assert spec.detector_task_name is not None
+        # STORY-4c — entity uses the existing Celery-detector convention
+        assert spec.embedding_property == "embedding"
+        assert spec.index_name == "community_embeddings_entity"
 
     @pytest.mark.unit
     def test_chunk_kind_is_registered_with_expected_shape(self):
@@ -42,6 +45,18 @@ class TestRegistryEntries:
         assert spec.member_rel_has_level is False
         # Read-only kind today
         assert spec.detector_task_name is None
+        # STORY-4c — chunk uses the summary_* namespace for embeddings
+        assert spec.embedding_property == "summary_embedding"
+        assert spec.index_name == "community_embeddings_chunk"
+
+    @pytest.mark.unit
+    def test_index_names_are_unique_per_kind(self):
+        """Each kind must have a unique vector-index name so the indexes
+        don't collide in Neo4j."""
+        names = [spec.index_name for spec in COMMUNITY_KINDS.values()]
+        assert len(names) == len(set(names)), (
+            f"Index names collide across kinds: {names}"
+        )
 
     @pytest.mark.unit
     def test_registry_keys_match_kind_field(self):

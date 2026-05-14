@@ -81,6 +81,19 @@ class CommunityKindSpec:
     # on POST .../detect when this is None.
     detector_task_name: str | None
 
+    # Property on the community node that holds the summary embedding
+    # (STORY-4c). Entity-Leiden uses ``embedding`` (the Celery detector's
+    # convention, predates STORY-4b); chunk uses ``summary_embedding``
+    # (under the ``summary_*`` namespace alongside ``summary_keywords``).
+    # The vector index over this property is named ``{index_name}``.
+    embedding_property: str
+
+    # Name of the Neo4j vector index over the community node, scoped to
+    # the kind. ``ensure_community_vector_indexes`` creates this index on
+    # startup if it doesn't exist. ``find_communities`` agent tool
+    # (STORY-4d) queries it via ``db.index.vector.queryNodes``.
+    index_name: str
+
 
 # Adding a new community kind: append one entry below. No other change
 # required — endpoint code, analytics queries, agent tools, and the
@@ -97,6 +110,8 @@ COMMUNITY_KINDS: dict[str, CommunityKindSpec] = {
         hierarchical=True,
         member_rel_has_level=True,
         detector_task_name="community_tasks.detect_communities_task",
+        embedding_property="embedding",
+        index_name="community_embeddings_entity",
     ),
     "chunk": CommunityKindSpec(
         kind="chunk",
@@ -113,6 +128,8 @@ COMMUNITY_KINDS: dict[str, CommunityKindSpec] = {
         # is tracked as a follow-up story; until then, only the 59 chunk
         # communities already in the Eurail graph are visible.
         detector_task_name=None,
+        embedding_property="summary_embedding",
+        index_name="community_embeddings_chunk",
     ),
     # Future kinds slot in here without touching endpoint or service code:
     #
