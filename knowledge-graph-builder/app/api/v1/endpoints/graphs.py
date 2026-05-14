@@ -70,6 +70,8 @@ from app.schemas.graph_schemas import (
     RollbackResponse,
     SimilarityBuildRequest,
     SimilarityBuildResponse,
+    StructuredIngestRequest,
+    StructuredIngestResponse,
     TimelineEvent,
     TimelineResponse,
     UpdateTemporalBoundsRequest,
@@ -1431,6 +1433,10 @@ from app.services.analytics_service import GraphAnalyticsService
 from app.services.community_summarizer import CommunitySummarizer
 from app.services.entity_dedup_service import entity_dedup_service
 from app.services.similarity_service import similarity_service
+from app.services.structured_ingest_service import (
+    RelationshipMapping,
+    structured_ingest_service,
+)
 from app.tasks.community_tasks import COMMUNITY_DETECTION_MIN_ENTITIES
 
 
@@ -1796,6 +1802,73 @@ async def deduplicate_entities(
         skipped_bad_names=report.skipped_bad_names,
         elapsed_seconds=report.elapsed_seconds,
         dry_run=report.dry_run,
+    )
+
+
+# ==================== STORY-9: STRUCTURED INGEST ENDPOINT ====================
+
+
+@router.post(
+    "/graphs/{graph_id}/ingest-records",
+    response_model=StructuredIngestResponse,
+    summary="Ingest a list of JSON records directly as graph entities",
+    responses={
+        400: {"description": "Invalid label or relationship mapping"},
+    },
+)
+async def ingest_structured_records(
+    graph_id: UUID,
+    request: StructuredIngestRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Ingest JSON records as graph entities without going through the
+    text → chunk → LLM-extract pipeline.
+
+    Each record's id (named by ``id_field``) is the MERGE key, so
+    re-running the same records is a no-op. Primitive values become
+    properties; nested dicts and lists-of-dicts are JSON-stringified;
+    lists of primitives become Neo4j arrays.
+
+    Optional ``relationships`` mappings turn foreign-key-style fields
+    into typed edges to MERGE'd target entities. The target entities
+    are created on demand and counted under
+    ``related_entities_created``.
+
+    For long-form text content that should be chunked and embedded,
+    use the regular ``POST /graphs/{id}/ingest`` endpoint instead;
+    this endpoint is for structured inputs that already have the
+    schema embedded in their field names.
+    """
+    await _verify_graph_ownership(graph_id, user_id)
+
+    try:
+        report = await structured_ingest_service.ingest_records(
+            graph_id=str(graph_id),
+            records=request.records,
+            label=request.label,
+            id_field=request.id_field,
+            relationships=[
+                RelationshipMapping(
+                    from_field=r.from_field,
+                    to_label=r.to_label,
+                    rel_type=r.rel_type,
+                    to_id_field=r.to_id_field,
+                )
+                for r in request.relationships
+            ],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    return StructuredIngestResponse(
+        label=report.label,
+        records_processed=report.records_processed,
+        entities_created_or_updated=report.entities_created_or_updated,
+        relationships_created=report.relationships_created,
+        related_entities_created=report.related_entities_created,
+        skipped=report.skipped,
+        skip_reasons=report.skip_reasons,
+        elapsed_seconds=report.elapsed_seconds,
     )
 
 
