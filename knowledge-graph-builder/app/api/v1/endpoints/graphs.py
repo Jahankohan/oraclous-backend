@@ -66,6 +66,8 @@ from app.schemas.graph_schemas import (
     RollbackJobResponse,
     RollbackRequest,
     RollbackResponse,
+    SimilarityBuildRequest,
+    SimilarityBuildResponse,
     TimelineEvent,
     TimelineResponse,
     UpdateTemporalBoundsRequest,
@@ -1425,6 +1427,7 @@ from app.schemas.community_kinds import (
 )
 from app.services.analytics_service import GraphAnalyticsService
 from app.services.community_summarizer import CommunitySummarizer
+from app.services.similarity_service import similarity_service
 from app.tasks.community_tasks import COMMUNITY_DETECTION_MIN_ENTITIES
 
 
@@ -1682,6 +1685,68 @@ async def summarize_communities(
         embedded=report.embedded,
         skipped_existing_embeddings=report.skipped_existing_embeddings,
         failed_embeddings=report.failed_embeddings,
+    )
+
+
+# ==================== STORY-7: SIMILARITY ENDPOINT ====================
+
+
+@router.post(
+    "/graphs/{graph_id}/similarity/build",
+    response_model=SimilarityBuildResponse,
+    summary="Build SIMILAR_TO edges between nodes via vector index lookup",
+    responses={
+        400: {"description": "Unknown target"},
+    },
+)
+async def build_similarity(
+    graph_id: UUID,
+    request: SimilarityBuildRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Compute SIMILAR_TO edges between :Chunk pairs and/or :__Entity__
+    pairs whose vector-index cosine similarity is above a threshold.
+
+    Synchronous. For an Eurail-sized graph (~970 chunks, ~2900 entities)
+    expect under 30 seconds. Larger graphs may want Celery wrapping —
+    out of scope for STORY-7.
+
+    Idempotent: re-running without ``force_rebuild`` MERGE-updates each
+    edge's ``score`` and ``updated_at`` but does not duplicate edges.
+    With ``force_rebuild=True`` the prior edges are deleted first.
+    """
+    await _verify_graph_ownership(graph_id, user_id)
+
+    if request.target not in ("chunks", "entities", "all"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown target {request.target!r}. "
+                "Valid: 'chunks', 'entities', or 'all'."
+            ),
+        )
+
+    try:
+        report = await similarity_service.build_similarities(
+            graph_id=str(graph_id),
+            target=request.target,
+            threshold_chunks=request.threshold_chunks,
+            threshold_entities=request.threshold_entities,
+            top_k=request.top_k,
+            force_rebuild=request.force_rebuild,
+            job_id=request.job_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    return SimilarityBuildResponse(
+        target=report.target,
+        chunk_edges_created=report.chunk_edges_created,
+        entity_edges_created=report.entity_edges_created,
+        chunks_processed=report.chunks_processed,
+        entities_processed=report.entities_processed,
+        elapsed_seconds=report.elapsed_seconds,
+        force_rebuild=report.force_rebuild,
     )
 
 
