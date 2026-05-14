@@ -415,3 +415,270 @@ class TestTemporalSlice:
         )
         params = driver.execute_query.call_args[0][1]
         assert params["max_results"] == 25
+
+
+# ── find_communities (STORY-4d) ──────────────────────────────────────────────
+
+
+def _vector_rec(community_id, score, summary, size=10, keywords=None, excerpt=None):
+    """Mock one row from db.index.vector.queryNodes."""
+    return {
+        "community_id": community_id,
+        "summary": summary,
+        "size": size,
+        "keywords": keywords,
+        "excerpt": excerpt,
+        "score": score,
+    }
+
+
+class TestFindCommunities:
+    async def test_blocked_when_not_in_allowlist(self):
+        driver, _ = _make_driver()
+        embedder = MagicMock()
+        embedder.embed_query = MagicMock(return_value=[0.0] * 3072)
+        with pytest.raises(ToolNotPermittedError):
+            await _toolkit(driver, [], embedder=embedder).find_communities(
+                "g1", "query"
+            )
+
+    async def test_searches_all_kinds_by_default(self):
+        """``kind=None`` issues one Cypher call per registered kind."""
+        driver, _ = _make_driver()
+        # Each call returns one match
+        results = [
+            MagicMock(records=[_vector_rec("c-entity", 0.9, "entity sum")]),
+            MagicMock(
+                records=[
+                    _vector_rec(
+                        "cc-chunk", 0.95, "chunk sum", keywords='["x"]', excerpt="e"
+                    )
+                ]
+            ),
+        ]
+        driver.execute_query = AsyncMock(side_effect=results)
+        embedder = MagicMock()
+        embedder.embed_query = MagicMock(return_value=[0.0] * 3072)
+        out = await _toolkit(
+            driver, ["find_communities"], embedder=embedder
+        ).find_communities("g1", "test query")
+
+        # Two calls: one per kind
+        assert driver.execute_query.await_count == 2
+        # Merged by score descending — chunk first (0.95) then entity (0.9)
+        assert len(out) == 2
+        assert out[0].id == "cc-chunk"
+        assert out[1].id == "c-entity"
+
+    async def test_explicit_kind_restricts_to_one_index(self):
+        driver, _ = _make_driver()
+        driver.execute_query = AsyncMock(
+            return_value=MagicMock(records=[_vector_rec("cc-1", 0.8, "s")])
+        )
+        embedder = MagicMock()
+        embedder.embed_query = MagicMock(return_value=[0.0] * 3072)
+        out = await _toolkit(
+            driver, ["find_communities"], embedder=embedder
+        ).find_communities("g1", "q", kind="chunk")
+        # Only one call — the chunk index
+        assert driver.execute_query.await_count == 1
+        cypher = driver.execute_query.call_args[0][0]
+        assert "community_embeddings_chunk" in cypher
+        assert len(out) == 1
+
+    async def test_graph_id_passed_via_params(self):
+        driver, _ = _make_driver()
+        driver.execute_query = AsyncMock(return_value=MagicMock(records=[]))
+        embedder = MagicMock()
+        embedder.embed_query = MagicMock(return_value=[0.0] * 3072)
+        await _toolkit(
+            driver, ["find_communities"], embedder=embedder
+        ).find_communities("my-graph", "q", kind="chunk")
+        params = driver.execute_query.call_args[0][1]
+        assert params["gid"] == "my-graph"
+
+    async def test_keywords_parsed_from_json(self):
+        driver, _ = _make_driver()
+        driver.execute_query = AsyncMock(
+            return_value=MagicMock(
+                records=[
+                    _vector_rec(
+                        "cc-1", 0.9, "s", keywords='["k1","k2","k3"]', excerpt="e"
+                    )
+                ]
+            )
+        )
+        embedder = MagicMock()
+        embedder.embed_query = MagicMock(return_value=[0.0] * 3072)
+        out = await _toolkit(
+            driver, ["find_communities"], embedder=embedder
+        ).find_communities("g", "q", kind="chunk")
+        assert out[0].properties["keywords"] == ["k1", "k2", "k3"]
+
+    async def test_index_failure_does_not_abort_other_kinds(self):
+        """If one kind's vector index doesn't exist, the others still
+        succeed — log + continue rather than crash the tool call."""
+        driver, _ = _make_driver()
+        driver.execute_query = AsyncMock(
+            side_effect=[
+                RuntimeError("entity index missing"),
+                MagicMock(records=[_vector_rec("cc-1", 0.7, "chunk")]),
+            ]
+        )
+        embedder = MagicMock()
+        embedder.embed_query = MagicMock(return_value=[0.0] * 3072)
+        out = await _toolkit(
+            driver, ["find_communities"], embedder=embedder
+        ).find_communities("g", "q")
+        # Entity errored, chunk succeeded
+        assert len(out) == 1
+        assert out[0].id == "cc-1"
+
+    async def test_top_k_caps_merged_result(self):
+        driver, _ = _make_driver()
+        # Return 4 from each kind
+        rec = lambda cid, s: _vector_rec(cid, s, "x")  # noqa: E731
+        driver.execute_query = AsyncMock(
+            side_effect=[
+                MagicMock(records=[rec(f"e{i}", 0.5 + i * 0.01) for i in range(4)]),
+                MagicMock(records=[rec(f"c{i}", 0.6 + i * 0.01) for i in range(4)]),
+            ]
+        )
+        embedder = MagicMock()
+        embedder.embed_query = MagicMock(return_value=[0.0] * 3072)
+        out = await _toolkit(
+            driver, ["find_communities"], embedder=embedder
+        ).find_communities("g", "q", top_k=3)
+        assert len(out) == 3
+
+
+# ── describe_community (STORY-4d) ────────────────────────────────────────────
+
+
+class TestDescribeCommunity:
+    async def test_blocked_when_not_in_allowlist(self):
+        driver, _ = _make_driver()
+        with pytest.raises(ToolNotPermittedError):
+            await _toolkit(driver, []).describe_community("g", "cc-1")
+
+    async def test_probes_registry_when_kind_omitted(self):
+        """No kind hint → entity probed first; if it returns no rows
+        the chunk path is tried."""
+        driver, _ = _make_driver()
+        # First call (entity probe) → no records. Second call (chunk
+        # probe) → one record. Third call (chunk member fetch) → empty.
+        driver.execute_query = AsyncMock(
+            side_effect=[
+                MagicMock(records=[]),
+                MagicMock(
+                    records=[
+                        {
+                            "community_id": "cc-1",
+                            "summary": "Test cluster",
+                            "size": 42,
+                            "keywords": '["x"]',
+                            "excerpt": "ex",
+                        }
+                    ]
+                ),
+                MagicMock(records=[]),
+            ]
+        )
+        out = await _toolkit(driver, ["describe_community"]).describe_community(
+            "g", "cc-1"
+        )
+        assert len(out) == 1
+        assert out[0].id == "cc-1"
+        assert out[0].properties["kind"] == "chunk"
+        assert out[0].properties["keywords"] == ["x"]
+        assert out[0].properties["excerpt"] == "ex"
+        assert out[0].properties["size"] == 42
+
+    async def test_explicit_kind_skips_probe(self):
+        driver, _ = _make_driver()
+        driver.execute_query = AsyncMock(
+            side_effect=[
+                MagicMock(
+                    records=[
+                        {
+                            "community_id": "cc-1",
+                            "summary": "s",
+                            "size": 5,
+                            "keywords": None,
+                            "excerpt": None,
+                        }
+                    ]
+                ),
+                MagicMock(records=[]),
+            ]
+        )
+        await _toolkit(driver, ["describe_community"]).describe_community(
+            "g", "cc-1", kind="chunk"
+        )
+        # Only 2 calls: 1 for the chunk row, 1 for members. No entity probe.
+        assert driver.execute_query.await_count == 2
+
+    async def test_returns_empty_when_no_kind_matches(self):
+        driver, _ = _make_driver()
+        # Both probes return no records
+        driver.execute_query = AsyncMock(
+            side_effect=[MagicMock(records=[]), MagicMock(records=[])]
+        )
+        out = await _toolkit(driver, ["describe_community"]).describe_community(
+            "g", "nonexistent"
+        )
+        assert out == []
+
+    async def test_sample_members_capped_at_5(self):
+        driver, _ = _make_driver()
+        driver.execute_query = AsyncMock(
+            side_effect=[
+                MagicMock(
+                    records=[
+                        {
+                            "community_id": "cc-1",
+                            "summary": "s",
+                            "size": 100,
+                            "keywords": None,
+                            "excerpt": None,
+                        }
+                    ]
+                ),
+                # 5 members returned (the Cypher LIMIT 5 already capped)
+                MagicMock(
+                    records=[
+                        {"member_id": f"m{i}", "member_preview": f"text-{i}"}
+                        for i in range(5)
+                    ]
+                ),
+            ]
+        )
+        out = await _toolkit(driver, ["describe_community"]).describe_community(
+            "g", "cc-1", kind="chunk"
+        )
+        assert len(out[0].properties["sample_members"]) == 5
+
+    async def test_graph_id_passed_via_params(self):
+        driver, _ = _make_driver()
+        driver.execute_query = AsyncMock(
+            side_effect=[
+                MagicMock(
+                    records=[
+                        {
+                            "community_id": "cc-1",
+                            "summary": "s",
+                            "size": 5,
+                            "keywords": None,
+                            "excerpt": None,
+                        }
+                    ]
+                ),
+                MagicMock(records=[]),
+            ]
+        )
+        await _toolkit(driver, ["describe_community"]).describe_community(
+            "my-graph", "cc-1", kind="chunk"
+        )
+        # The first call is the community-row fetch
+        params = driver.execute_query.call_args_list[0][0][1]
+        assert params["gid"] == "my-graph"
