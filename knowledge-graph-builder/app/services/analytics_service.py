@@ -23,8 +23,55 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
+from app.schemas.community_kinds import CommunityKindSpec, get_kind
 
 logger = get_logger(__name__)
+
+
+# Neo4j cannot parameterize labels or relationship types, so the registry's
+# label/rel/property names are interpolated into Cypher via f-strings. This
+# is safe because the values come from ``COMMUNITY_KINDS`` (compile-time
+# constants), never from request input. Callers always resolve a kind via
+# ``get_kind(...)`` which raises ``UnknownCommunityKindError`` for anything
+# off the registry.
+
+
+def _coerce_neo4j_datetime(value: Any) -> Any:
+    """Convert Neo4j DateTime / Date values to ISO-8601 strings.
+
+    Pydantic v2 cannot serialize ``neo4j.time.DateTime`` directly. Rows
+    that the analytics service returns to FastAPI must be flat JSON, so
+    coerce these properties before they reach the response model.
+    """
+    if value is None:
+        return None
+    if hasattr(value, "to_native"):
+        try:
+            return value.to_native().isoformat()
+        except Exception:
+            return str(value)
+    return value
+
+
+def _pick_entity_type(labels: list[str] | None, member_label: str) -> str:
+    """Pick the most domain-meaningful label from a Neo4j node's labels list.
+
+    Skips internal/utility labels — both the generic ``__Entity__`` tag and
+    neo4j_graphrag's `:__KGBuilder__` marker — and the member-label itself
+    (which is already implied by the community kind). Falls back to the
+    member label when no domain label survives the filter.
+    """
+    if not labels:
+        return member_label
+    skip = {"__Entity__", "__KGBuilder__", member_label}
+    for lbl in labels:
+        if lbl in skip:
+            continue
+        # Skip any other "__Foo__" Neo4j-internal-style marker labels.
+        if lbl.startswith("__") and lbl.endswith("__"):
+            continue
+        return lbl
+    return member_label
 
 
 class GraphAnalyticsService:
@@ -105,90 +152,147 @@ class GraphAnalyticsService:
         graph_id: UUID,
         levels: int = 3,
         force_rebuild: bool = False,
+        kind: str = "entity",
     ) -> dict[str, Any]:
         """
         Queue a Celery community detection job and return the task ID.
 
         Args:
             graph_id: Target graph
-            levels: Number of hierarchy levels (1-5)
+            levels: Number of hierarchy levels (1-5). Ignored for flat
+                community kinds (Louvain over chunks does not have levels).
             force_rebuild: Run even if status == 'active'
+            kind: Which community kind to detect. Must be in the registry
+                AND have ``detector_task_name`` set. Read-only kinds (e.g.,
+                chunk-Louvain today) raise ``NotImplementedError`` which
+                the API endpoint maps to HTTP 405.
 
         Returns:
-            Dict with job_id, graph_id, status
+            Dict with job_id, graph_id, kind, status
         """
-        from app.tasks.community_tasks import detect_communities_task
+        spec = get_kind(kind)
+        if spec.detector_task_name is None:
+            raise NotImplementedError(
+                f"Community detection for kind {kind!r} is not implemented "
+                f"yet. Existing {spec.community_label} nodes remain readable "
+                "via the list/detail endpoints."
+            )
 
-        level_indices = list(range(levels))
-        resolutions = [0.5, 1.0, 2.0, 3.0, 4.0][:levels]
+        # The registry's detector_task_name is "module.task" form. We only
+        # have one detector wired today (entity-Leiden); rather than build
+        # a generic dotted-path importer that adds attack surface for the
+        # ~one extra task we expect, just resolve the known case here. If
+        # a second wired kind ever lands, swap this for an importlib lookup.
+        if spec.detector_task_name == "community_tasks.detect_communities_task":
+            from app.tasks.community_tasks import detect_communities_task
 
-        result = detect_communities_task.apply_async(
-            args=[str(graph_id)],
-            kwargs={
-                "levels": level_indices,
-                "resolutions": resolutions,
-                "force_rebuild": force_rebuild,
-            },
-            countdown=0,
+            level_indices = list(range(levels))
+            resolutions = [0.5, 1.0, 2.0, 3.0, 4.0][:levels]
+            result = detect_communities_task.apply_async(
+                args=[str(graph_id)],
+                kwargs={
+                    "levels": level_indices,
+                    "resolutions": resolutions,
+                    "force_rebuild": force_rebuild,
+                },
+                countdown=0,
+            )
+            return {
+                "job_id": result.id,
+                "graph_id": str(graph_id),
+                "kind": kind,
+                "status": "queued",
+            }
+
+        # Defensive — should never hit; means a registry entry declared a
+        # detector name we don't know how to dispatch.
+        raise NotImplementedError(
+            f"Detector {spec.detector_task_name!r} for kind {kind!r} is "
+            "registered but no dispatch path is wired in detect_communities_async."
         )
 
-        return {
-            "job_id": result.id,
-            "graph_id": str(graph_id),
-            "status": "queued",
-        }
+    async def get_community_status(
+        self,
+        graph_id: UUID,
+        kind: str = "entity",
+    ) -> dict[str, Any]:
+        """Return current community detection status for a graph.
 
-    async def get_community_status(self, graph_id: UUID) -> dict[str, Any]:
-        """Return current community detection status for a graph."""
-        # Count communities per level
-        level_query = """
-        MATCH (c:__Community__ {graph_id: $graph_id})
-        RETURN c.level AS level, count(c) AS cnt, c.status AS status
-        ORDER BY level
+        For hierarchical kinds (entity-Leiden), reports per-level counts and
+        consults the Postgres ``knowledge_graphs`` row for the
+        detected-at / staleness metadata which only the entity-Leiden
+        detector currently writes.
+
+        For flat kinds (chunk-Louvain), reports a single bucket under
+        level "0", returns ``status="read_only"`` to signal there's no
+        detector to drive a status machine, and skips the Postgres lookup.
         """
-        level_results = await neo4j_client.execute_query(
-            level_query, {"graph_id": str(graph_id)}
-        )
+        spec = get_kind(kind)
+        community_label = spec.community_label
 
-        communities_by_level: dict[str, int] = {}
-        detected_status = "not_detected"
-        for r in level_results:
-            communities_by_level[str(r["level"])] = r["cnt"]
-            if r["status"] == "active":
-                detected_status = "active"
-            elif r["status"] == "rebuilding":
-                detected_status = "rebuilding"
-            elif detected_status == "not_detected" and r["status"] == "stale":
-                detected_status = "stale"
+        if spec.hierarchical:
+            level_query = (
+                f"MATCH (c:`{community_label}` {{graph_id: $graph_id}}) "
+                "RETURN c.level AS level, count(c) AS cnt, c.status AS status "
+                "ORDER BY level"
+            )
+            level_results = await neo4j_client.execute_query(
+                level_query, {"graph_id": str(graph_id)}
+            )
 
-        # Entity counts from Postgres
+            communities_by_level: dict[str, int] = {}
+            detected_status = "not_detected"
+            for r in level_results:
+                communities_by_level[str(r["level"])] = r["cnt"]
+                if r["status"] == "active":
+                    detected_status = "active"
+                elif r["status"] == "rebuilding":
+                    detected_status = "rebuilding"
+                elif detected_status == "not_detected" and r["status"] == "stale":
+                    detected_status = "stale"
+        else:
+            # Flat kinds have no per-level breakdown; report a single bucket.
+            count_query = (
+                f"MATCH (c:`{community_label}` {{graph_id: $graph_id}}) "
+                "RETURN count(c) AS cnt"
+            )
+            count_results = await neo4j_client.execute_query(
+                count_query, {"graph_id": str(graph_id)}
+            )
+            cnt = count_results[0]["cnt"] if count_results else 0
+            communities_by_level = {"0": cnt}
+            detected_status = "read_only" if cnt > 0 else "not_detected"
+
+        # Postgres detection-history columns only track entity-Leiden today;
+        # skip the lookup for flat read-only kinds.
         entity_count_at_detection = 0
         last_detected_at = None
         current_entity_count = 0
-        try:
-            pg_engine = create_engine(
-                settings.POSTGRES_URL.replace("+asyncpg", ""),
-                poolclass=NullPool,
-            )
-            with pg_engine.connect() as conn:
-                row = conn.execute(
-                    text(
-                        "SELECT communities_detected_at, entity_count_at_detection, "
-                        "entity_delta_since_detection, communities_status "
-                        "FROM knowledge_graphs WHERE id = :gid"
-                    ),
-                    {"gid": str(graph_id)},
-                ).fetchone()
-                if row:
-                    last_detected_at = row[0]
-                    entity_count_at_detection = row[1] or 0
-                    delta = row[2] or 0
-                    current_entity_count = entity_count_at_detection + delta
-                    if row[3]:
-                        detected_status = row[3]
-            pg_engine.dispose()
-        except Exception as exc:
-            logger.warning(f"Postgres community status lookup failed: {exc}")
+        if spec.hierarchical and spec.detector_task_name is not None:
+            try:
+                pg_engine = create_engine(
+                    settings.POSTGRES_URL.replace("+asyncpg", ""),
+                    poolclass=NullPool,
+                )
+                with pg_engine.connect() as conn:
+                    row = conn.execute(
+                        text(
+                            "SELECT communities_detected_at, entity_count_at_detection, "
+                            "entity_delta_since_detection, communities_status "
+                            "FROM knowledge_graphs WHERE id = :gid"
+                        ),
+                        {"gid": str(graph_id)},
+                    ).fetchone()
+                    if row:
+                        last_detected_at = row[0]
+                        entity_count_at_detection = row[1] or 0
+                        delta = row[2] or 0
+                        current_entity_count = entity_count_at_detection + delta
+                        if row[3]:
+                            detected_status = row[3]
+                pg_engine.dispose()
+            except Exception as exc:
+                logger.warning(f"Postgres community status lookup failed: {exc}")
 
         staleness_pct = 0.0
         if entity_count_at_detection > 0:
@@ -197,6 +301,7 @@ class GraphAnalyticsService:
             ) / entity_count_at_detection
 
         return {
+            "kind": kind,
             "status": detected_status,
             "last_detected_at": (
                 last_detected_at.isoformat() if last_detected_at else None
@@ -215,31 +320,86 @@ class GraphAnalyticsService:
         limit: int = 50,
         offset: int = 0,
         include_summary: bool = True,
+        kind: str = "entity",
     ) -> dict[str, Any]:
-        """Return paginated list of communities for a graph."""
-        where_clauses = ["c.graph_id = $graph_id", "c.entity_count >= $min_size"]
+        """Return paginated list of communities for a graph.
+
+        The shape of each list entry is uniform across kinds: ``community_id``,
+        ``kind``, ``level``, ``entity_count`` (renamed at the result level to
+        match the existing API even when the underlying property is ``size``
+        for chunk-Louvain), ``weight``, ``parent_id``, ``status``, and
+        optionally ``summary``. Fields not present on a given kind come back
+        as ``None``.
+
+        ``level`` filter is only applied when the kind is hierarchical.
+        """
+        spec = get_kind(kind)
+        community_label = spec.community_label
+        id_prop = spec.id_property
+        size_prop = spec.size_property
+
+        where_clauses = [
+            "c.graph_id = $graph_id",
+            f"c.{size_prop} >= $min_size",
+        ]
         params: dict[str, Any] = {
             "graph_id": str(graph_id),
             "min_size": min_size,
             "limit": limit,
             "offset": offset,
         }
-        if level is not None:
+        if level is not None and spec.hierarchical:
             where_clauses.append("c.level = $level")
             params["level"] = level
 
         where = " AND ".join(where_clauses)
-        fields = "c.id AS community_id, c.level AS level, c.entity_count AS entity_count, c.weight AS weight, c.parent_id AS parent_id, c.status AS status"
-        if include_summary:
-            fields += ", c.summary AS summary"
 
-        count_query = f"MATCH (c:__Community__) WHERE {where} RETURN count(c) AS total"
-        list_query = f"""
-        MATCH (c:__Community__) WHERE {where}
-        RETURN {fields}
-        ORDER BY c.level, c.entity_count DESC
-        SKIP $offset LIMIT $limit
-        """
+        # Build the RETURN list. For hierarchical kinds we pull the
+        # additional metadata properties (level/weight/parent_id/status);
+        # for flat kinds those come back as NULL.
+        return_fields = [
+            f"c.{id_prop} AS community_id",
+            f"c.{size_prop} AS entity_count",
+        ]
+        if spec.hierarchical:
+            return_fields.extend(
+                [
+                    "c.level AS level",
+                    "c.weight AS weight",
+                    "c.parent_id AS parent_id",
+                    "c.status AS status",
+                ]
+            )
+        else:
+            return_fields.extend(
+                [
+                    "NULL AS level",
+                    "NULL AS weight",
+                    "NULL AS parent_id",
+                    "NULL AS status",
+                ]
+            )
+        if include_summary:
+            return_fields.append("c.summary AS summary")
+        fields = ", ".join(return_fields)
+
+        # ORDER BY: hierarchical kinds sort by level first (so callers can
+        # walk the hierarchy); flat kinds sort by size descending only.
+        order_by = (
+            f"c.level, c.{size_prop} DESC"
+            if spec.hierarchical
+            else f"c.{size_prop} DESC"
+        )
+
+        count_query = (
+            f"MATCH (c:`{community_label}`) WHERE {where} RETURN count(c) AS total"
+        )
+        list_query = (
+            f"MATCH (c:`{community_label}`) WHERE {where} "
+            f"RETURN {fields} "
+            f"ORDER BY {order_by} "
+            "SKIP $offset LIMIT $limit"
+        )
 
         total_results = await neo4j_client.execute_query(count_query, params)
         total = total_results[0]["total"] if total_results else 0
@@ -250,6 +410,7 @@ class GraphAnalyticsService:
         for r in list_results:
             item = {
                 "community_id": r["community_id"],
+                "kind": kind,
                 "level": r["level"],
                 "entity_count": r["entity_count"],
                 "weight": r["weight"],
@@ -260,92 +421,213 @@ class GraphAnalyticsService:
                 item["summary"] = r.get("summary")
             communities.append(item)
 
-        # Detection status
-        status_info = await self.get_community_status(graph_id)
+        status_info = await self.get_community_status(graph_id, kind=kind)
 
         return {
             "communities": communities,
+            "kind": kind,
             "total": total,
             "detection_status": status_info["status"],
             "last_detected_at": status_info["last_detected_at"],
         }
 
     async def get_community_detail(
-        self, graph_id: UUID, community_id: str
+        self,
+        graph_id: UUID,
+        community_id: str,
+        kind: str | None = None,
     ) -> dict[str, Any] | None:
-        """Return full community detail with members and parent/child links."""
-        community_query = """
-        MATCH (c:__Community__ {id: $community_id, graph_id: $graph_id})
-        RETURN c.id AS community_id, c.level AS level, c.summary AS summary,
-               c.entity_count AS entity_count, c.algorithm AS algorithm,
-               c.parent_id AS parent_id, c.created_at AS created_at,
-               c.last_updated AS last_updated, c.status AS status
+        """Return full community detail with members and parent/child links.
+
+        When ``kind`` is ``None`` (legacy callers), each registered kind is
+        probed in turn — entity-Leiden first so the common case stays a
+        single round trip. The first kind whose ``community_label`` and
+        ``id_property`` match the given ``community_id`` wins.
         """
-        result = await neo4j_client.execute_query(
-            community_query,
-            {
-                "community_id": community_id,
-                "graph_id": str(graph_id),
-            },
-        )
-        if not result:
+        candidate_specs: list[CommunityKindSpec]
+        if kind is None:
+            from app.schemas.community_kinds import all_kinds
+
+            candidate_specs = all_kinds()
+        else:
+            candidate_specs = [get_kind(kind)]
+
+        spec: CommunityKindSpec | None = None
+        community_row: dict[str, Any] | None = None
+        for candidate in candidate_specs:
+            row = await self._fetch_community_row(
+                graph_id=graph_id,
+                community_id=community_id,
+                spec=candidate,
+            )
+            if row is not None:
+                spec = candidate
+                community_row = row
+                break
+
+        if spec is None or community_row is None:
             return None
 
-        r = result[0]
-
-        # Members
-        members_query = """
-        MATCH (e:__Entity__)-[:IN_COMMUNITY {graph_id: $graph_id, level: $level}]->(c:__Community__ {id: $cid, graph_id: $graph_id})
-        RETURN e.id AS entity_id, e.name AS entity_name, labels(e) AS entity_labels
-        LIMIT 100
-        """
-        members_result = await neo4j_client.execute_query(
-            members_query,
-            {
-                "graph_id": str(graph_id),
-                "level": r["level"],
-                "cid": community_id,
-            },
+        members = await self._fetch_community_members(
+            graph_id=graph_id,
+            community_id=community_id,
+            spec=spec,
+            level=community_row.get("level"),
         )
-        members = [
+
+        parent_community = None
+        child_communities: list[dict[str, Any]] = []
+        if spec.hierarchical:
+            parent_community = await self._fetch_parent_community(
+                graph_id=graph_id,
+                parent_id=community_row.get("parent_id"),
+                spec=spec,
+            )
+            child_communities = await self._fetch_child_communities(
+                graph_id=graph_id,
+                community_id=community_id,
+                spec=spec,
+            )
+
+        return {
+            "community_id": community_row["community_id"],
+            "kind": spec.kind,
+            "level": community_row.get("level"),
+            "summary": community_row.get("summary"),
+            "entity_count": community_row.get("entity_count"),
+            "algorithm": community_row.get("algorithm"),
+            "status": community_row.get("status"),
+            "parent_community": parent_community,
+            "child_communities": child_communities,
+            "members": members,
+            "created_at": _coerce_neo4j_datetime(community_row.get("created_at")),
+            "last_updated": _coerce_neo4j_datetime(community_row.get("last_updated")),
+        }
+
+    async def _fetch_community_row(
+        self,
+        graph_id: UUID,
+        community_id: str,
+        spec: CommunityKindSpec,
+    ) -> dict[str, Any] | None:
+        """Pull the community node for one kind. Returns None if absent."""
+        # Build RETURN list. Fields that don't exist on the kind come back
+        # as NULL so the caller can treat the result shape uniformly.
+        if spec.hierarchical:
+            extra_fields = (
+                "c.level AS level, c.algorithm AS algorithm, "
+                "c.parent_id AS parent_id, c.status AS status, "
+                "c.last_updated AS last_updated"
+            )
+        else:
+            # Flat kinds may not have these — return NULLs to keep callers simple.
+            extra_fields = (
+                "NULL AS level, NULL AS algorithm, NULL AS parent_id, "
+                "NULL AS status, c.updated_at AS last_updated"
+            )
+
+        query = (
+            f"MATCH (c:`{spec.community_label}` "
+            f"{{`{spec.id_property}`: $community_id, graph_id: $graph_id}}) "
+            f"RETURN c.`{spec.id_property}` AS community_id, "
+            f"c.summary AS summary, "
+            f"c.`{spec.size_property}` AS entity_count, "
+            f"c.created_at AS created_at, "
+            f"{extra_fields}"
+        )
+        rows = await neo4j_client.execute_query(
+            query,
+            {"community_id": community_id, "graph_id": str(graph_id)},
+        )
+        return rows[0] if rows else None
+
+    async def _fetch_community_members(
+        self,
+        graph_id: UUID,
+        community_id: str,
+        spec: CommunityKindSpec,
+        level: int | None,
+    ) -> list[dict[str, Any]]:
+        """Pull up to 100 members of one community."""
+        # Member-rel filter: hierarchical kinds (Leiden) tag the rel with
+        # {graph_id, level} so we can isolate one level; flat kinds (Louvain)
+        # have no rel properties and we just walk the edge.
+        if spec.member_rel_has_level and level is not None:
+            rel_filter = (
+                f"[:`{spec.member_rel}` {{graph_id: $graph_id, level: $level}}]"
+            )
+            params: dict[str, Any] = {
+                "graph_id": str(graph_id),
+                "level": level,
+                "cid": community_id,
+            }
+        else:
+            rel_filter = f"[:`{spec.member_rel}`]"
+            params = {"graph_id": str(graph_id), "cid": community_id}
+
+        members_query = (
+            f"MATCH (m:`{spec.member_label}` {{graph_id: $graph_id}})"
+            f"-{rel_filter}->"
+            f"(c:`{spec.community_label}` "
+            f"{{`{spec.id_property}`: $cid, graph_id: $graph_id}}) "
+            "RETURN coalesce(m.id, elementId(m)) AS entity_id, "
+            "coalesce(m.name, m.text, '') AS entity_name, "
+            "labels(m) AS entity_labels "
+            "LIMIT 100"
+        )
+        members_result = await neo4j_client.execute_query(members_query, params)
+        return [
             {
                 "entity_id": m["entity_id"],
                 "entity_name": m["entity_name"],
-                "entity_type": next(
-                    (lbl for lbl in (m["entity_labels"] or []) if lbl != "__Entity__"),
-                    "Entity",
-                ),
+                "entity_type": _pick_entity_type(m["entity_labels"], spec.member_label),
             }
             for m in members_result
         ]
 
-        # Parent community
-        parent_community = None
-        if r.get("parent_id"):
-            parent_result = await neo4j_client.execute_query(
-                "MATCH (p:__Community__ {id: $pid, graph_id: $gid}) RETURN p.id AS community_id, p.summary AS summary",
-                {"pid": r["parent_id"], "gid": str(graph_id)},
-            )
-            if parent_result:
-                parent_community = {
-                    "community_id": parent_result[0]["community_id"],
-                    "summary": parent_result[0]["summary"],
-                }
-
-        # Child communities
-        child_query = """
-        MATCH (child:__Community__ {graph_id: $graph_id})-[:PARENT_COMMUNITY]->(parent:__Community__ {id: $cid, graph_id: $graph_id})
-        RETURN child.id AS community_id, child.summary AS summary, child.entity_count AS entity_count
-        LIMIT 20
-        """
-        child_results = await neo4j_client.execute_query(
-            child_query,
-            {
-                "graph_id": str(graph_id),
-                "cid": community_id,
-            },
+    async def _fetch_parent_community(
+        self,
+        graph_id: UUID,
+        parent_id: str | None,
+        spec: CommunityKindSpec,
+    ) -> dict[str, Any] | None:
+        if not parent_id:
+            return None
+        query = (
+            f"MATCH (p:`{spec.community_label}` "
+            f"{{`{spec.id_property}`: $pid, graph_id: $gid}}) "
+            f"RETURN p.`{spec.id_property}` AS community_id, p.summary AS summary"
         )
-        child_communities = [
+        result = await neo4j_client.execute_query(
+            query, {"pid": parent_id, "gid": str(graph_id)}
+        )
+        if not result:
+            return None
+        return {
+            "community_id": result[0]["community_id"],
+            "summary": result[0]["summary"],
+        }
+
+    async def _fetch_child_communities(
+        self,
+        graph_id: UUID,
+        community_id: str,
+        spec: CommunityKindSpec,
+    ) -> list[dict[str, Any]]:
+        query = (
+            f"MATCH (child:`{spec.community_label}` {{graph_id: $graph_id}})"
+            "-[:PARENT_COMMUNITY]->"
+            f"(parent:`{spec.community_label}` "
+            f"{{`{spec.id_property}`: $cid, graph_id: $graph_id}}) "
+            f"RETURN child.`{spec.id_property}` AS community_id, "
+            "child.summary AS summary, "
+            f"child.`{spec.size_property}` AS entity_count "
+            "LIMIT 20"
+        )
+        child_results = await neo4j_client.execute_query(
+            query, {"graph_id": str(graph_id), "cid": community_id}
+        )
+        return [
             {
                 "community_id": c["community_id"],
                 "summary": c["summary"],
@@ -353,20 +635,6 @@ class GraphAnalyticsService:
             }
             for c in child_results
         ]
-
-        return {
-            "community_id": r["community_id"],
-            "level": r["level"],
-            "summary": r["summary"],
-            "entity_count": r["entity_count"],
-            "algorithm": r["algorithm"],
-            "status": r["status"],
-            "parent_community": parent_community,
-            "child_communities": child_communities,
-            "members": members,
-            "created_at": r["created_at"],
-            "last_updated": r["last_updated"],
-        }
 
     async def get_simple_community_context(
         self, entities: list[dict[str, Any]], graph_id: UUID
@@ -432,7 +700,10 @@ class GraphAnalyticsService:
         1. Fetches __Entity__ nodes and relationships for the graph from Neo4j
         2. Builds an igraph graph in-process (no GDS dependency)
         3. Runs leidenalg.find_partition at 5 resolutions (0.25, 0.5, 1.0, 2.0, 4.0)
-        4. Writes __Community__ nodes with MEMBER_OF and PARENT_OF edges to Neo4j
+        4. Writes __Community__ nodes with IN_COMMUNITY and PARENT_COMMUNITY
+           edges to Neo4j (same edge names the Celery detector and all
+           readers use — see ``community_tasks.py`` and the
+           ``CommunityKindSpec`` registry).
 
         Args:
             graph_id: UUID of the specific graph to analyze
@@ -528,7 +799,10 @@ class GraphAnalyticsService:
                 "membership": partition.membership,  # list: vertex_index -> community_id
             }
 
-        # Step 5 — Write __Community__ nodes and MEMBER_OF / PARENT_OF edges
+        # Step 5 — Write __Community__ nodes and IN_COMMUNITY / PARENT_COMMUNITY
+        # edges. These names match the Celery production detector
+        # (community_tasks.py) and every reader path; the registry's
+        # ``CommunityKindSpec.member_rel`` is also ``"IN_COMMUNITY"``.
         total_communities = 0
         total_relationships = 0
 
@@ -568,14 +842,16 @@ class GraphAnalyticsService:
                 )
                 total_communities += 1
 
-                # Link entity members via MEMBER_OF
+                # Link entity members via IN_COMMUNITY (matches the
+                # Celery detector + every reader; carries graph_id+level
+                # on the relationship so per-level queries can filter).
                 for entity_id in member_entity_ids:
                     await neo4j_client.execute_query(
                         """
                         MATCH (e:__Entity__ {graph_id: $graph_id})
                         WHERE e.id = $entity_id OR elementId(e) = $entity_id
                         MATCH (c:__Community__ {id: $community_id, graph_id: $graph_id})
-                        MERGE (e)-[:MEMBER_OF {graph_id: $graph_id, level: $level}]->(c)
+                        MERGE (e)-[:IN_COMMUNITY {graph_id: $graph_id, level: $level}]->(c)
                         """,
                         {
                             "graph_id": graph_id_str,
@@ -586,7 +862,9 @@ class GraphAnalyticsService:
                     )
                     total_relationships += 1
 
-                # Link to parent community (level - 1) via PARENT_OF
+                # Link to parent community (level - 1) via PARENT_COMMUNITY,
+                # direction child->parent — matches community_tasks.py
+                # _upsert_communities and the analytics readers.
                 if level > 0:
                     first_idx = next(
                         (
@@ -607,7 +885,7 @@ class GraphAnalyticsService:
                             """
                             MATCH (child:__Community__ {id: $child_id, graph_id: $graph_id})
                             MATCH (parent:__Community__ {id: $parent_id, graph_id: $graph_id})
-                            MERGE (parent)-[:PARENT_OF {graph_id: $graph_id}]->(child)
+                            MERGE (child)-[:PARENT_COMMUNITY {graph_id: $graph_id}]->(parent)
                             """,
                             {
                                 "child_id": community_node_id,
