@@ -214,6 +214,12 @@ celery_app = Celery(
     "knowledge_graph_builder",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
+    include=[
+        "app.tasks.community_tasks",
+        "app.tasks.federation_tasks",
+        "app.tasks.ontology_tasks",
+        "app.tasks.webhook_tasks",
+    ],
 )
 
 celery_app.conf.update(

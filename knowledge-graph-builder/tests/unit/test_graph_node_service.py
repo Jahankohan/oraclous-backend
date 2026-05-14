@@ -508,15 +508,15 @@ class TestUpdateGraph:
         query: str = call_args[0][0] if call_args[0] else ""
         params: dict = call_args[0][1] if len(call_args[0]) > 1 else call_args[1]
 
-        assert 'namespace: "__system__"' in query, (
-            "Shadow node MERGE missing from query when federatable is updated"
-        )
-        assert "MERGE" in query, (
-            "MERGE must be used for shadow node (not OPTIONAL MATCH) to create if absent"
-        )
-        assert "shadow.federatable" in query, (
-            "SET shadow.federatable missing from query when federatable is updated"
-        )
+        assert (
+            'namespace: "__system__"' in query
+        ), "Shadow node MERGE missing from query when federatable is updated"
+        assert (
+            "MERGE" in query
+        ), "MERGE must be used for shadow node (not OPTIONAL MATCH) to create if absent"
+        assert (
+            "shadow.federatable" in query
+        ), "SET shadow.federatable missing from query when federatable is updated"
         assert params.get("federatable") is True
         assert params.get("graph_id") == "g-1"
 
@@ -537,12 +537,12 @@ class TestUpdateGraph:
         query: str = call_args[0][0] if call_args[0] else ""
         params: dict = call_args[0][1] if len(call_args[0]) > 1 else call_args[1]
 
-        assert "MERGE" in query, (
-            "Shadow node must use MERGE so it is created when absent"
-        )
-        assert "OPTIONAL MATCH" not in query, (
-            "OPTIONAL MATCH must not be used for shadow node"
-        )
+        assert (
+            "MERGE" in query
+        ), "Shadow node must use MERGE so it is created when absent"
+        assert (
+            "OPTIONAL MATCH" not in query
+        ), "OPTIONAL MATCH must not be used for shadow node"
         assert 'namespace: "__system__"' in query
         assert params.get("graph_id") == "g-new"
         assert params.get("federatable") is True
@@ -566,9 +566,9 @@ class TestUpdateGraph:
 
         assert "shadow.federatable" in query, "Must SET shadow.federatable specifically"
         # Ensure we're not doing a destructive SET shadow = {...} that wipes all properties
-        assert "SET shadow = " not in query, (
-            "Must not overwrite all shadow node properties"
-        )
+        assert (
+            "SET shadow = " not in query
+        ), "Must not overwrite all shadow node properties"
         assert params.get("federatable") is False
 
     @pytest.mark.unit
@@ -585,9 +585,9 @@ class TestUpdateGraph:
         call_args = mock_session.run.call_args
         query: str = call_args[0][0] if call_args[0] else ""
 
-        assert "shadow" not in query, (
-            "Shadow node must not appear in query when federatable is not being updated"
-        )
+        assert (
+            "shadow" not in query
+        ), "Shadow node must not appear in query when federatable is not being updated"
 
 
 # ---------------------------------------------------------------------------
@@ -729,9 +729,9 @@ class TestMigrateRelationshipProperties:
         session = driver.session.return_value.__enter__.return_value
         for call in session.run.call_args_list:
             params = call[0][1] if len(call[0]) > 1 else call[1].get("parameters", {})
-            assert params.get("graph_id") == "target-graph", (
-                f"graph_id not passed in query: {call}"
-            )
+            assert (
+                params.get("graph_id") == "target-graph"
+            ), f"graph_id not passed in query: {call}"
 
     @pytest.mark.unit
     def test_wraps_neo4j_error(self):
@@ -779,9 +779,9 @@ class TestTemporalIndexStatements:
     def test_standalone_indexes_use_if_not_exists(self):
         """All index statements must be idempotent (IF NOT EXISTS)."""
         for stmt in GraphNodeService._TEMPORAL_INDEX_STATEMENTS:
-            assert "IF NOT EXISTS" in stmt, (
-                f"Index statement missing IF NOT EXISTS (not idempotent): {stmt!r}"
-            )
+            assert (
+                "IF NOT EXISTS" in stmt
+            ), f"Index statement missing IF NOT EXISTS (not idempotent): {stmt!r}"
 
     @pytest.mark.unit
     def test_ensure_temporal_indexes_calls_session_run_for_each_statement(self):

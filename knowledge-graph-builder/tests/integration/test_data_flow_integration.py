@@ -318,9 +318,12 @@ def test_flows_to_edges_have_graph_id_property(neo4j_driver_fixture, ingested_gr
             f"Edge graph_id mismatch: expected {_GRAPH_ID_A}, "
             f"got {rec['edge_graph_id']}"
         )
-        assert rec["via"] in ("assignment", "return", "argument", "parameter"), (
-            f"Unexpected FLOWS_TO via value: {rec['via']}"
-        )
+        assert rec["via"] in (
+            "assignment",
+            "return",
+            "argument",
+            "parameter",
+        ), f"Unexpected FLOWS_TO via value: {rec['via']}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -347,14 +350,14 @@ def test_api_data_flow_query_returns_path(ingested_graph_a):
         },
         timeout=15,
     )
-    assert resp.status_code == 200, (
-        f"Expected 200 from data_flow query, got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 200
+    ), f"Expected 200 from data_flow query, got {resp.status_code}: {resp.text}"
     body = resp.json()
     assert body["query_type"] == "data_flow"
-    assert body["total"] >= 1, (
-        f"Expected at least 1 flow path for handle_request, got {body['total']}"
-    )
+    assert (
+        body["total"] >= 1
+    ), f"Expected at least 1 flow path for handle_request, got {body['total']}"
     # Each result must have the expected shape
     for result in body["results"]:
         assert "path_nodes" in result, f"Missing 'path_nodes' in: {result}"
@@ -376,9 +379,9 @@ def test_api_data_flow_query_missing_source_symbol_returns_400():
         },
         timeout=10,
     )
-    assert resp.status_code == 400, (
-        f"Expected 400 for missing source_symbol, got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 400
+    ), f"Expected 400 for missing source_symbol, got {resp.status_code}: {resp.text}"
     detail = resp.json().get("detail", "")
     assert "source_symbol" in detail.lower()
 
@@ -404,14 +407,14 @@ def test_taint_property_on_first_param(neo4j_driver_fixture, ingested_graph_a):
         )
         records = result.data()
 
-    assert len(records) >= 1, (
-        f"Expected at least one node with taint='user_input' in graph {_GRAPH_ID_A}"
-    )
+    assert (
+        len(records) >= 1
+    ), f"Expected at least one node with taint='user_input' in graph {_GRAPH_ID_A}"
     tainted_qnames = [r["qname"] for r in records]
     # The req parameter of handle_request should be tainted
-    assert any("req" in (qn or "") for qn in tainted_qnames), (
-        f"Expected 'req' param to be taint-marked, found: {tainted_qnames}"
-    )
+    assert any(
+        "req" in (qn or "") for qn in tainted_qnames
+    ), f"Expected 'req' param to be taint-marked, found: {tainted_qnames}"
 
 
 @pytest.mark.integration
@@ -432,9 +435,9 @@ def test_non_taint_function_has_no_taint_marks(neo4j_driver_fixture, ingested_gr
         record = result.single()
         cnt = record["cnt"] if record else 0
 
-    assert cnt == 0, (
-        f"compute_sum params must not be tainted, but found {cnt} tainted node(s)"
-    )
+    assert (
+        cnt == 0
+    ), f"compute_sum params must not be tainted, but found {cnt} tainted node(s)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -525,9 +528,10 @@ def test_cross_tenant_isolation_api_data_flow(ingested_graph_a):
         )
     else:
         # 403 or 404 also satisfies isolation requirement
-        assert resp.status_code in (403, 404), (
-            f"Unexpected status for cross-tenant query: {resp.status_code}"
-        )
+        assert resp.status_code in (
+            403,
+            404,
+        ), f"Unexpected status for cross-tenant query: {resp.status_code}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

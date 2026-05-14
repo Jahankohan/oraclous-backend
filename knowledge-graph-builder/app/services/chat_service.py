@@ -315,7 +315,16 @@ class ChatService:
             return
 
         if self.retriever:
-            self.rag = GraphRAG(retriever=self.retriever, llm=self.llm)
+            from neo4j_graphrag.generation.prompts import RagTemplate as _RagTemplate
+
+            self.rag = GraphRAG(
+                retriever=self.retriever,
+                llm=self.llm,
+                prompt_template=_RagTemplate(
+                    template=STRICT_GROUNDING_PROMPT,
+                    expected_inputs=["context", "query_text"],
+                ),
+            )
             logger.info(f"GraphRAG initialized successfully for graph {self.graph_id}")
         else:
             raise RuntimeError("Failed to initialize retriever and GraphRAG")
@@ -602,7 +611,6 @@ class ChatService:
                 retriever_config=effective_retriever_config,
                 return_context=True,
                 examples=examples,
-                prompt_template=STRICT_GROUNDING_PROMPT,
             )
 
             # Collect and sort retriever items by relevance score (desc).
@@ -644,7 +652,6 @@ class ChatService:
                                 retriever_config=effective_retriever_config,
                                 return_context=True,
                                 examples=examples,
-                                prompt_template=STRICT_GROUNDING_PROMPT,
                             )
                             if raw_result.retriever_result:
                                 retriever_items = list(
@@ -652,8 +659,9 @@ class ChatService:
                                     or []
                                 )
                                 retriever_items.sort(
-                                    key=lambda item: getattr(item, "score", None)
-                                    or 0.0,
+                                    key=lambda item: (
+                                        getattr(item, "score", None) or 0.0
+                                    ),
                                     reverse=True,
                                 )
 
@@ -1043,7 +1051,6 @@ LIMIT 20
                 query_text=query_text,
                 retriever_config=retriever_config or {"top_k": 5},
                 return_context=True,
-                prompt_template=STRICT_GROUNDING_PROMPT,
             )
 
             retriever_items = []

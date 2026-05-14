@@ -80,8 +80,8 @@ class TestCreateProjectConfig:
 class TestListOrgConfigs:
     async def test_returns_only_active_configs(self):
         rec1 = MagicMock()
-        rec1.__getitem__ = (
-            lambda self, k: {"config_id": "c1", "scope": "org"} if k == "c" else None
+        rec1.__getitem__ = lambda self, k: (
+            {"config_id": "c1", "scope": "org"} if k == "c" else None
         )
         driver = MagicMock()
         result = MagicMock()
@@ -89,7 +89,7 @@ class TestListOrgConfigs:
         driver.execute_query = AsyncMock(return_value=result)
 
         svc = LLMConfigService(driver)
-        configs = await svc.list_org_configs("org1")
+        await svc.list_org_configs("org1")
         query, params = driver.execute_query.call_args.args
         assert "deactivated_at IS NULL" in query
         assert params["org_id"] == "org1"

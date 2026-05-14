@@ -120,9 +120,9 @@ def test_first_query_cache_miss(graph_id, auth_headers):
     must return cache_hit: False because the cache is empty.
     """
     body, _ = _post_chat(graph_id, "What is the main topic?", auth_headers)
-    assert body.get("cache_hit") is False, (
-        f"First query must be a cache miss; got cache_hit={body.get('cache_hit')}"
-    )
+    assert (
+        body.get("cache_hit") is False
+    ), f"First query must be a cache miss; got cache_hit={body.get('cache_hit')}"
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +145,9 @@ def test_second_query_cache_hit_and_fast(graph_id, auth_headers):
     # Second call must hit the cache
     body, elapsed = _post_chat(graph_id, query, auth_headers)
 
-    assert body.get("cache_hit") is True, (
-        f"Second identical query must be a cache hit; got cache_hit={body.get('cache_hit')}"
-    )
+    assert (
+        body.get("cache_hit") is True
+    ), f"Second identical query must be a cache hit; got cache_hit={body.get('cache_hit')}"
     assert elapsed < 1.0, f"Cache hit response time must be <1s; got {elapsed:.3f}s"
 
 
@@ -168,9 +168,9 @@ def test_cache_invalidated_after_ingest(graph_id, auth_headers):
     # Warm the cache
     _post_chat(graph_id, query, auth_headers)
     body_hit, _ = _post_chat(graph_id, query, auth_headers)
-    assert body_hit.get("cache_hit") is True, (
-        "Pre-condition: second query must be a cache hit"
-    )
+    assert (
+        body_hit.get("cache_hit") is True
+    ), "Pre-condition: second query must be a cache hit"
 
     # Ingest a new document — must trigger cache invalidation
     _post_ingest(
@@ -184,9 +184,9 @@ def test_cache_invalidated_after_ingest(graph_id, auth_headers):
 
     # Third query must be a cache miss (fresh result after invalidation)
     body_miss, _ = _post_chat(graph_id, query, auth_headers)
-    assert body_miss.get("cache_hit") is False, (
-        f"After ingest, cache must be invalidated; got cache_hit={body_miss.get('cache_hit')}"
-    )
+    assert (
+        body_miss.get("cache_hit") is False
+    ), f"After ingest, cache must be invalidated; got cache_hit={body_miss.get('cache_hit')}"
 
 
 # ---------------------------------------------------------------------------
@@ -213,15 +213,15 @@ def test_cross_tenant_cache_isolation(auth_headers):
         # Warm graph-A's cache
         _post_chat(graph_id_a, query, auth_headers)
         body_a_hit, _ = _post_chat(graph_id_a, query, auth_headers)
-        assert body_a_hit.get("cache_hit") is True, (
-            "Pre-condition: graph-A second query must be a cache hit"
-        )
+        assert (
+            body_a_hit.get("cache_hit") is True
+        ), "Pre-condition: graph-A second query must be a cache hit"
 
         # Query graph-B with the same text — must be a cache miss (different tenant)
         body_b, _ = _post_chat(graph_id_b, query, auth_headers)
-        assert body_b.get("cache_hit") is False, (
-            f"Graph-B must not see graph-A's cache; got cache_hit={body_b.get('cache_hit')}"
-        )
+        assert (
+            body_b.get("cache_hit") is False
+        ), f"Graph-B must not see graph-A's cache; got cache_hit={body_b.get('cache_hit')}"
 
     finally:
         # Cleanup both graphs
@@ -251,9 +251,9 @@ def test_cache_hit_returns_same_answer(graph_id, auth_headers):
 
     assert body_second.get("cache_hit") is True
     # The answer content must be identical
-    assert body_first.get("answer") == body_second.get("answer"), (
-        "Cached answer must be identical to original answer"
-    )
+    assert body_first.get("answer") == body_second.get(
+        "answer"
+    ), "Cached answer must be identical to original answer"
 
 
 # ---------------------------------------------------------------------------

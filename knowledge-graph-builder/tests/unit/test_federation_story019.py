@@ -119,20 +119,20 @@ async def test_store_same_as_links_stamps_both_graph_ids():
     source = inspect.getsource(FederationService._store_same_as_links)
 
     # The Cypher must SET both graph ID columns on the SAME_AS relationship.
-    assert "source_graph_id" in source, (
-        "_store_same_as_links Cypher must SET source_graph_id on SAME_AS"
-    )
-    assert "target_graph_id" in source, (
-        "_store_same_as_links Cypher must SET target_graph_id on SAME_AS"
-    )
+    assert (
+        "source_graph_id" in source
+    ), "_store_same_as_links Cypher must SET source_graph_id on SAME_AS"
+    assert (
+        "target_graph_id" in source
+    ), "_store_same_as_links Cypher must SET target_graph_id on SAME_AS"
 
     # The Cypher SET clause must reference pair.source_graph_id / pair.target_graph_id
-    assert "pair.source_graph_id" in source or "s.source_graph_id" in source, (
-        "source_graph_id must be SET from the pair parameter"
-    )
-    assert "pair.target_graph_id" in source or "s.target_graph_id" in source, (
-        "target_graph_id must be SET from the pair parameter"
-    )
+    assert (
+        "pair.source_graph_id" in source or "s.source_graph_id" in source
+    ), "source_graph_id must be SET from the pair parameter"
+    assert (
+        "pair.target_graph_id" in source or "s.target_graph_id" in source
+    ), "target_graph_id must be SET from the pair parameter"
 
     # Verify the actual call propagates graph IDs through to Neo4j
     driver, mock_session = _make_async_driver([])
@@ -145,7 +145,9 @@ async def test_store_same_as_links_stamps_both_graph_ids():
     mock_session.execute_write.assert_called_once()
 
     # Verify the pair parameter dict includes both graph IDs
-    write_fn = mock_session.execute_write.call_args[0][0]
+    _write_fn = mock_session.execute_write.call_args[0][
+        0
+    ]  # noqa: F841  (kept for source inspection in debug)
     # Reconstruct: the fn is a closure over the pair_params list. Inspect source to
     # confirm both keys are in the params list built inside _store_same_as_links.
     assert "source_graph_id" in source
@@ -320,9 +322,9 @@ async def test_candidates_server_side_threshold_filters_low_scores():
     # Only the 0.62 and 0.91 pairs must appear
     assert len(data) == 2, f"Expected 2 results (>= 0.60), got {len(data)}: {data}"
     scores = {round(item["score"], 2) for item in data}
-    assert 0.45 not in scores, (
-        "Score 0.45 (below threshold) must not appear in response"
-    )
+    assert (
+        0.45 not in scores
+    ), "Score 0.45 (below threshold) must not appear in response"
     assert all(s >= 0.60 for s in scores), f"All scores must be >= 0.60; got {scores}"
 
 
@@ -367,9 +369,9 @@ async def test_candidates_auth_returns_403_when_graph_inaccessible():
             headers={"Authorization": "Bearer tok"},
         )
 
-    assert response.status_code == 403, (
-        f"Expected 403 when graph is inaccessible, got {response.status_code}"
-    )
+    assert (
+        response.status_code == 403
+    ), f"Expected 403 when graph is inaccessible, got {response.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -386,9 +388,9 @@ def test_resolve_request_default_threshold_is_0_85():
     from app.schemas.federation_schemas import FederationResolveRequest
 
     req = FederationResolveRequest(target_graph_id="graph-Y")
-    assert req.confidence_threshold == 0.85, (
-        f"Default confidence_threshold must be 0.85, got {req.confidence_threshold}"
-    )
+    assert (
+        req.confidence_threshold == 0.85
+    ), f"Default confidence_threshold must be 0.85, got {req.confidence_threshold}"
 
 
 def test_resolve_request_threshold_0_30_clamped_to_0_60():
@@ -399,9 +401,9 @@ def test_resolve_request_threshold_0_30_clamped_to_0_60():
     from app.schemas.federation_schemas import FederationResolveRequest
 
     req = FederationResolveRequest(target_graph_id="graph-Y", confidence_threshold=0.30)
-    assert req.confidence_threshold == 0.60, (
-        f"threshold 0.30 must be clamped to 0.60, got {req.confidence_threshold}"
-    )
+    assert (
+        req.confidence_threshold == 0.60
+    ), f"threshold 0.30 must be clamped to 0.60, got {req.confidence_threshold}"
 
 
 def test_resolve_request_threshold_1_5_clamped_to_1_0():
@@ -412,9 +414,9 @@ def test_resolve_request_threshold_1_5_clamped_to_1_0():
     from app.schemas.federation_schemas import FederationResolveRequest
 
     req = FederationResolveRequest(target_graph_id="graph-Y", confidence_threshold=1.5)
-    assert req.confidence_threshold == 1.0, (
-        f"threshold 1.5 must be clamped to 1.0, got {req.confidence_threshold}"
-    )
+    assert (
+        req.confidence_threshold == 1.0
+    ), f"threshold 1.5 must be clamped to 1.0, got {req.confidence_threshold}"
 
 
 def test_resolve_request_threshold_0_75_unchanged():
@@ -425,9 +427,9 @@ def test_resolve_request_threshold_0_75_unchanged():
     from app.schemas.federation_schemas import FederationResolveRequest
 
     req = FederationResolveRequest(target_graph_id="graph-Y", confidence_threshold=0.75)
-    assert req.confidence_threshold == 0.75, (
-        f"threshold 0.75 must not be changed, got {req.confidence_threshold}"
-    )
+    assert (
+        req.confidence_threshold == 0.75
+    ), f"threshold 0.75 must not be changed, got {req.confidence_threshold}"
 
 
 # ---------------------------------------------------------------------------
@@ -485,9 +487,9 @@ async def test_resolve_endpoint_happy_path():
             headers={"Authorization": "Bearer tok"},
         )
 
-    assert response.status_code == 200, (
-        f"Expected 200 on happy path, got {response.status_code}: {response.text}"
-    )
+    assert (
+        response.status_code == 200
+    ), f"Expected 200 on happy path, got {response.status_code}: {response.text}"
     data = response.json()
     assert data.get("task_id") == "abc-123", f"Expected task_id='abc-123', got: {data}"
     assert data.get("status") == "queued", f"Expected status='queued', got: {data}"
@@ -541,9 +543,9 @@ async def test_resolve_endpoint_no_write_access_returns_403():
             headers={"Authorization": "Bearer tok"},
         )
 
-    assert response.status_code == 403, (
-        f"Expected 403 when write access denied, got {response.status_code}"
-    )
+    assert (
+        response.status_code == 403
+    ), f"Expected 403 when write access denied, got {response.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -587,9 +589,9 @@ async def test_resolve_endpoint_no_read_access_returns_403():
             headers={"Authorization": "Bearer tok"},
         )
 
-    assert response.status_code == 403, (
-        f"Expected 403 when read access denied, got {response.status_code}"
-    )
+    assert (
+        response.status_code == 403
+    ), f"Expected 403 when read access denied, got {response.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -636,12 +638,12 @@ async def test_celery_task_result_has_correct_keys():
 
     assert isinstance(result, dict), f"Expected dict result, got {type(result)}"
     assert "created_links" in result, f"Missing 'created_links' key in result: {result}"
-    assert "ambiguous_count" in result, (
-        f"Missing 'ambiguous_count' key in result: {result}"
-    )
-    assert "rejected_count" in result, (
-        f"Missing 'rejected_count' key in result: {result}"
-    )
+    assert (
+        "ambiguous_count" in result
+    ), f"Missing 'ambiguous_count' key in result: {result}"
+    assert (
+        "rejected_count" in result
+    ), f"Missing 'rejected_count' key in result: {result}"
 
 
 # ---------------------------------------------------------------------------
@@ -693,9 +695,9 @@ async def test_federate_query_endpoint_still_registered():
             headers={"Authorization": "Bearer tok"},
         )
 
-    assert response.status_code == 200, (
-        f"POST /federate/query must still work; got {response.status_code}: {response.text}"
-    )
+    assert (
+        response.status_code == 200
+    ), f"POST /federate/query must still work; got {response.status_code}: {response.text}"
     data = response.json()
     assert data["status"] == "ok"
 
@@ -748,8 +750,8 @@ async def test_federate_vector_search_endpoint_still_registered():
             headers={"Authorization": "Bearer tok"},
         )
 
-    assert response.status_code == 200, (
-        f"POST /federate/vector-search must still work; got {response.status_code}: {response.text}"
-    )
+    assert (
+        response.status_code == 200
+    ), f"POST /federate/vector-search must still work; got {response.status_code}: {response.text}"
     data = response.json()
     assert data["status"] == "ok"

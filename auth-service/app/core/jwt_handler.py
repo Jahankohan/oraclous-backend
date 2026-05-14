@@ -30,7 +30,7 @@ def _is_email(value: str) -> bool:
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
+    to_encode = {k: v for k, v in data.items() if v is not None}
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
@@ -38,15 +38,16 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
             minutes=int(settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         )
     # sub MUST be user_id (UUID), email stored as separate claim
-    to_encode.update(
-        {
-            "exp": expire,
-            "type": "access",
-            "sub": data.get("sub"),  # caller must set sub=str(user_id)
-            "email": data.get("email"),
-            "is_superuser": data.get("is_superuser"),
-        }
-    )
+    claims = {
+        "exp": expire,
+        "type": "access",
+        "sub": data.get("sub"),  # caller must set sub=str(user_id)
+        "email": data.get("email"),
+        "is_superuser": data.get("is_superuser"),
+    }
+    if data.get("home_graph_id"):
+        claims["home_graph_id"] = data["home_graph_id"]
+    to_encode.update(claims)
     encoded_jwt = jwt.encode(
         to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM
     )
@@ -54,7 +55,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 
 
 def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
+    to_encode = {k: v for k, v in data.items() if v is not None}
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
@@ -62,15 +63,16 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
             days=int(settings.REFRESH_TOKEN_EXPIRE_DAYS)
         )
     # sub MUST be user_id (UUID), email stored as separate claim
-    to_encode.update(
-        {
-            "exp": expire,
-            "type": "refresh",
-            "sub": data.get("sub"),  # caller must set sub=str(user_id)
-            "email": data.get("email"),
-            "is_superuser": data.get("is_superuser"),
-        }
-    )
+    claims = {
+        "exp": expire,
+        "type": "refresh",
+        "sub": data.get("sub"),  # caller must set sub=str(user_id)
+        "email": data.get("email"),
+        "is_superuser": data.get("is_superuser"),
+    }
+    if data.get("home_graph_id"):
+        claims["home_graph_id"] = data["home_graph_id"]
+    to_encode.update(claims)
     encoded_jwt = jwt.encode(
         to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM
     )

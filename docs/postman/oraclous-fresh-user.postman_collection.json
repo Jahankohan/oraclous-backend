@@ -1,0 +1,659 @@
+{
+  "info": {
+    "name": "Oraclous \u2014 Fresh User",
+    "description": "End-to-end flow for a fresh user: register \u2192 bootstrap workspace \u2192 run an assessment. Tokens and IDs auto-save between requests via test scripts. Set the two `*_base_url` variables once for your environment (defaults are local docker compose) and the rest fills itself in.\n\n**Order of operations** (top to bottom):\n1. Auth \u2192 Register OR Login (auto-saves `access_token` and `refresh_token`)\n2. Onboarding \u2192 Bootstrap (auto-saves new `access_token` carrying `home_graph_id`, plus `graph_id`)\n3. Assessments \u2192 Create Run (auto-saves `run_id`)\n4. Anything else.\n\nIf you signed in via Google OAuth on the frontend, paste your existing `access_token` into the collection variable and skip the Register/Login step \u2014 Bootstrap works the same either way.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "auth_base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "kgb_base_url",
+      "value": "http://localhost:8003",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "r.jahankohan@gmail.com",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "changeme",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refresh_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "graph_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "run_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "01 \u2014 Auth",
+      "item": [
+        {
+          "name": "Register (email + password)",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{auth_base_url}}/register/",
+              "host": [
+                "{{auth_base_url}}"
+              ],
+              "path": [
+                "register",
+                ""
+              ]
+            },
+            "description": "Creates a new user and returns access + refresh tokens. The returned access_token has NO workspace pointer yet \u2014 call Onboarding \u2192 Bootstrap next.\n\nRate limited to 5/minute. Returns 409 if the email is already registered (just call Login instead)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('access_token', json.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', json.refresh_token);",
+                  "  console.log('Saved access_token + refresh_token. NOTE: this token does NOT yet carry home_graph_id \u2014 call Bootstrap next.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login (email + password)",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{auth_base_url}}/login/",
+              "host": [
+                "{{auth_base_url}}"
+              ],
+              "path": [
+                "login",
+                ""
+              ]
+            },
+            "description": "Logs in an existing user. The returned access_token will carry home_graph_id IF you've already been through Bootstrap before. If not, call Bootstrap after this.\n\nRate limited to 10/minute."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('access_token', json.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', json.refresh_token);",
+                  "  console.log('Saved access_token + refresh_token.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh access token",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+            },
+            "url": {
+              "raw": "{{auth_base_url}}/refresh/",
+              "host": [
+                "{{auth_base_url}}"
+              ],
+              "path": [
+                "refresh",
+                ""
+              ]
+            },
+            "description": "Exchange your refresh_token for a fresh access_token. Use this when the access_token has expired (24h default) but the refresh_token is still valid (7 days default)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('access_token', json.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', json.refresh_token);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Who am I (/me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{auth_base_url}}/me",
+              "host": [
+                "{{auth_base_url}}"
+              ],
+              "path": [
+                "me"
+              ]
+            },
+            "description": "Returns the current user's profile, including `home_graph_id` if Bootstrap has run. Use this to check whether you still need to Bootstrap or not."
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 \u2014 Onboarding",
+      "item": [
+        {
+          "name": "Bootstrap workspace (one-call setup)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspace_name\": \"Reza Workspace\"\n}"
+            },
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/onboarding/bootstrap",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "onboarding",
+                "bootstrap"
+              ]
+            },
+            "description": "Three things in one call:\n1. Creates a default workspace (graph) for you.\n2. Binds it as your default \u2014 your user record now points at it.\n3. Mints a FRESH access_token + refresh_token that name the workspace.\n\n**Idempotent.** If you call it twice, the second call returns the existing workspace and `already_initialized: true`. No second workspace gets created.\n\n**Replaces your current tokens.** The test script overwrites `access_token` and `refresh_token` collection variables. Throw away the old ones \u2014 they don't name the workspace and the assessment endpoints will reject them."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('access_token', json.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', json.refresh_token);",
+                  "  pm.collectionVariables.set('graph_id', json.graph_id);",
+                  "  console.log('Bootstrap complete.');",
+                  "  console.log('  graph_id:           ' + json.graph_id);",
+                  "  console.log('  workspace_name:     ' + json.workspace_name);",
+                  "  console.log('  already_initialized:' + json.already_initialized);",
+                  "  console.log('  NEW access_token saved (carries home_graph_id).');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 \u2014 Workspace",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/health",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health"
+              ]
+            },
+            "description": "Sanity check: KGB + Neo4j + Postgres + Redis all healthy. No auth required."
+          }
+        },
+        {
+          "name": "List my workspaces",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/graphs",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "graphs"
+              ]
+            },
+            "description": "Returns all graphs the current user has access to via ReBAC. After Bootstrap, you'll see the one workspace it created."
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 \u2014 Assessments \u2014 Writes",
+      "item": [
+        {
+          "name": "Create assessment run",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template_slug\": \"assess-v1\",\n  \"subject\": {\n    \"slug\": \"eurail\",\n    \"name\": \"Eurail B.V.\",\n    \"vertical_slug\": \"rail-cooperative\",\n    \"domains\": [\"eurail.com\"],\n    \"aliases\": [\"Eurail\"]\n  },\n  \"cli_flags\": {\n    \"vertical\": \"rail-cooperative\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs"
+              ]
+            },
+            "description": "Bootstraps a new assessment run and its 23 ModuleRun rows in `planned` state. This is what /assess calls under the hood when you type the slash command in Claude Code.\n\n`graph_id` is taken from your access_token's `home_graph_id` claim \u2014 you do not (and cannot) pass it in the body."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('run_id', json.run_id);",
+                  "  console.log('Saved run_id: ' + json.run_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Finalize run",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"finished\"\n}"
+            },
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs/{{run_id}}:finalize",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs",
+                "{{run_id}}:finalize"
+              ]
+            },
+            "description": "Closes the run. Server-side citation-coverage gate decides whether status flips to `finished` or `failed`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 \u2014 Assessments \u2014 Reads",
+      "item": [
+        {
+          "name": "List runs (paginated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs?limit=20",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "subject_slug",
+                  "value": "eurail",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "running",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Paginated list of all your runs. Pass `cursor` from the previous response to page forward."
+          }
+        },
+        {
+          "name": "Get run summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs/{{run_id}}",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs",
+                "{{run_id}}"
+              ]
+            },
+            "description": "Run overview: counts of findings / conflicts / questions / deliverables, plus wave-by-wave module-run status. Useful to poll while a run is mid-flight."
+          }
+        },
+        {
+          "name": "List module runs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs/{{run_id}}/module-runs",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs",
+                "{{run_id}}",
+                "module-runs"
+              ]
+            },
+            "description": "All 23 modules with their current status (`planned`, `running`, `finished`, `failed`) plus per-module evidence count."
+          }
+        },
+        {
+          "name": "Query findings (filterable)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs/{{run_id}}/findings?limit=50",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs",
+                "{{run_id}}",
+                "findings"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "module_slug",
+                  "value": "competitor-analysis",
+                  "disabled": true
+                },
+                {
+                  "key": "label",
+                  "value": "DIRECT",
+                  "disabled": true
+                },
+                {
+                  "key": "min_confidence",
+                  "value": "0.7",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "All findings recorded for the run, filterable by module, label (DIRECT/INDIRECT/INFERRED), confidence, etc."
+          }
+        },
+        {
+          "name": "List conflicts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs/{{run_id}}/conflicts",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs",
+                "{{run_id}}",
+                "conflicts"
+              ]
+            },
+            "description": "Findings that contradict each other, with synthesis notes."
+          }
+        },
+        {
+          "name": "List unresolved questions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs/{{run_id}}/unresolved-questions",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs",
+                "{{run_id}}",
+                "unresolved-questions"
+              ]
+            },
+            "description": "Open gaps surfaced by research subagents. Drives the Wave 2 gap-research fan-out."
+          }
+        },
+        {
+          "name": "List deliverables",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs/{{run_id}}/deliverables",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs",
+                "{{run_id}}",
+                "deliverables"
+              ]
+            },
+            "description": "All persisted deliverables (module summaries + the 5 final docs). Use the `Get deliverable content` request to fetch the bytes."
+          }
+        },
+        {
+          "name": "Get deliverable content",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs/{{run_id}}/deliverables/REPLACE_WITH_DELIVERABLE_ID/content",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs",
+                "{{run_id}}",
+                "deliverables",
+                "REPLACE_WITH_DELIVERABLE_ID",
+                "content"
+              ]
+            },
+            "description": "Stream the actual bytes of a deliverable from the Blob CAS. Replace REPLACE_WITH_DELIVERABLE_ID with one returned by the List deliverables request."
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 \u2014 Live tail (SSE)",
+      "item": [
+        {
+          "name": "Tail run events (SSE)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{kgb_base_url}}/api/v1/assessments/runs/{{run_id}}/events",
+              "host": [
+                "{{kgb_base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "runs",
+                "{{run_id}}",
+                "events"
+              ]
+            },
+            "description": "Server-Sent Events stream of run progress: module status changes, finding-count increments, heartbeats. Postman shows the stream in the response panel \u2014 leave it open to watch live.\n\nIf nothing appears for >30s, that's expected \u2014 heartbeats are throttled to every 30s when there's no other activity."
+          }
+        }
+      ]
+    }
+  ]
+}

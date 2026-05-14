@@ -455,9 +455,9 @@ class TestPointInTimeFilter:
         rel_vt = None  # still valid
 
         passes = (rel_vf is None or rel_vf <= pit) and (rel_vt is None or rel_vt > pit)
-        assert not passes, (
-            "Relationship starting 2023 should NOT pass point_in_time 2021"
-        )
+        assert (
+            not passes
+        ), "Relationship starting 2023 should NOT pass point_in_time 2021"
 
 
 # ===========================================================================
@@ -637,15 +637,15 @@ class TestEndToEndTemporalMultihop:
         cypher_sent = call_args[0][0]  # first positional arg = Cypher string
         params_sent = call_args[0][1]  # second positional = params dict
 
-        assert "valid_from" in cypher_sent, (
-            "Temporal filter must inject valid_from check into multihop Cypher"
-        )
-        assert "valid_to" in cypher_sent, (
-            "Temporal filter must inject valid_to check into multihop Cypher"
-        )
-        assert "tf_pit" in params_sent, (
-            "Temporal filter must pass $tf_pit as a Cypher parameter"
-        )
+        assert (
+            "valid_from" in cypher_sent
+        ), "Temporal filter must inject valid_from check into multihop Cypher"
+        assert (
+            "valid_to" in cypher_sent
+        ), "Temporal filter must inject valid_to check into multihop Cypher"
+        assert (
+            "tf_pit" in params_sent
+        ), "Temporal filter must pass $tf_pit as a Cypher parameter"
         assert params_sent["tf_pit"] == pit.isoformat()
 
     async def test_multihop_without_filter_uses_base_cypher(self):
@@ -702,9 +702,9 @@ class TestEndToEndTemporalMultihop:
             )
 
         assert _passes(pit_included), "Alice-Acme 2019-2023 must be visible at 2021-06"
-        assert not _passes(pit_excluded), (
-            "Alice-Acme 2019-2023 must NOT be visible at 2024-06"
-        )
+        assert not _passes(
+            pit_excluded
+        ), "Alice-Acme 2019-2023 must NOT be visible at 2024-06"
 
 
 # ===========================================================================
@@ -773,8 +773,8 @@ class TestBitemporalMigrationTask:
     @pytest.fixture(autouse=True)
     def _check_presence(self):
         try:
-            from app.services.background_jobs import (
-                run_bitemporal_migration_v1,  # noqa: F401
+            from app.services.background_jobs import (  # noqa: F401
+                run_bitemporal_migration_v1,
             )
         except (ImportError, AttributeError):
             pytest.skip(
@@ -860,6 +860,6 @@ class TestStreamingEndpointTemporalGap:
         from app.api.v1.endpoints import chat as chat_module
 
         source = inspect.getsource(chat_module.chat_with_graph)
-        assert "temporal_filter=body.temporal_filter" in source, (
-            "Non-streaming endpoint must forward temporal_filter to search()"
-        )
+        assert (
+            "temporal_filter=body.temporal_filter" in source
+        ), "Non-streaming endpoint must forward temporal_filter to search()"

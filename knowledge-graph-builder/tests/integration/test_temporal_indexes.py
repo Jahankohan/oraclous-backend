@@ -156,9 +156,9 @@ class TestIndexPresence:
         )
         assert len(result) == 1
         state = result[0].get("state", "").upper()
-        assert state == "ONLINE", (
-            f"rel_temporal_idx state is {state!r}, expected ONLINE"
-        )
+        assert (
+            state == "ONLINE"
+        ), f"rel_temporal_idx state is {state!r}, expected ONLINE"
 
     async def test_rel_temporal_idx_covers_correct_properties(self, neo4j):
         result = await neo4j.execute_query(
@@ -167,9 +167,9 @@ class TestIndexPresence:
         assert len(result) == 1
         props = result[0].get("properties", [])
         assert "graph_id" in props, f"graph_id missing from index properties: {props}"
-        assert "valid_from" in props, (
-            f"valid_from missing from index properties: {props}"
-        )
+        assert (
+            "valid_from" in props
+        ), f"valid_from missing from index properties: {props}"
         assert "valid_to" in props, f"valid_to missing from index properties: {props}"
 
     async def test_all_versioning_indexes_still_present(self, neo4j):
@@ -207,9 +207,9 @@ class TestIndexPresence:
         )
         for row in result:
             state = row.get("state", "").upper()
-            assert state == "ONLINE", (
-                f"Index {row['name']!r} is {state!r}, expected ONLINE"
-            )
+            assert (
+                state == "ONLINE"
+            ), f"Index {row['name']!r} is {state!r}, expected ONLINE"
 
 
 # ---------------------------------------------------------------------------
@@ -263,9 +263,9 @@ class TestIndexSeek:
         )
         # NULL check on an indexed property should use the index
         plan_str = str(plan)
-        assert "DirectedRelationshipScan" not in plan_str, (
-            "current_only query using full scan — valid_to IS NULL not leveraging index"
-        )
+        assert (
+            "DirectedRelationshipScan" not in plan_str
+        ), "current_only query using full scan — valid_to IS NULL not leveraging index"
 
 
 # ---------------------------------------------------------------------------
@@ -470,9 +470,9 @@ class TestMultiTenantTemporalIsolation:
                 {"graph_id": graph_a},
             )
             ids = {row["gid"] for row in result}
-            assert ids == {graph_a}, (
-                f"current_only filter leaked cross-tenant data: {ids}"
-            )
+            assert ids == {
+                graph_a
+            }, f"current_only filter leaked cross-tenant data: {ids}"
 
         finally:
             for gid in (graph_a, graph_b):

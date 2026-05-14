@@ -345,7 +345,6 @@ def test_transform_table_entity_nodes_written():
     # One session.run() call for the single batch
     assert mock_session.run.call_count == 1
     call_args = mock_session.run.call_args
-    cypher = call_args[0][0]
     params = call_args[0][1]
 
     # graph_id present in params

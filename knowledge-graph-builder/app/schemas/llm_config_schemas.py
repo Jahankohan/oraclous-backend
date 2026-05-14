@@ -1,12 +1,12 @@
 """Pydantic schemas for LLMConfig nodes (STORY-021)."""
 
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
-class LLMProvider(str, Enum):
+class LLMProvider(StrEnum):
     anthropic = "anthropic"
     openrouter = "openrouter"
     azure_openai = "azure-openai"

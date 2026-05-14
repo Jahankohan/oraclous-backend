@@ -43,9 +43,11 @@ def _infer_type(values: list[str]) -> str:
         # Accept YYYY-MM-DD, MM/DD/YYYY, DD-MM-YYYY (most common formats)
         for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y", "%Y/%m/%d"):
             try:
-                date.fromisoformat(v) if fmt == "%Y-%m-%d" else __import__(
-                    "datetime"
-                ).datetime.strptime(v, fmt)
+                (
+                    date.fromisoformat(v)
+                    if fmt == "%Y-%m-%d"
+                    else __import__("datetime").datetime.strptime(v, fmt)
+                )
                 return True
             except ValueError:
                 continue

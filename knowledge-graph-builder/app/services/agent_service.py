@@ -53,9 +53,9 @@ def _row_to_dict(rec: dict) -> dict[str, Any]:
         "llm_config_id": props.get("llm_config_id"),
         "created_by": props.get("created_by", ""),
         "created_at": str(props.get("created_at", "")),
-        "deactivated_at": str(props["deactivated_at"])
-        if props.get("deactivated_at")
-        else None,
+        "deactivated_at": (
+            str(props["deactivated_at"]) if props.get("deactivated_at") else None
+        ),
     }
 
 

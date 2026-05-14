@@ -54,6 +54,7 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
+                "home_graph_id": db_user.home_graph_id,
             }
         )
         refresh_token = await self.create_refresh_token(
@@ -61,6 +62,7 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
+                "home_graph_id": db_user.home_graph_id,
             }
         )
         token_schema = auth_schemas.Token(
@@ -83,6 +85,7 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
+                "home_graph_id": db_user.home_graph_id,
             }
         )
         refresh_token = await self.create_refresh_token(
@@ -90,6 +93,7 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
+                "home_graph_id": db_user.home_graph_id,
             }
         )
         token_schema = auth_schemas.Token(
@@ -213,6 +217,7 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
+                "home_graph_id": db_user.home_graph_id,
             }
         )
         refresh_token = await self.create_refresh_token(
@@ -220,6 +225,7 @@ class AuthService:
                 "sub": str(db_user.id),
                 "email": db_user.email,
                 "is_superuser": db_user.is_superuser,
+                "home_graph_id": db_user.home_graph_id,
             }
         )
 

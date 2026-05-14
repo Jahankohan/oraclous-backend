@@ -3,6 +3,7 @@ Unit tests for the communities endpoint helpers and schema (TASK-050).
 """
 
 import pytest
+from pydantic import ValidationError
 
 from app.api.v1.endpoints.communities import _derive_label
 from app.schemas.community_schemas import Community
@@ -71,5 +72,5 @@ class TestCommunitySchema:
 
     @pytest.mark.unit
     def test_size_must_be_non_negative(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             Community(community_id="c-1", level=0, label="x", size=-1)

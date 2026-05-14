@@ -8,6 +8,7 @@ matches what the frontend's `ChatHistoryEntry` interface expects.
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from app.schemas.chat_schemas import ChatHistoryEntry, SourceInfo
 
@@ -63,11 +64,11 @@ class TestChatHistoryEntry:
     @pytest.mark.unit
     def test_role_required(self):
         """Role is a required field."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ChatHistoryEntry(content="missing role")  # type: ignore[call-arg]
 
     @pytest.mark.unit
     def test_content_required(self):
         """Content is a required field."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ChatHistoryEntry(role="user")  # type: ignore[call-arg]

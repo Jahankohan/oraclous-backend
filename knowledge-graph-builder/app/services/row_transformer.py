@@ -20,7 +20,7 @@ from app.core.logging import get_logger
 
 if TYPE_CHECKING:
     from app.services.background_jobs import WorkerNeo4jManager
-    from app.services.schema_mapper import TableMapping
+    from app.services.schema_mapper import RelationshipMapping, TableMapping
 
 logger = get_logger(__name__)
 

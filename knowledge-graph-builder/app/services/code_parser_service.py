@@ -1645,9 +1645,7 @@ def _load_rename_migration_statements() -> list[str]:
             _RENAME_MIGRATION_PATH,
         )
         return []
-    return _split_cypher_statements(
-        _RENAME_MIGRATION_PATH.read_text(encoding="utf-8")
-    )
+    return _split_cypher_statements(_RENAME_MIGRATION_PATH.read_text(encoding="utf-8"))
 
 
 async def ensure_code_schema(async_driver: Any) -> None:

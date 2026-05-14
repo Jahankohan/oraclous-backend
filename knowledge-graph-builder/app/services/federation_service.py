@@ -687,7 +687,7 @@ class FederationService:
             buckets[key].append(row)
 
         candidates: list[dict[str, Any]] = []
-        for (norm_name, norm_type), group in buckets.items():
+        for (_norm_name, norm_type), group in buckets.items():
             if len(group) < 2:
                 continue
             for i in range(len(group)):

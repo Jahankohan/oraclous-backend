@@ -227,15 +227,23 @@ class TestToolAllowlist:
                     **(
                         {"community_id": "x"}
                         if name == "community_members"
-                        else {"node_id": "x"}
-                        if name == "neighbors"
-                        else {"node_label": "X"}
-                        if name == "degree_centrality"
-                        else {"node_label": "X", "at_time": 0}
-                        if name == "temporal_slice"
-                        else {"from_qname": "a", "to_qname": "b"}
-                        if name == "shortest_path"
-                        else {"source_qname": "x"}
+                        else (
+                            {"node_id": "x"}
+                            if name == "neighbors"
+                            else (
+                                {"node_label": "X"}
+                                if name == "degree_centrality"
+                                else (
+                                    {"node_label": "X", "at_time": 0}
+                                    if name == "temporal_slice"
+                                    else (
+                                        {"from_qname": "a", "to_qname": "b"}
+                                        if name == "shortest_path"
+                                        else {"source_qname": "x"}
+                                    )
+                                )
+                            )
+                        )
                     ),
                 )
 
@@ -450,9 +458,9 @@ class TestChatProvenance:
         assert prov["total_nodes_traversed"] > 0
         # All returned nodes must be from graph-A (verified via ID prefix)
         for node in prov["nodes"]:
-            assert node["id"].startswith("pp_A"), (
-                f"Cross-tenant leak in provenance: {node['id']}"
-            )
+            assert node["id"].startswith(
+                "pp_A"
+            ), f"Cross-tenant leak in provenance: {node['id']}"
 
 
 # ── 6. Conversational mode — session history ──────────────────────────────────

@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     BATCH_SIZE: int = 100
     CACHE_TTL: int = 300
 
+    # Ingest rate limit. Applied via slowapi @limiter.limit to the three
+    # document-ingest endpoints (text, document, image). 60/min is the
+    # comfortable human-paced default; raise for batch loads (e.g. 300+).
+    MAX_INGEST_RPM: int = 60
+
     # Optimization Settings
     OPTIMIZATION_INTERVAL: timedelta = timedelta(
         hours=2

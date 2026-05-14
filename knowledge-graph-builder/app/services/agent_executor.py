@@ -45,12 +45,150 @@ _REACT_SYSTEM = """You are a graph-native research agent. To answer the question
 may call tools one at a time. After each tool result you will decide whether to call \
 another tool or produce a final answer.
 
-Respond ONLY with valid JSON — no prose, no markdown fences:
-  Call a tool : {{"action": "<tool_name>", "args": {{...}}}}
-  Final answer: {{"action": "answer", "text": "<your response>"}}
+OUTPUT FORMAT — STRICTLY ONE JSON OBJECT, NOTHING ELSE:
+  - To call a tool, emit ONLY: {{"action": "<tool_name>", "args": {{...}}}}
+  - To produce the final answer, emit ONLY: {{"action": "answer", "text": "<your response>"}}
+
+Hard rules about output:
+  - No prose before or after the JSON.
+  - No markdown code fences (```).
+  - No <function_calls> tags, no <invoke> tags, no XML of any kind.
+  - No comments inside the JSON.
+  - Exactly one JSON object per turn.
+
+The tool will be executed by the system. You will see its result in the next turn \
+as a user message labeled "Tool 'X' result:". Then decide your next move with \
+another single JSON object.
 
 Available tools: {tools}
 """
+
+
+import re as _re
+
+_FUNCTION_CALLS_BLOCK = _re.compile(
+    r"<function_calls>\s*(\[.+?\]|\{.+?\})\s*</function_calls>", _re.DOTALL
+)
+_FENCED_JSON = _re.compile(r"```(?:json)?\s*(\{.+?\})\s*```", _re.DOTALL)
+
+
+def _scan_json_object(s: str, start: int) -> str | None:
+    """Return the substring of s starting at s[start] (must be '{') that
+    spans the matching closing '}' with string-aware bracket counting.
+    Returns None if no balanced object is found."""
+    if start >= len(s) or s[start] != "{":
+        return None
+    depth = 0
+    i = start
+    in_str = False
+    str_quote = ""
+    escape = False
+    while i < len(s):
+        ch = s[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == str_quote:
+                in_str = False
+        else:
+            if ch in ('"', "'"):
+                in_str = True
+                str_quote = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return s[start : i + 1]
+        i += 1
+    return None
+
+
+def _find_first_json_object(s: str) -> str | None:
+    """Find the first balanced JSON object substring in s, handling nested
+    braces inside strings (e.g. Cypher queries with `{prop: value}` literals)."""
+    pos = 0
+    while True:
+        idx = s.find("{", pos)
+        if idx == -1:
+            return None
+        candidate = _scan_json_object(s, idx)
+        if candidate is not None:
+            return candidate
+        pos = idx + 1
+
+
+def _normalize_decision(obj: dict) -> dict:
+    """Map Claude's native tool-use shape onto the ReAct shape we dispatch on.
+
+    Claude sometimes emits {"type": "tool", "id": "<tool_name>", "args": {...}}
+    or {"name": "<tool_name>", "input": {...}} instead of {"action": ..., "args": ...}.
+    """
+    if "action" in obj:
+        return obj
+    if obj.get("type") == "tool" and obj.get("id"):
+        return {"action": obj["id"], "args": obj.get("args") or obj.get("input") or {}}
+    if "name" in obj and ("input" in obj or "args" in obj):
+        return {
+            "action": obj["name"],
+            "args": obj.get("args") or obj.get("input") or {},
+        }
+    return obj
+
+
+def _parse_react_decision(raw: str) -> dict | None:
+    """Robustly parse the agent's decision JSON.
+
+    Handles five shapes:
+      1. Pure JSON object.
+      2. Claude tool-use wrapper: <function_calls>[{...}]</function_calls>.
+      3. Markdown-fenced JSON: ```json {...} ```.
+      4. JSON object embedded in prose (Cypher-safe bracket counting).
+      5. Normalizes Anthropic-style tool-use fields ({"type":"tool","id":...}
+         or {"name":...,"input":...}) to the expected {"action":...,"args":...}.
+    Returns None if no JSON object can be recovered.
+    """
+    s = raw.strip()
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict):
+            return _normalize_decision(obj)
+        if isinstance(obj, list) and obj and isinstance(obj[0], dict):
+            return _normalize_decision(obj[0])
+    except json.JSONDecodeError:
+        pass
+    m = _FUNCTION_CALLS_BLOCK.search(s)
+    if m:
+        try:
+            inner = json.loads(m.group(1))
+            if isinstance(inner, list) and inner and isinstance(inner[0], dict):
+                return _normalize_decision(inner[0])
+            if isinstance(inner, dict):
+                return _normalize_decision(inner)
+        except json.JSONDecodeError:
+            pass
+    m = _FENCED_JSON.search(s)
+    if m:
+        try:
+            obj = json.loads(m.group(1))
+            if isinstance(obj, dict):
+                return _normalize_decision(obj)
+        except json.JSONDecodeError:
+            pass
+    candidate = _find_first_json_object(s)
+    if candidate:
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                normalized = _normalize_decision(obj)
+                if "action" in normalized or "text" in normalized:
+                    return normalized
+        except json.JSONDecodeError:
+            pass
+    return None
+
 
 _CONVERSATIONAL_SUFFIX = (
     "\n\nYou are having a friendly, ongoing conversation. "
@@ -63,8 +201,24 @@ def _format_nodes(nodes: list[NodeResult]) -> str:
         return "(no results)"
     lines = []
     for n in nodes:
+        # Chunks have no id/label/name; the substance lives in properties['text'].
+        # Surface that text so the agent's LLM has grounded content to cite.
+        props = getattr(n, "properties", {}) or {}
+        chunk_text = props.get("text") or props.get("content") or ""
+        identifier = n.id or props.get("element_id") or ""
+        label = (
+            n.label or (props.get("nodeLabels") or [""])[0]
+            if isinstance(props.get("nodeLabels"), list)
+            else (n.label or "")
+        )
         qn = f" ({n.qualified_name})" if n.qualified_name else ""
-        lines.append(f"- [{n.id}] {n.label}{qn}")
+        header = f"- [{identifier}] {label}{qn}".rstrip()
+        if chunk_text:
+            # Limit to 1500 chars per chunk to keep prompt within budget for top_k=10
+            preview = chunk_text[:1500].strip()
+            lines.append(f"{header}\n  {preview}")
+        else:
+            lines.append(header)
     return "\n".join(lines)
 
 
@@ -129,7 +283,17 @@ class AgentExecutor:
             model = settings.LLM_MODEL
             llm = AsyncOpenAI(api_key=api_key)
 
-        toolkit = AgentToolkit(driver, agent_def["tools"])
+        # Embedder for tools that need vector search (graph_search). Uses the
+        # same OPENAI_BASE_URL/OPENAI_API_KEY env as the ingest pipeline so it
+        # routes through whatever the deployment has configured (OpenAI, LM
+        # Studio, OpenRouter, etc.).
+        from neo4j_graphrag.embeddings import OpenAIEmbeddings as _ToolEmbedder
+
+        embedder = _ToolEmbedder(
+            api_key=settings.OPENAI_API_KEY,
+            model=settings.EMBEDDING_MODEL or "text-embedding-3-large",
+        )
+        toolkit = AgentToolkit(driver, agent_def["tools"], embedder=embedder)
         return cls(agent_def, toolkit, llm, model)
 
     # ── Public entry point ────────────────────────────────────────────────────
@@ -309,16 +473,20 @@ class AgentExecutor:
 
     async def _research(self, message: str, prov: ProvenanceCollector) -> str:
         tools_list = ", ".join(self._agent.get("tools", []))
-        system = _REACT_SYSTEM.format(tools=tools_list)
+        react_block = _REACT_SYSTEM.format(tools=tools_list)
+        # Prepend the agent's own system_prompt (grounding rules, refusal phrase,
+        # citation requirement, etc.) so research-mode answers still follow the
+        # configured persona instead of pure ReAct defaults.
+        configured = (self._agent.get("system_prompt") or "").strip()
+        system = f"{configured}\n\n{react_block}" if configured else react_block
         messages: list[dict] = [{"role": "user", "content": message}]
 
         for _ in range(5):
             raw = await self._call_llm(messages, system_prompt=system)
             messages.append({"role": "assistant", "content": raw})
 
-            try:
-                decision = json.loads(raw.strip())
-            except json.JSONDecodeError:
+            decision = _parse_react_decision(raw)
+            if decision is None:
                 # Unparseable response — treat as final answer
                 return raw
 
@@ -330,11 +498,25 @@ class AgentExecutor:
             args = decision.get("args", {})
             try:
                 nodes = await self._dispatch(action, args, prov)
-            except (ToolNotPermittedError, TypeError) as exc:
+            except (ToolNotPermittedError, TypeError, ValueError) as exc:
                 messages.append(
                     {
                         "role": "user",
-                        "content": f"Tool error: {exc}. Try a different tool.",
+                        "content": f"Tool error: {exc}. Try a different tool or fix the args.",
+                    }
+                )
+                continue
+            except Exception as exc:
+                # Backend/DB errors (e.g. CypherSyntaxError from a malformed
+                # cypher_query) — feed back to the agent so it can retry with
+                # corrected args rather than crashing the whole request.
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Tool '{action}' raised an error: {type(exc).__name__}: {exc}. "
+                            f"Fix the arguments and try again."
+                        ),
                     }
                 )
                 continue

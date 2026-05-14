@@ -68,7 +68,7 @@ class TestSchemaAPIIntegration:
         with patch("app.api.schema.schema_manager") as mock_manager:
             mock_manager.extract_schema = AsyncMock(return_value=mock_schema)
 
-            response = await async_client.get(f"/api/v1/api/v1/schema/info/{graph_id}")
+            response = await async_client.get(f"/api/v1/schema/info/{graph_id}")
 
             assert response.status_code == 200
             data = response.json()
@@ -116,9 +116,7 @@ class TestSchemaAPIIntegration:
                 return_value=formatted_schema
             )
 
-            response = await async_client.get(
-                f"/api/v1/api/v1/schema/text2cypher/{graph_id}"
-            )
+            response = await async_client.get(f"/api/v1/schema/text2cypher/{graph_id}")
 
             assert response.status_code == 200
             data = response.json()
@@ -148,7 +146,7 @@ class TestSchemaAPIIntegration:
             )
 
             response = await async_client.get(
-                f"/api/v1/api/v1/schema/text2cypher/{graph_id}?force_refresh=true"
+                f"/api/v1/schema/text2cypher/{graph_id}?force_refresh=true"
             )
 
             assert response.status_code == 200
@@ -169,7 +167,7 @@ class TestSchemaAPIIntegration:
             mock_manager.extract_schema = AsyncMock(return_value=mock_schema)
 
             response = await async_client.post(
-                "/api/v1/api/v1/schema/refresh", json=request_data
+                "/api/v1/schema/refresh", json=request_data
             )
 
             assert response.status_code == 200
@@ -196,9 +194,7 @@ class TestSchemaAPIIntegration:
         with patch("app.api.schema.schema_manager") as mock_manager:
             mock_manager.clear_cache = MagicMock()
 
-            response = await async_client.delete(
-                f"/api/v1/api/v1/schema/cache/{graph_id}"
-            )
+            response = await async_client.delete(f"/api/v1/schema/cache/{graph_id}")
 
             assert response.status_code == 200
             data = response.json()
@@ -219,7 +215,7 @@ class TestSchemaAPIIntegration:
         with patch("app.api.schema.schema_manager") as mock_manager:
             mock_manager.clear_cache = MagicMock()
 
-            response = await async_client.delete("/api/v1/api/v1/schema/cache")
+            response = await async_client.delete("/api/v1/schema/cache")
 
             assert response.status_code == 200
             data = response.json()
@@ -240,7 +236,7 @@ class TestSchemaAPIIntegration:
                 return_value={"test-graph-12345": mock_schema}
             )
 
-            response = await async_client.get("/api/v1/api/v1/schema/cache/status")
+            response = await async_client.get("/api/v1/schema/cache/status")
 
             assert response.status_code == 200
             data = response.json()
@@ -266,7 +262,7 @@ class TestSchemaAPIIntegration:
                 return_value={"cached_count": 2, "cache_ttl_minutes": 60}
             )
 
-            response = await async_client.get("/api/v1/api/v1/schema/health")
+            response = await async_client.get("/api/v1/schema/health")
 
             assert response.status_code == 200
             data = response.json()
@@ -290,7 +286,7 @@ class TestSchemaAPIIntegration:
                 side_effect=Exception("Database connection failed")
             )
 
-            response = await async_client.get(f"/api/v1/api/v1/schema/info/{graph_id}")
+            response = await async_client.get(f"/api/v1/schema/info/{graph_id}")
 
             assert response.status_code == 500
             data = response.json()
@@ -306,9 +302,7 @@ class TestSchemaAPIIntegration:
         # Missing required graph_id
         request_data = {"force_refresh": True}
 
-        response = await async_client.post(
-            "/api/v1/api/v1/schema/refresh", json=request_data
-        )
+        response = await async_client.post("/api/v1/schema/refresh", json=request_data)
 
         assert response.status_code == 422  # Validation error
         data = response.json()
@@ -325,7 +319,7 @@ class TestSchemaAPIIntegration:
                 side_effect=Exception("Service failed")
             )
 
-            response = await async_client.get("/api/v1/api/v1/schema/health")
+            response = await async_client.get("/api/v1/schema/health")
 
             assert response.status_code == 200  # Health endpoint should not fail
             data = response.json()
@@ -354,7 +348,7 @@ class TestSchemaAPIIntegration:
             )
             mock_manager.extract_schema = AsyncMock(return_value=empty_schema)
 
-            response = await async_client.get(f"/api/v1/api/v1/schema/info/{graph_id}")
+            response = await async_client.get(f"/api/v1/schema/info/{graph_id}")
 
             assert response.status_code == 200
             data = response.json()
@@ -377,7 +371,7 @@ class TestSchemaAPIIntegration:
             )
 
             # Test schema info response format
-            response = await async_client.get(f"/api/v1/api/v1/schema/info/{graph_id}")
+            response = await async_client.get(f"/api/v1/schema/info/{graph_id}")
             assert response.status_code == 200
 
             data = response.json()
