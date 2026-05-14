@@ -659,8 +659,9 @@ class ChatService:
                                     or []
                                 )
                                 retriever_items.sort(
-                                    key=lambda item: getattr(item, "score", None)
-                                    or 0.0,
+                                    key=lambda item: (
+                                        getattr(item, "score", None) or 0.0
+                                    ),
                                     reverse=True,
                                 )
 
