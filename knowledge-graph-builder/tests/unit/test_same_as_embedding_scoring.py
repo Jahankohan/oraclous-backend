@@ -310,7 +310,7 @@ async def test_candidate_threshold_filters_low_similarity():
             new=AsyncMock(return_value=None),
         ),
     ):
-        candidates = await svc.find_same_as_candidates(
+        await svc.find_same_as_candidates(
             "id-a", "graph-a", ["graph-b"], embedding, user_id="user-1"
         )
 
@@ -561,8 +561,6 @@ async def test_end_to_end_federation_same_as_link():
 async def test_exact_match_fast_path_confidence():
     """Exact-match fast path must return score >= 0.99 and must not be broken by multi-signal scoring."""
     from app.services.federation_service import FederationService
-
-    user_id = "user-1"
 
     # Exact-match Neo4j row returned by _find_exact_match
     exact_match_entity = {

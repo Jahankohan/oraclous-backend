@@ -685,8 +685,9 @@ class TestIngestEndpoint:
                 mock_session.add = MagicMock()
                 mock_session.commit = AsyncMock()
                 mock_session.refresh = AsyncMock(
-                    side_effect=lambda job: setattr(job, "id", uuid.UUID(JOB_ID))
-                    or None
+                    side_effect=lambda job: (
+                        setattr(job, "id", uuid.UUID(JOB_ID)) or None
+                    )
                 )
 
                 async def _db_gen():

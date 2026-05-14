@@ -145,7 +145,7 @@ async def test_store_same_as_links_stamps_both_graph_ids():
     mock_session.execute_write.assert_called_once()
 
     # Verify the pair parameter dict includes both graph IDs
-    write_fn = mock_session.execute_write.call_args[0][0]
+    _write_fn = mock_session.execute_write.call_args[0][0]  # noqa: F841  (kept for source inspection in debug)
     # Reconstruct: the fn is a closure over the pair_params list. Inspect source to
     # confirm both keys are in the params list built inside _store_same_as_links.
     assert "source_graph_id" in source
