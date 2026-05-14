@@ -25,9 +25,15 @@ from app.api.dependencies import (
     get_database,
     verify_graph_access,
 )
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.rate_limiter import limiter
+
+# Ingest rate limit — read once at import time so the value lands in the
+# slowapi decorator (which takes a string, not a callable). Override via the
+# MAX_INGEST_RPM env var for batch loads. See settings.MAX_INGEST_RPM.
+_INGEST_RPM = f"{settings.MAX_INGEST_RPM}/minute"
 from app.models.graph import (  # Keep for job tracking only
     IngestionJob,
 )
@@ -484,7 +490,7 @@ async def get_chat_history(
         503: {"description": "Neo4j service unavailable"},
     },
 )
-@limiter.limit("10/minute")
+@limiter.limit(_INGEST_RPM)
 async def ingest_data_corrected(
     request: Request,
     graph_id: UUID,
@@ -681,7 +687,7 @@ async def list_documents(
     status_code=status.HTTP_201_CREATED,
     summary="Upload a file and ingest it into a graph",
 )
-@limiter.limit("10/minute")
+@limiter.limit(_INGEST_RPM)
 async def upload_document(
     request: Request,
     graph_id: UUID,
@@ -742,7 +748,7 @@ async def upload_document(
         429: {"description": "Rate limit exceeded"},
     },
 )
-@limiter.limit("10/minute")
+@limiter.limit(_INGEST_RPM)
 async def ingest_incremental(
     request: Request,
     graph_id: UUID,
