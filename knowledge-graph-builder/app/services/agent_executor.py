@@ -79,6 +79,36 @@ _CONVERSATIONAL_SUFFIX = (
 )
 
 
+# Tools the executor will dispatch automatically in single-pass modes
+# (direct / conversational) to grab grounding context before the LLM
+# call. Picked from the agent's declared tools in this order — the
+# first match wins. Lets the synthetic chat agent (STORY-8) declare
+# vector_cypher_search / hybrid_cypher_search / graph_search as its
+# primary retrieval tool without the executor needing per-tool branching.
+#
+# ``cypher_query`` is deliberately NOT in this list. It expects an LLM-
+# generated Cypher string, not a natural-language query, so it can't be
+# auto-dispatched — it has to be called by the LLM in research mode.
+# Modes that map to cypher_query (e.g. mode=natural) currently fall
+# through to a no-retrieval direct-mode answer; threading
+# text-to-Cypher properly is a STORY-8 follow-up.
+_PRIMARY_RETRIEVAL_TOOLS: tuple[str, ...] = (
+    "vector_cypher_search",
+    "hybrid_cypher_search",
+    "graph_search",
+)
+
+
+def _pick_primary_retrieval_tool(tools: list[str]) -> str | None:
+    """Return the first retrieval tool from the agent's allowlist, in
+    the order defined by ``_PRIMARY_RETRIEVAL_TOOLS``. None if none."""
+    tools_set = set(tools or [])
+    for candidate in _PRIMARY_RETRIEVAL_TOOLS:
+        if candidate in tools_set:
+            return candidate
+    return None
+
+
 # ── Tool-use protocol types ──────────────────────────────────────────────────
 
 
@@ -232,6 +262,44 @@ class AgentExecutor:
         # same OPENAI_BASE_URL/OPENAI_API_KEY env as the ingest pipeline so it
         # routes through whatever the deployment has configured (OpenAI, LM
         # Studio, OpenRouter, etc.).
+        from neo4j_graphrag.embeddings import OpenAIEmbeddings as _ToolEmbedder
+
+        embedder = _ToolEmbedder(
+            api_key=settings.OPENAI_API_KEY,
+            model=settings.EMBEDDING_MODEL or "text-embedding-3-large",
+        )
+        toolkit = AgentToolkit(driver, agent_def["tools"], embedder=embedder)
+        return cls(agent_def, toolkit, llm, model)
+
+    @classmethod
+    async def from_chat_config(
+        cls,
+        driver: AsyncDriver,
+        agent_def: dict[str, Any],
+    ) -> "AgentExecutor":
+        """Factory for in-memory chat configs (STORY-8).
+
+        Unlike ``from_neo4j``, the agent isn't persisted — ``agent_def``
+        is built per-request by ``chat_engine.build_default_agent_config``.
+        LLM resolution falls through to env-var defaults (org-level
+        LLMConfig isn't consulted because the synthetic agent has no
+        ``org_id``); this matches what ChatService used to do.
+        """
+        api_key = settings.LLM_API_KEY or settings.OPENAI_API_KEY
+        if not api_key:
+            raise RuntimeError(
+                "LLM not configured. Set LLM_API_KEY or OPENAI_API_KEY in env."
+            )
+        # OpenRouter routing: respect OPENAI_BASE_URL if set, same as
+        # AgentToolkit's embedder construction does.
+        base_url = getattr(settings, "OPENAI_BASE_URL", None)
+        llm = (
+            AsyncOpenAI(api_key=api_key, base_url=base_url)
+            if base_url
+            else AsyncOpenAI(api_key=api_key)
+        )
+        model = settings.LLM_MODEL
+
         from neo4j_graphrag.embeddings import OpenAIEmbeddings as _ToolEmbedder
 
         embedder = _ToolEmbedder(
@@ -552,8 +620,9 @@ class AgentExecutor:
 
         if mode == "direct":
             context = ""
-            if "graph_search" in self._agent.get("tools", []):
-                nodes = await self._dispatch("graph_search", {"query": message}, prov)
+            primary = _pick_primary_retrieval_tool(self._agent.get("tools", []))
+            if primary is not None:
+                nodes = await self._dispatch(primary, {"query": message}, prov)
                 context = _format_tool_result_json(nodes)
 
             user_content = (
@@ -633,8 +702,9 @@ class AgentExecutor:
 
     async def _direct(self, message: str, prov: ProvenanceCollector) -> str:
         context = ""
-        if "graph_search" in self._agent.get("tools", []):
-            nodes = await self._dispatch("graph_search", {"query": message}, prov)
+        primary = _pick_primary_retrieval_tool(self._agent.get("tools", []))
+        if primary is not None:
+            nodes = await self._dispatch(primary, {"query": message}, prov)
             context = _format_tool_result_json(nodes)
 
         user_content = (
@@ -675,8 +745,9 @@ class AgentExecutor:
         history = list(_sessions.get(session_id, []))
 
         context = ""
-        if "graph_search" in self._agent.get("tools", []):
-            nodes = await self._dispatch("graph_search", {"query": message}, prov)
+        primary = _pick_primary_retrieval_tool(self._agent.get("tools", []))
+        if primary is not None:
+            nodes = await self._dispatch(primary, {"query": message}, prov)
             context = _format_tool_result_json(nodes)
 
         user_content = (

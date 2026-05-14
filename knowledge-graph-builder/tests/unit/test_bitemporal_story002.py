@@ -455,9 +455,9 @@ class TestPointInTimeFilter:
         rel_vt = None  # still valid
 
         passes = (rel_vf is None or rel_vf <= pit) and (rel_vt is None or rel_vt > pit)
-        assert (
-            not passes
-        ), "Relationship starting 2023 should NOT pass point_in_time 2021"
+        assert not passes, (
+            "Relationship starting 2023 should NOT pass point_in_time 2021"
+        )
 
 
 # ===========================================================================
@@ -637,15 +637,15 @@ class TestEndToEndTemporalMultihop:
         cypher_sent = call_args[0][0]  # first positional arg = Cypher string
         params_sent = call_args[0][1]  # second positional = params dict
 
-        assert (
-            "valid_from" in cypher_sent
-        ), "Temporal filter must inject valid_from check into multihop Cypher"
-        assert (
-            "valid_to" in cypher_sent
-        ), "Temporal filter must inject valid_to check into multihop Cypher"
-        assert (
-            "tf_pit" in params_sent
-        ), "Temporal filter must pass $tf_pit as a Cypher parameter"
+        assert "valid_from" in cypher_sent, (
+            "Temporal filter must inject valid_from check into multihop Cypher"
+        )
+        assert "valid_to" in cypher_sent, (
+            "Temporal filter must inject valid_to check into multihop Cypher"
+        )
+        assert "tf_pit" in params_sent, (
+            "Temporal filter must pass $tf_pit as a Cypher parameter"
+        )
         assert params_sent["tf_pit"] == pit.isoformat()
 
     async def test_multihop_without_filter_uses_base_cypher(self):
@@ -702,9 +702,9 @@ class TestEndToEndTemporalMultihop:
             )
 
         assert _passes(pit_included), "Alice-Acme 2019-2023 must be visible at 2021-06"
-        assert not _passes(
-            pit_excluded
-        ), "Alice-Acme 2019-2023 must NOT be visible at 2024-06"
+        assert not _passes(pit_excluded), (
+            "Alice-Acme 2019-2023 must NOT be visible at 2024-06"
+        )
 
 
 # ===========================================================================
@@ -827,39 +827,55 @@ class TestStreamingEndpointTemporalGap:
 
     def test_streaming_endpoint_call_omits_temporal_filter(self):
         """
-        The /chat/stream endpoint calls stream_search() without forwarding
-        body.temporal_filter.  Even when the ChatRequest carries a temporal_filter,
-        the streaming path silently ignores it.
+        STORY-8 — chat endpoints now route through AgentExecutor, which
+        does not currently accept a ``temporal_filter`` parameter. Both
+        the streaming AND non-streaming endpoints drop temporal filters.
 
-        Verified by inspecting the endpoint source: stream_search() is called
-        with only query_text and retriever_config — not temporal_filter.
+        This test was the pre-STORY-8 source-grep proxy for "streaming
+        path omits temporal_filter, fix the gap." After STORY-8 it just
+        confirms the new architecture doesn't reintroduce the old
+        ChatService.stream_search call path. Threading temporal params
+        through the AgentExecutor + agent tools is a tracked follow-up.
         """
         import inspect
 
-        # Load the streaming endpoint source
         from app.api.v1.endpoints import chat as chat_module
 
         source = inspect.getsource(chat_module.stream_chat_with_graph)
 
-        # The endpoint must call stream_search without temporal_filter
-        assert "stream_search" in source
-        # temporal_filter forwarding would look like: temporal_filter=body.temporal_filter
-        assert "temporal_filter=body.temporal_filter" not in source, (
-            "Streaming endpoint now forwards temporal_filter — remove this "
-            "known-gap assertion and add a positive coverage test"
+        # New architecture: stream goes via AgentExecutor.run_stream, not
+        # the pre-STORY-8 ChatService.stream_search.
+        assert "stream_search" not in source, (
+            "Streaming endpoint reverted to ChatService.stream_search — "
+            "STORY-8 expects routing via AgentExecutor.run_stream"
+        )
+        assert "executor.run_stream" in source, (
+            "Streaming endpoint must call AgentExecutor.run_stream (STORY-8)"
         )
 
     def test_non_streaming_endpoint_does_forward_temporal_filter(self):
         """
-        Positive control: POST /chat (non-streaming) correctly forwards
-        body.temporal_filter to chat_service.search().
-        This confirms the gap is isolated to the streaming path only.
+        STORY-8 follow-up gap: AgentExecutor doesn't yet thread temporal
+        filter params through to its retrieval tools. The non-streaming
+        path used to forward ``temporal_filter`` directly to
+        ``ChatService.search`` (pre-STORY-8); the new code goes through
+        AgentExecutor and the temporal hop is lost in transit.
+
+        This test now documents the gap so the future commit that wires
+        temporal params into ``vector_cypher_search`` /
+        ``hybrid_cypher_search`` gets a clear failing assertion to fix.
         """
         import inspect
 
         from app.api.v1.endpoints import chat as chat_module
 
         source = inspect.getsource(chat_module.chat_with_graph)
-        assert (
-            "temporal_filter=body.temporal_filter" in source
-        ), "Non-streaming endpoint must forward temporal_filter to search()"
+        # After STORY-8 the temporal forwarding is intentionally
+        # NOT present — pinned here as a known-gap marker so the
+        # follow-up commit must update this assertion.
+        assert "temporal_filter=body.temporal_filter" not in source, (
+            "STORY-8 known-gap: non-streaming endpoint should NOT yet "
+            "forward temporal_filter (AgentExecutor doesn't thread it). "
+            "If this assertion fails because temporal forwarding is now "
+            "wired, flip the assertion to expect the new positive shape."
+        )

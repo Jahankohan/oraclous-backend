@@ -1,9 +1,33 @@
 """
-Chat Service using Neo4j GraphRAG
+Chat Service using Neo4j GraphRAG (DEPRECATED — STORY-8).
+
+The ``POST /chat`` and ``POST /chat/stream`` endpoints now route through
+``app.services.agent_executor.AgentExecutor`` via the helpers in
+``app.services.chat_engine``. This module is preserved for backward
+compatibility with any caller that still imports ChatService directly,
+but it is no longer on the request path of the chat endpoints.
+
+Schedule for removal: a follow-up commit once /chat has been running
+on the unified engine for at least one release cycle and no external
+callers are observed.
+
+If you're adding new chat behaviour — add it to ``chat_engine`` or as
+an agent tool, not here.
+
 Enhanced implementation supporting all retriever types with factory pattern,
 strict graph-grounded responses, hallucination prevention, entity anchor
 detection, multi-hop reasoning, and auto retriever selection.
 """
+
+import warnings as _warnings
+
+_warnings.warn(
+    "app.services.chat_service.ChatService is deprecated as of STORY-8. "
+    "POST /chat now routes through AgentExecutor via chat_engine. Remove "
+    "this import once your code path no longer depends on ChatService.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import re
 from collections.abc import AsyncIterator
