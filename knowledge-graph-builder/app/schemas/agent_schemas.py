@@ -4,19 +4,19 @@ from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
-# Valid tool names — enforced at creation time so no invalid tool can be persisted.
-VALID_TOOLS = frozenset(
-    {
-        "graph_search",
-        "community_members",
-        "neighbors",
-        "degree_centrality",
-        "shortest_path",
-        "taint_trace",
-        "temporal_slice",
-        "cypher_query",
-    }
-)
+
+# Valid tool names — enforced at creation time so no invalid tool can be
+# persisted. Sourced from the agent_tool_schemas registry so adding a new
+# tool is one-touch (add a schema entry; the validator picks it up
+# automatically and the LLM-facing JSON schemas + this server-side
+# validator never drift apart).
+def _load_valid_tools() -> frozenset[str]:
+    from app.services.agent_tool_schemas import registered_tool_names
+
+    return frozenset(registered_tool_names())
+
+
+VALID_TOOLS = _load_valid_tools()
 
 ReasoningMode = Literal["direct", "research", "analytical", "conversational"]
 RetrieverStrategy = Literal["hybrid", "similarity", "entity"]
