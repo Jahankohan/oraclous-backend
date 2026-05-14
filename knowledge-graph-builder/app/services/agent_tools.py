@@ -104,17 +104,39 @@ class AgentToolkit:
     async def community_members(
         self, graph_id: str, community_id: str, max_results: int = 50
     ) -> list[NodeResult]:
-        """Return all nodes belonging to a Leiden community."""
+        """Return all member nodes of a community across any registered kind.
+
+        Each registered kind in ``COMMUNITY_KINDS`` is probed in order until
+        a match for ``community_id`` is found. This avoids forcing the
+        calling LLM to know whether ``community_id`` points at an entity
+        community or a chunk community.
+        """
         self._require("community_members")
-        result = await self._driver.execute_query(
-            """
-            MATCH (n {graph_id: $gid})-[:BELONGS_TO]->(:Community {community_id: $cid})
-            RETURN n
-            LIMIT $max_results
-            """,
-            {"gid": graph_id, "cid": community_id, "max_results": max_results},
-        )
-        return [_node_to_result(dict(rec["n"])) for rec in result.records]
+        # Imported lazily so the toolkit can still be used in tests that
+        # don't have the full app package wired up.
+        from app.schemas.community_kinds import all_kinds
+
+        for spec in all_kinds():
+            # Labels, relationship types, and property names come from the
+            # compile-time registry — never from user input — so f-string
+            # interpolation here is safe. Identifiers wrapped in backticks
+            # for defense-in-depth.
+            query = (
+                f"MATCH (n:`{spec.member_label}` {{graph_id: $gid}})"
+                f"-[:`{spec.member_rel}`]->"
+                f"(c:`{spec.community_label}` "
+                f"{{`{spec.id_property}`: $cid, graph_id: $gid}}) "
+                "RETURN n "
+                "LIMIT $max_results"
+            )
+            result = await self._driver.execute_query(
+                query,
+                {"gid": graph_id, "cid": community_id, "max_results": max_results},
+            )
+            if result.records:
+                return [_node_to_result(dict(rec["n"])) for rec in result.records]
+
+        return []
 
     async def neighbors(
         self,
