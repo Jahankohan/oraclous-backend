@@ -1,10 +1,6 @@
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel
-
 from app.core.dependencies import (
     get_service_account_repository,
     get_user_repository,
@@ -14,6 +10,9 @@ from app.core.jwt_handler import create_service_account_token, verify_access_tok
 from app.core.rate_limiter import enforce_key_prefix_rate_limit, limiter
 from app.schema import auth_schemas
 from app.services.auth_service import AuthService
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordBearer
+from pydantic import BaseModel
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 router = APIRouter()
@@ -202,7 +201,6 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
         "last_name": db_user.last_name,
         "is_verified": db_user.is_email_verified,
         "principal_type": "user",
-        "home_graph_id": db_user.home_graph_id,
     }
 
 
@@ -247,9 +245,8 @@ async def exchange_service_token(
     # the metadata alongside the key.
     #
     # Retrieve stored metadata from the key record via SA lookup
-    from sqlalchemy.future import select
-
     from app.models.service_account_model import AgentServiceAccountKey
+    from sqlalchemy.future import select
 
     async with sa_repository.Session() as session:
         result = await session.execute(
@@ -321,9 +318,8 @@ async def internal_create_sa_key(
     )
 
     # Persist tenant_id and home_graph_id on the key record for token exchange
-    from sqlalchemy import update as sa_update
-
     from app.models.service_account_model import AgentServiceAccountKey
+    from sqlalchemy import update as sa_update
 
     async with sa_repository.Session() as session:
         await session.execute(
@@ -340,82 +336,6 @@ async def internal_create_sa_key(
         key_id=record.key_id,
         api_key=raw_key,
         key_prefix=record.key_prefix,
-    )
-
-
-class SetHomeGraphRequest(BaseModel):
-    home_graph_id: str
-
-
-class SetHomeGraphResponse(BaseModel):
-    user_id: str
-    home_graph_id: str
-
-
-@router.put("/internal/users/{user_id}/home-graph", response_model=SetHomeGraphResponse)
-async def internal_set_home_graph(
-    user_id: str,
-    body: SetHomeGraphRequest,
-    request: Request,
-    _: bool = Depends(verify_internal_service),
-):
-    """Internal: bind a user's default workspace.
-
-    Called by knowledge-graph-builder during onboarding bootstrap after a
-    workspace (graph) has been created for the user.
-    """
-    repository = await get_user_repository(request)
-    user = await repository.set_home_graph_id(user_id, body.home_graph_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-        )
-    return SetHomeGraphResponse(user_id=str(user.id), home_graph_id=user.home_graph_id)
-
-
-@router.post("/internal/users/{user_id}/mint-token", response_model=auth_schemas.Token)
-async def internal_mint_user_token(
-    user_id: str,
-    request: Request,
-    _: bool = Depends(verify_internal_service),
-):
-    """Internal: mint a fresh access+refresh pair for an existing user.
-
-    Used by knowledge-graph-builder right after binding a home_graph_id so the
-    caller can hand back a token that already carries the workspace claim
-    (avoiding a second /refresh/ round-trip from the client).
-    """
-    repository = await get_user_repository(request)
-    db_user = await repository.get_user_by_id(user_id)
-    if not db_user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-        )
-
-    auth_service = AuthService(repository)
-    access_token, expires_in = await auth_service.create_access_token(
-        data={
-            "sub": str(db_user.id),
-            "email": db_user.email,
-            "is_superuser": db_user.is_superuser,
-            "home_graph_id": db_user.home_graph_id,
-        }
-    )
-    refresh_token = await auth_service.create_refresh_token(
-        data={
-            "sub": str(db_user.id),
-            "email": db_user.email,
-            "is_superuser": db_user.is_superuser,
-            "home_graph_id": db_user.home_graph_id,
-        }
-    )
-    return auth_schemas.Token(
-        email=db_user.email,
-        is_superuser=db_user.is_superuser,
-        access_token=access_token,
-        refresh_token=refresh_token,
-        expires_in=expires_in,
-        token_type="bearer",
     )
 
 

@@ -1,11 +1,12 @@
-from app.core.config import settings
-from datetime import datetime, timedelta, timezone
-from jose import JWTError, jwt
 import time
 import uuid
-from app.schema.auth_schemas import TokenData
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+from app.core.config import settings
+from app.schema.auth_schemas import TokenData
 from fastapi import HTTPException, status
+from jose import JWTError, jwt
 
 # Service account JWTs are short-lived (15 minutes) per security spec
 _SA_TOKEN_EXPIRE_MINUTES = 15
@@ -45,8 +46,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
         "email": data.get("email"),
         "is_superuser": data.get("is_superuser"),
     }
-    if data.get("home_graph_id"):
-        claims["home_graph_id"] = data["home_graph_id"]
     to_encode.update(claims)
     encoded_jwt = jwt.encode(
         to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM
@@ -70,8 +69,6 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
         "email": data.get("email"),
         "is_superuser": data.get("is_superuser"),
     }
-    if data.get("home_graph_id"):
-        claims["home_graph_id"] = data["home_graph_id"]
     to_encode.update(claims)
     encoded_jwt = jwt.encode(
         to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM
