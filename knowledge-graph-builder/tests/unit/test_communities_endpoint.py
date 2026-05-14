@@ -57,11 +57,15 @@ class TestCommunitySchema:
             summary="Tech companies",
         )
         data = c.model_dump(mode="json")
+        # kind defaults to "entity"; member_label is optional and stays None
+        # unless an explicit value is passed.
         assert data == {
             "community_id": "c-1",
+            "kind": "entity",
             "level": 0,
             "label": "Tech",
             "size": 10,
+            "member_label": None,
             "summary": "Tech companies",
         }
 
@@ -74,3 +78,19 @@ class TestCommunitySchema:
     def test_size_must_be_non_negative(self):
         with pytest.raises(ValidationError):
             Community(community_id="c-1", level=0, label="x", size=-1)
+
+    @pytest.mark.unit
+    def test_kind_and_member_label_round_trip(self):
+        """A chunk-kind payload preserves kind + member_label through serialization."""
+        c = Community(
+            community_id="cc_12_abcdef",
+            kind="chunk",
+            level=0,
+            label="Cluster 12",
+            size=276,
+            member_label="Chunk",
+        )
+        data = c.model_dump(mode="json")
+        assert data["kind"] == "chunk"
+        assert data["member_label"] == "Chunk"
+        assert data["level"] == 0
