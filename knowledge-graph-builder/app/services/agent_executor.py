@@ -1,4 +1,4 @@
-"""Agent execution engine — four reasoning modes (TASK-034 / STORY-020).
+"""Agent execution engine — four reasoning modes (TASK-034 / STORY-020, STORY-5).
 
 AgentExecutor is instantiated per chat request. It loads the agent definition
 from Neo4j, resolves the LLM client via the three-level LLMConfig chain
@@ -9,13 +9,30 @@ returns alongside the agent's response.
 Reasoning modes
 ---------------
 direct          Single retrieval pass → generate (≤ 2 LLM calls)
-research        ReAct loop: retrieve → think → retrieve → generate (≤ 5 iterations)
-analytical      CoT reasoning section prepended before the final answer
-conversational  Full session history injected; warm tone system prompt suffix
+research        Native tool-use loop: model emits tool_calls, we dispatch
+                them, return tool results, model may call more or answer.
+                Up to 5 iterations.
+analytical      Same loop as research with a structured-reasoning system
+                prompt nudging the model to lay out its analysis.
+conversational  Full session history injected; warm-tone system prompt suffix
+
+STORY-5 — Real tool-use protocol
+-------------------------------
+Previously ``_research`` prompted the model to emit JSON describing tool
+calls and parsed the raw text with regex-based parsers. Claude (and most
+modern models) are trained on a native tool-use protocol where the SDK
+returns structured ``tool_calls`` and accepts ``role: tool`` results.
+This module now uses that protocol directly via both the Anthropic
+native SDK and the OpenAI-compatible SDK (which OpenRouter and Azure
+OpenAI also serve).
+
+Tool schemas live in ``app/services/agent_tool_schemas.py`` and are
+formatted per-provider; the executor never hand-writes them inline.
 """
 
 import json
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -26,6 +43,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.agent_schemas import AgentChatResponse, NodeResult, PathResult
 from app.services.agent_service import AgentService
+from app.services.agent_tool_schemas import tool_schemas_for
 from app.services.agent_tools import AgentToolkit, ToolNotPermittedError
 from app.services.credential_broker_client import (
     CredentialBrokerClient,
@@ -41,154 +59,19 @@ logger = get_logger(__name__)
 # key: session_id, value: list of {"role": ..., "content": ...} dicts
 _sessions: dict[str, list[dict]] = {}
 
-_REACT_SYSTEM = """You are a graph-native research agent. To answer the question you \
-may call tools one at a time. After each tool result you will decide whether to call \
-another tool or produce a final answer.
 
-OUTPUT FORMAT — STRICTLY ONE JSON OBJECT, NOTHING ELSE:
-  - To call a tool, emit ONLY: {{"action": "<tool_name>", "args": {{...}}}}
-  - To produce the final answer, emit ONLY: {{"action": "answer", "text": "<your response>"}}
+# Max iterations of the tool-use loop. Each iteration = one LLM call +
+# zero or more dispatched tools. Cap protects against pathological loops.
+_MAX_TOOL_ITERATIONS = 5
 
-Hard rules about output:
-  - No prose before or after the JSON.
-  - No markdown code fences (```).
-  - No <function_calls> tags, no <invoke> tags, no XML of any kind.
-  - No comments inside the JSON.
-  - Exactly one JSON object per turn.
-
-The tool will be executed by the system. You will see its result in the next turn \
-as a user message labeled "Tool 'X' result:". Then decide your next move with \
-another single JSON object.
-
-Available tools: {tools}
-"""
-
-
-import re as _re
-
-_FUNCTION_CALLS_BLOCK = _re.compile(
-    r"<function_calls>\s*(\[.+?\]|\{.+?\})\s*</function_calls>", _re.DOTALL
+# System-prompt suffix that nudges analytical mode to lay out its reasoning
+# before the final answer. Combined with the agent's configured system
+# prompt and the tool-use protocol.
+_ANALYTICAL_SUFFIX = (
+    "\n\nReasoning style: think step by step. Use the available tools to "
+    "gather evidence, then lay out your analysis explicitly in the final "
+    "answer (e.g. 'Step 1:', 'Step 2:', then 'Conclusion:')."
 )
-_FENCED_JSON = _re.compile(r"```(?:json)?\s*(\{.+?\})\s*```", _re.DOTALL)
-
-
-def _scan_json_object(s: str, start: int) -> str | None:
-    """Return the substring of s starting at s[start] (must be '{') that
-    spans the matching closing '}' with string-aware bracket counting.
-    Returns None if no balanced object is found."""
-    if start >= len(s) or s[start] != "{":
-        return None
-    depth = 0
-    i = start
-    in_str = False
-    str_quote = ""
-    escape = False
-    while i < len(s):
-        ch = s[i]
-        if in_str:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == str_quote:
-                in_str = False
-        else:
-            if ch in ('"', "'"):
-                in_str = True
-                str_quote = ch
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return s[start : i + 1]
-        i += 1
-    return None
-
-
-def _find_first_json_object(s: str) -> str | None:
-    """Find the first balanced JSON object substring in s, handling nested
-    braces inside strings (e.g. Cypher queries with `{prop: value}` literals)."""
-    pos = 0
-    while True:
-        idx = s.find("{", pos)
-        if idx == -1:
-            return None
-        candidate = _scan_json_object(s, idx)
-        if candidate is not None:
-            return candidate
-        pos = idx + 1
-
-
-def _normalize_decision(obj: dict) -> dict:
-    """Map Claude's native tool-use shape onto the ReAct shape we dispatch on.
-
-    Claude sometimes emits {"type": "tool", "id": "<tool_name>", "args": {...}}
-    or {"name": "<tool_name>", "input": {...}} instead of {"action": ..., "args": ...}.
-    """
-    if "action" in obj:
-        return obj
-    if obj.get("type") == "tool" and obj.get("id"):
-        return {"action": obj["id"], "args": obj.get("args") or obj.get("input") or {}}
-    if "name" in obj and ("input" in obj or "args" in obj):
-        return {
-            "action": obj["name"],
-            "args": obj.get("args") or obj.get("input") or {},
-        }
-    return obj
-
-
-def _parse_react_decision(raw: str) -> dict | None:
-    """Robustly parse the agent's decision JSON.
-
-    Handles five shapes:
-      1. Pure JSON object.
-      2. Claude tool-use wrapper: <function_calls>[{...}]</function_calls>.
-      3. Markdown-fenced JSON: ```json {...} ```.
-      4. JSON object embedded in prose (Cypher-safe bracket counting).
-      5. Normalizes Anthropic-style tool-use fields ({"type":"tool","id":...}
-         or {"name":...,"input":...}) to the expected {"action":...,"args":...}.
-    Returns None if no JSON object can be recovered.
-    """
-    s = raw.strip()
-    try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return _normalize_decision(obj)
-        if isinstance(obj, list) and obj and isinstance(obj[0], dict):
-            return _normalize_decision(obj[0])
-    except json.JSONDecodeError:
-        pass
-    m = _FUNCTION_CALLS_BLOCK.search(s)
-    if m:
-        try:
-            inner = json.loads(m.group(1))
-            if isinstance(inner, list) and inner and isinstance(inner[0], dict):
-                return _normalize_decision(inner[0])
-            if isinstance(inner, dict):
-                return _normalize_decision(inner)
-        except json.JSONDecodeError:
-            pass
-    m = _FENCED_JSON.search(s)
-    if m:
-        try:
-            obj = json.loads(m.group(1))
-            if isinstance(obj, dict):
-                return _normalize_decision(obj)
-        except json.JSONDecodeError:
-            pass
-    candidate = _find_first_json_object(s)
-    if candidate:
-        try:
-            obj = json.loads(candidate)
-            if isinstance(obj, dict):
-                normalized = _normalize_decision(obj)
-                if "action" in normalized or "text" in normalized:
-                    return normalized
-        except json.JSONDecodeError:
-            pass
-    return None
-
 
 _CONVERSATIONAL_SUFFIX = (
     "\n\nYou are having a friendly, ongoing conversation. "
@@ -196,35 +79,97 @@ _CONVERSATIONAL_SUFFIX = (
 )
 
 
-def _format_nodes(nodes: list[NodeResult]) -> str:
+# ── Tool-use protocol types ──────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCall:
+    """One tool invocation the LLM wants the executor to dispatch."""
+
+    id: str
+    name: str
+    args: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _LLMResponse:
+    """A single LLM completion. Either text-only or includes tool_calls.
+
+    When tool_calls is non-empty, ``text`` may still hold reasoning the
+    model emitted alongside the calls. Callers that detect tool_calls
+    should dispatch them and feed results back via a new completion.
+    """
+
+    text: str
+    tool_calls: list[_ToolCall] = field(default_factory=list)
+    # Raw assistant-message payload to echo back in the next turn. SDK-
+    # specific (Anthropic uses content blocks, OpenAI uses str+tool_calls)
+    # so we keep it opaque here and reconstruct in ``_append_assistant``.
+    raw_assistant_payload: Any = None
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _node_to_jsonable(n: NodeResult) -> dict[str, Any]:
+    """Project a NodeResult down to a small JSON-safe dict for tool
+    results. Drops the embedding (huge) and keeps id, label,
+    qualified_name, and a trimmed properties bag including the text/
+    content excerpt if present."""
+    props = dict(getattr(n, "properties", {}) or {})
+    # Don't ship embeddings or huge blobs back to the LLM
+    props.pop("embedding", None)
+    text = props.get("text") or props.get("content")
+    if isinstance(text, str) and len(text) > 1500:
+        props["text"] = text[:1500] + "…"
+    return {
+        "id": n.id,
+        "label": n.label,
+        "qualified_name": n.qualified_name,
+        "properties": props,
+    }
+
+
+def _format_tool_result_json(nodes: list[NodeResult]) -> str:
+    """Serialize tool output to JSON the LLM can read.
+
+    Empty-result cases are explicit so the model doesn't second-guess
+    whether the tool ran. Truncates to top 20 nodes per call (the agent
+    can ask for more via max_results on the next call if needed).
+    """
     if not nodes:
-        return "(no results)"
-    lines = []
-    for n in nodes:
-        # Chunks have no id/label/name; the substance lives in properties['text'].
-        # Surface that text so the agent's LLM has grounded content to cite.
-        props = getattr(n, "properties", {}) or {}
-        chunk_text = props.get("text") or props.get("content") or ""
-        identifier = n.id or props.get("element_id") or ""
-        label = (
-            n.label or (props.get("nodeLabels") or [""])[0]
-            if isinstance(props.get("nodeLabels"), list)
-            else (n.label or "")
-        )
-        qn = f" ({n.qualified_name})" if n.qualified_name else ""
-        header = f"- [{identifier}] {label}{qn}".rstrip()
-        if chunk_text:
-            # Limit to 1500 chars per chunk to keep prompt within budget for top_k=10
-            preview = chunk_text[:1500].strip()
-            lines.append(f"{header}\n  {preview}")
-        else:
-            lines.append(header)
-    return "\n".join(lines)
+        return json.dumps({"results": [], "count": 0})
+    capped = nodes[:20]
+    return json.dumps(
+        {
+            "results": [_node_to_jsonable(n) for n in capped],
+            "count": len(capped),
+            "truncated": len(nodes) > len(capped),
+        },
+        default=str,
+    )
 
 
 def _extract_cited_nodes(response: str, nodes: list[dict]) -> list[str]:
     """Return IDs of nodes whose id string appears literally in the response."""
     return [n["id"] for n in nodes if n["id"] in response]
+
+
+def _is_anthropic_client(llm: Any) -> bool:
+    """True if ``llm`` is an AsyncAnthropic instance.
+
+    Done lazily so test mocks that don't import the anthropic SDK still
+    work — and so the executor doesn't crash if anthropic isn't installed
+    in a deployment that only uses OpenRouter / OpenAI.
+    """
+    try:
+        from anthropic import AsyncAnthropic
+    except ImportError:
+        return False
+    return isinstance(llm, AsyncAnthropic)
+
+
+# ── Executor ─────────────────────────────────────────────────────────────────
 
 
 class AgentExecutor:
@@ -326,56 +271,115 @@ class AgentExecutor:
     # ── LLM helpers ───────────────────────────────────────────────────────────
 
     async def _call_llm(
-        self, messages: list[dict], system_prompt: str | None = None
-    ) -> str:
-        sp = system_prompt or self._agent.get(
-            "system_prompt", "You are a helpful assistant."
-        )
+        self,
+        messages: list[dict],
+        system_prompt: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> _LLMResponse:
+        """Single LLM completion.
 
-        try:
-            from anthropic import AsyncAnthropic
+        - ``tools`` is the per-provider-formatted tool list (from
+          ``tool_schemas_for``). When provided, the response may contain
+          ``tool_calls`` — the executor dispatches each and feeds back
+          the result on the next call.
+        - When ``tools`` is None, behaves as a pure text completion.
 
-            _is_anthropic = isinstance(self._llm, AsyncAnthropic)
-        except ImportError:
-            _is_anthropic = False
-
-        if _is_anthropic:
-            resp = await self._llm.messages.create(
-                model=self._model,
-                max_tokens=4096,
-                system=sp,
-                messages=messages,
-            )
-            return resp.content[0].text or ""
-        else:
-            all_msgs = [{"role": "system", "content": sp}] + messages
-            resp = await self._llm.chat.completions.create(
-                model=self._model,
-                messages=all_msgs,
-                temperature=0.7,
-            )
-            return resp.choices[0].message.content or ""
-
-    async def _call_llm_stream(
-        self, messages: list[dict], system_prompt: str | None = None
-    ) -> AsyncGenerator[str, None]:
-        """Yield LLM response tokens one at a time.
-
-        Phase 1: direct mode only. For Anthropic uses the streaming context manager;
-        for OpenAI-compatible uses stream=True. Non-direct modes use run() instead.
+        Two SDK paths share the same _LLMResponse shape.
         """
         sp = system_prompt or self._agent.get(
             "system_prompt", "You are a helpful assistant."
         )
 
-        try:
-            from anthropic import AsyncAnthropic
+        if _is_anthropic_client(self._llm):
+            return await self._call_anthropic(messages, sp, tools)
+        return await self._call_openai_compatible(messages, sp, tools)
 
-            _is_anthropic = isinstance(self._llm, AsyncAnthropic)
-        except ImportError:
-            _is_anthropic = False
+    async def _call_anthropic(
+        self,
+        messages: list[dict],
+        system_prompt: str,
+        tools: list[dict] | None,
+    ) -> _LLMResponse:
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": 4096,
+            "system": system_prompt,
+            "messages": messages,
+        }
+        if tools:
+            kwargs["tools"] = tools
+        resp = await self._llm.messages.create(**kwargs)
 
-        if _is_anthropic:
+        text_parts: list[str] = []
+        tool_calls: list[_ToolCall] = []
+        for block in resp.content:
+            btype = getattr(block, "type", None)
+            if btype == "text":
+                text_parts.append(getattr(block, "text", "") or "")
+            elif btype == "tool_use":
+                tool_calls.append(
+                    _ToolCall(
+                        id=getattr(block, "id", "") or "",
+                        name=getattr(block, "name", "") or "",
+                        args=dict(getattr(block, "input", {}) or {}),
+                    )
+                )
+        return _LLMResponse(
+            text="".join(text_parts),
+            tool_calls=tool_calls,
+            raw_assistant_payload=resp.content,
+        )
+
+    async def _call_openai_compatible(
+        self,
+        messages: list[dict],
+        system_prompt: str,
+        tools: list[dict] | None,
+    ) -> _LLMResponse:
+        all_msgs = [{"role": "system", "content": system_prompt}] + messages
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": all_msgs,
+            "temperature": 0.7,
+        }
+        if tools:
+            kwargs["tools"] = tools
+        resp = await self._llm.chat.completions.create(**kwargs)
+        msg = resp.choices[0].message
+        text = msg.content or ""
+        tool_calls: list[_ToolCall] = []
+        for raw_tc in getattr(msg, "tool_calls", None) or []:
+            fn = getattr(raw_tc, "function", None)
+            fn_name = getattr(fn, "name", "") if fn else ""
+            fn_args_raw = getattr(fn, "arguments", "") if fn else ""
+            try:
+                fn_args = json.loads(fn_args_raw) if fn_args_raw else {}
+            except (json.JSONDecodeError, TypeError):
+                fn_args = {}
+            tool_calls.append(
+                _ToolCall(
+                    id=getattr(raw_tc, "id", "") or "",
+                    name=fn_name,
+                    args=fn_args,
+                )
+            )
+        return _LLMResponse(text=text, tool_calls=tool_calls, raw_assistant_payload=msg)
+
+    async def _call_llm_stream(
+        self,
+        messages: list[dict],
+        system_prompt: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """Yield LLM response tokens one at a time (no tool use).
+
+        Used for the final-answer streaming pass after a tool-use loop
+        has concluded, and for direct mode where there are no tool calls.
+        """
+        sp = system_prompt or self._agent.get(
+            "system_prompt", "You are a helpful assistant."
+        )
+
+        if _is_anthropic_client(self._llm):
             async with self._llm.messages.stream(
                 model=self._model,
                 max_tokens=4096,
@@ -397,13 +401,151 @@ class AgentExecutor:
                     if delta:
                         yield delta
 
+    # ── Tool-use loop primitives ──────────────────────────────────────────────
+
+    def _provider_format(self) -> str:
+        return "anthropic" if _is_anthropic_client(self._llm) else "openai"
+
+    def _append_assistant_turn(self, messages: list[dict], resp: _LLMResponse) -> None:
+        """Append the assistant turn to the running messages list in the
+        shape the provider expects on the next call."""
+        if _is_anthropic_client(self._llm):
+            # Anthropic wants the content blocks back verbatim
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": resp.raw_assistant_payload,
+                }
+            )
+        else:
+            entry: dict[str, Any] = {
+                "role": "assistant",
+                "content": resp.text or None,
+            }
+            if resp.tool_calls:
+                entry["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.args),
+                        },
+                    }
+                    for tc in resp.tool_calls
+                ]
+            messages.append(entry)
+
+    def _append_tool_result(
+        self,
+        messages: list[dict],
+        tool_call: _ToolCall,
+        content: str,
+        is_error: bool = False,
+    ) -> None:
+        """Append a tool-result turn in the provider's expected shape."""
+        if _is_anthropic_client(self._llm):
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_call.id,
+                            "content": content,
+                            "is_error": is_error,
+                        }
+                    ],
+                }
+            )
+        else:
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": content,
+                }
+            )
+
+    async def _tool_use_loop(
+        self,
+        message: str,
+        prov: ProvenanceCollector,
+        system_prompt: str,
+    ) -> tuple[str, list[dict]]:
+        """Drive the native tool-use loop.
+
+        Returns ``(final_text, messages)`` once the model produces a turn
+        with no tool_calls, or when the iteration cap is hit (in which
+        case ``final_text`` is whatever text was last produced — caller
+        may want to re-prompt for a definitive answer).
+        """
+        tools = tool_schemas_for(
+            self._agent.get("tools", []) or [], self._provider_format()
+        )
+        messages: list[dict] = [{"role": "user", "content": message}]
+
+        last_text = ""
+        for _ in range(_MAX_TOOL_ITERATIONS):
+            resp = await self._call_llm(
+                messages, system_prompt=system_prompt, tools=tools or None
+            )
+            last_text = resp.text
+
+            if not resp.tool_calls:
+                return resp.text, messages
+
+            self._append_assistant_turn(messages, resp)
+
+            for tc in resp.tool_calls:
+                try:
+                    nodes = await self._dispatch(tc.name, tc.args, prov, tc.id)
+                    self._append_tool_result(
+                        messages, tc, _format_tool_result_json(nodes), is_error=False
+                    )
+                except ToolNotPermittedError as exc:
+                    self._append_tool_result(
+                        messages,
+                        tc,
+                        json.dumps({"error": "tool_not_permitted", "detail": str(exc)}),
+                        is_error=True,
+                    )
+                except (TypeError, ValueError) as exc:
+                    self._append_tool_result(
+                        messages,
+                        tc,
+                        json.dumps({"error": "bad_arguments", "detail": str(exc)}),
+                        is_error=True,
+                    )
+                except Exception as exc:
+                    # Backend/DB errors (e.g. CypherSyntaxError from a malformed
+                    # cypher_query) — feed back so the agent can retry.
+                    self._append_tool_result(
+                        messages,
+                        tc,
+                        json.dumps(
+                            {
+                                "error": type(exc).__name__,
+                                "detail": str(exc),
+                            }
+                        ),
+                        is_error=True,
+                    )
+        return last_text, messages
+
+    # ── run_stream ────────────────────────────────────────────────────────────
+
     async def run_stream(
         self, message: str, session_id: str | None
     ) -> AsyncGenerator[tuple[str | None, Any], None]:
-        """Streaming variant of run(). Yields (token, None) pairs, then (None, provenance).
+        """Streaming variant of run(). Yields (token, None) pairs, then
+        (None, provenance).
 
-        Only direct mode streams token-by-token. Other modes yield the full response
-        as a single token then the provenance payload.
+        - direct: token-by-token from a single LLM call after optional graph_search.
+        - research: runs the tool-use loop non-streamed; once the model
+          produces a turn with no tool_calls, re-runs that final turn
+          streamed so the user sees tokens flow.
+        - analytical / conversational: non-streamed (fall back to run()).
         """
         prov = ProvenanceCollector()
         mode = self._agent.get("reasoning_mode", "direct")
@@ -412,7 +554,7 @@ class AgentExecutor:
             context = ""
             if "graph_search" in self._agent.get("tools", []):
                 nodes = await self._dispatch("graph_search", {"query": message}, prov)
-                context = _format_nodes(nodes)
+                context = _format_tool_result_json(nodes)
 
             user_content = (
                 f"Context:\n{context}\n\nQuestion: {message}" if context else message
@@ -430,16 +572,45 @@ class AgentExecutor:
                 full_response, prov._nodes
             )
             yield None, prov.to_payload()
-        else:
-            # Non-direct modes: collect full response then yield once
-            chat_resp = await self.run(message, session_id)
-            yield chat_resp.response, None
-            yield None, chat_resp.provenance
+            return
+
+        if mode == "research":
+            system = (self._agent.get("system_prompt") or "").strip() or (
+                "You are a helpful research agent."
+            )
+            # Drive the tool-use loop first to gather evidence + decide a
+            # final answer. The model's last (no-tool_calls) turn is what
+            # we want to stream — re-issue it with streaming.
+            _final_text, messages = await self._tool_use_loop(message, prov, system)
+
+            # The loop already accumulated all messages; the last call
+            # produced a no-tool_calls response which we want streamed.
+            # Re-call without tools to get a streaming completion of the
+            # final answer.
+            full_response = ""
+            async for token in self._call_llm_stream(messages, system_prompt=system):
+                full_response += token
+                yield token, None
+
+            prov.nodes_used_in_response = _extract_cited_nodes(
+                full_response, prov._nodes
+            )
+            yield None, prov.to_payload()
+            return
+
+        # analytical / conversational / unknown — non-streamed fallback
+        chat_resp = await self.run(message, session_id)
+        yield chat_resp.response, None
+        yield None, chat_resp.provenance
 
     # ── Tool dispatch ─────────────────────────────────────────────────────────
 
     async def _dispatch(
-        self, name: str, args: dict, prov: ProvenanceCollector
+        self,
+        name: str,
+        args: dict,
+        prov: ProvenanceCollector,
+        tool_call_id: str | None = None,
     ) -> list[NodeResult]:
         graph_id = self._agent["graph_id"]
         method = getattr(self._toolkit, name, None)
@@ -455,7 +626,7 @@ class AgentExecutor:
         else:
             nodes = result
 
-        prov.record_tool(name, nodes)
+        prov.record_tool(name, nodes, tool_call_id=tool_call_id)
         return nodes
 
     # ── Reasoning modes ───────────────────────────────────────────────────────
@@ -464,95 +635,36 @@ class AgentExecutor:
         context = ""
         if "graph_search" in self._agent.get("tools", []):
             nodes = await self._dispatch("graph_search", {"query": message}, prov)
-            context = _format_nodes(nodes)
+            context = _format_tool_result_json(nodes)
 
         user_content = (
             f"Context:\n{context}\n\nQuestion: {message}" if context else message
         )
-        return await self._call_llm([{"role": "user", "content": user_content}])
+        resp = await self._call_llm([{"role": "user", "content": user_content}])
+        return resp.text
 
     async def _research(self, message: str, prov: ProvenanceCollector) -> str:
-        tools_list = ", ".join(self._agent.get("tools", []))
-        react_block = _REACT_SYSTEM.format(tools=tools_list)
-        # Prepend the agent's own system_prompt (grounding rules, refusal phrase,
-        # citation requirement, etc.) so research-mode answers still follow the
-        # configured persona instead of pure ReAct defaults.
-        configured = (self._agent.get("system_prompt") or "").strip()
-        system = f"{configured}\n\n{react_block}" if configured else react_block
-        messages: list[dict] = [{"role": "user", "content": message}]
-
-        for _ in range(5):
-            raw = await self._call_llm(messages, system_prompt=system)
-            messages.append({"role": "assistant", "content": raw})
-
-            decision = _parse_react_decision(raw)
-            if decision is None:
-                # Unparseable response — treat as final answer
-                return raw
-
-            action = decision.get("action", "answer")
-            if action == "answer":
-                return decision.get("text", raw)
-
-            # Tool call
-            args = decision.get("args", {})
-            try:
-                nodes = await self._dispatch(action, args, prov)
-            except (ToolNotPermittedError, TypeError, ValueError) as exc:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": f"Tool error: {exc}. Try a different tool or fix the args.",
-                    }
-                )
-                continue
-            except Exception as exc:
-                # Backend/DB errors (e.g. CypherSyntaxError from a malformed
-                # cypher_query) — feed back to the agent so it can retry with
-                # corrected args rather than crashing the whole request.
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Tool '{action}' raised an error: {type(exc).__name__}: {exc}. "
-                            f"Fix the arguments and try again."
-                        ),
-                    }
-                )
-                continue
-
-            tool_result = _format_nodes(nodes)
-            messages.append(
-                {"role": "user", "content": f"Tool '{action}' result:\n{tool_result}"}
-            )
-
-        # Iteration cap reached — generate final answer with accumulated context
-        messages.append(
-            {
-                "role": "user",
-                "content": "Please provide your final answer based on the information gathered so far.",
-            }
+        """Native tool-use loop. The model decides which tools to call
+        and when to stop, using each tool result as input to its next
+        decision."""
+        system = (self._agent.get("system_prompt") or "").strip() or (
+            "You are a helpful research agent."
         )
-        return await self._call_llm(messages, system_prompt=system)
+        final_text, _messages = await self._tool_use_loop(message, prov, system)
+        return final_text or "(no final answer produced)"
 
     async def _analytical(self, message: str, prov: ProvenanceCollector) -> str:
-        context = ""
-        if "graph_search" in self._agent.get("tools", []):
-            nodes = await self._dispatch("graph_search", {"query": message}, prov)
-            context = _format_nodes(nodes)
+        """Tool-use loop with a structured-reasoning system-prompt suffix.
 
-        user_content = (
-            (
-                f"Context:\n{context}\n\nQuestion: {message}\n\n"
-                "Think step by step before giving your final answer.\n\n"
-                "Reasoning:\n"
-            )
-            if context
-            else (
-                f"{message}\n\nThink step by step before giving your final answer.\n\nReasoning:\n"
-            )
+        Same mechanics as research; the suffix nudges the model to lay
+        out its analysis explicitly in the final answer.
+        """
+        configured = (self._agent.get("system_prompt") or "").strip() or (
+            "You are a careful analytical assistant."
         )
-        return await self._call_llm([{"role": "user", "content": user_content}])
+        system = configured + _ANALYTICAL_SUFFIX
+        final_text, _messages = await self._tool_use_loop(message, prov, system)
+        return final_text or "(no final answer produced)"
 
     async def _conversational(
         self, message: str, session_id: str | None, prov: ProvenanceCollector
@@ -565,7 +677,7 @@ class AgentExecutor:
         context = ""
         if "graph_search" in self._agent.get("tools", []):
             nodes = await self._dispatch("graph_search", {"query": message}, prov)
-            context = _format_nodes(nodes)
+            context = _format_tool_result_json(nodes)
 
         user_content = (
             f"Context:\n{context}\n\nQuestion: {message}" if context else message
@@ -574,11 +686,11 @@ class AgentExecutor:
         sp = self._agent.get("system_prompt", "You are a helpful assistant.")
         system = sp + _CONVERSATIONAL_SUFFIX
         messages = history + [{"role": "user", "content": user_content}]
-        response = await self._call_llm(messages, system_prompt=system)
+        resp = await self._call_llm(messages, system_prompt=system)
 
         _sessions[session_id] = history + [
             {"role": "user", "content": message},
-            {"role": "assistant", "content": response},
+            {"role": "assistant", "content": resp.text},
         ]
 
-        return response, session_id
+        return resp.text, session_id
