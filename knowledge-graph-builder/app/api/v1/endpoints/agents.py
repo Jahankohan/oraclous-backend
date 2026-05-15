@@ -207,6 +207,16 @@ async def agent_chat(
         conversation_id=body.conversation_id,
         first_message=body.message,
     )
+    # Load conversation context BEFORE writing the new user message so
+    # the executor sees only historical turns (STORY-031 / TASK-105).
+    from app.core.config import settings as _settings
+
+    context_history = await _chat_history.load_context(
+        db,
+        conversation_id=conv.id,
+        max_turns=_settings.CHAT_CONTEXT_MAX_TURNS,
+        max_tokens=_settings.CHAT_CONTEXT_MAX_TOKENS,
+    )
     await _chat_history.write_user_message(
         db, conversation_id=conv.id, content=body.message
     )
@@ -230,7 +240,11 @@ async def agent_chat(
 
     started = time.monotonic()
     try:
-        result: AgentChatResponse = await executor.run(body.message, body.session_id)
+        result: AgentChatResponse = await executor.run(
+            body.message,
+            body.session_id,
+            history=context_history or None,
+        )
     except ToolNotPermittedError as exc:
         latency_ms = int((time.monotonic() - started) * 1000)
         await _chat_history.write_assistant_message(

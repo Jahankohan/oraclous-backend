@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     DIFFBOT_API_KEY: str | None = None
     EMBEDDING_MODEL: str | None = "text-embedding-3-large"
 
+    # Chat conversation context (STORY-031 / TASK-105). When a chat
+    # turn comes in for a known conversation_id, the executor loads up
+    # to CHAT_CONTEXT_MAX_TURNS prior turns from Postgres — trimmed
+    # further so total content stays under CHAT_CONTEXT_MAX_TOKENS.
+    # Older turns drop silently; no summarization v1.
+    CHAT_CONTEXT_MAX_TURNS: int = 20
+    CHAT_CONTEXT_MAX_TOKENS: int = 8000
+
     # Modern Knowledge Graph Configuration
     USE_ENTITY_BASE_TYPE: bool = True  # Use __Entity__ instead of Entity
     ENTITY_BASE_LABEL: str = "__Entity__"  # Base label for all entities

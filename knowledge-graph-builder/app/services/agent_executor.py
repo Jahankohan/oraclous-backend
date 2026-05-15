@@ -311,23 +311,37 @@ class AgentExecutor:
 
     # ── Public entry point ────────────────────────────────────────────────────
 
-    async def run(self, message: str, session_id: str | None) -> AgentChatResponse:
+    async def run(
+        self,
+        message: str,
+        session_id: str | None,
+        history: list[dict] | None = None,
+    ) -> AgentChatResponse:
+        """Execute one turn.
+
+        ``history`` (STORY-031 / TASK-105): prior turns from the
+        persisted conversation as ``[{"role": "user|assistant",
+        "content": "..."}]`` ordered oldest → newest. Prepended to the
+        message list each reasoning mode builds. Defaults to None so
+        existing callers (tests, legacy SDK paths) keep working without
+        a context replay.
+        """
         prov = ProvenanceCollector()
         mode = self._agent.get("reasoning_mode", "direct")
         returned_session_id = session_id
 
         if mode == "direct":
-            response = await self._direct(message, prov)
+            response = await self._direct(message, prov, history=history)
         elif mode == "research":
-            response = await self._research(message, prov)
+            response = await self._research(message, prov, history=history)
         elif mode == "analytical":
-            response = await self._analytical(message, prov)
+            response = await self._analytical(message, prov, history=history)
         elif mode == "conversational":
             response, returned_session_id = await self._conversational(
-                message, session_id, prov
+                message, session_id, prov, history=history
             )
         else:
-            response = await self._direct(message, prov)
+            response = await self._direct(message, prov, history=history)
 
         prov.nodes_used_in_response = _extract_cited_nodes(response, prov._nodes)
         return AgentChatResponse(
@@ -540,6 +554,7 @@ class AgentExecutor:
         message: str,
         prov: ProvenanceCollector,
         system_prompt: str,
+        history: list[dict] | None = None,
     ) -> tuple[str, list[dict]]:
         """Drive the native tool-use loop.
 
@@ -547,11 +562,14 @@ class AgentExecutor:
         with no tool_calls, or when the iteration cap is hit (in which
         case ``final_text`` is whatever text was last produced — caller
         may want to re-prompt for a definitive answer).
+
+        ``history`` is prepended to the message list before the new
+        user message so the model sees prior conversation context.
         """
         tools = tool_schemas_for(
             self._agent.get("tools", []) or [], self._provider_format()
         )
-        messages: list[dict] = [{"role": "user", "content": message}]
+        messages: list[dict] = (history or []) + [{"role": "user", "content": message}]
 
         last_text = ""
         for _ in range(_MAX_TOOL_ITERATIONS):
@@ -604,7 +622,10 @@ class AgentExecutor:
     # ── run_stream ────────────────────────────────────────────────────────────
 
     async def run_stream(
-        self, message: str, session_id: str | None
+        self,
+        message: str,
+        session_id: str | None,
+        history: list[dict] | None = None,
     ) -> AsyncGenerator[tuple[str | None, Any], None]:
         """Streaming variant of run(). Yields (token, None) pairs, then
         (None, provenance).
@@ -614,6 +635,9 @@ class AgentExecutor:
           produces a turn with no tool_calls, re-runs that final turn
           streamed so the user sees tokens flow.
         - analytical / conversational: non-streamed (fall back to run()).
+
+        ``history`` (STORY-031 / TASK-105): prior turns prepended to
+        the message list before the new user message. None disables.
         """
         prov = ProvenanceCollector()
         mode = self._agent.get("reasoning_mode", "direct")
@@ -631,9 +655,10 @@ class AgentExecutor:
             sp = self._agent.get("system_prompt", "You are a helpful assistant.")
 
             full_response = ""
-            async for token in self._call_llm_stream(
-                [{"role": "user", "content": user_content}], system_prompt=sp
-            ):
+            stream_messages = (history or []) + [
+                {"role": "user", "content": user_content}
+            ]
+            async for token in self._call_llm_stream(stream_messages, system_prompt=sp):
                 full_response += token
                 yield token, None
 
@@ -650,7 +675,9 @@ class AgentExecutor:
             # Drive the tool-use loop first to gather evidence + decide a
             # final answer. The model's last (no-tool_calls) turn is what
             # we want to stream — re-issue it with streaming.
-            _final_text, messages = await self._tool_use_loop(message, prov, system)
+            _final_text, messages = await self._tool_use_loop(
+                message, prov, system, history=history
+            )
 
             # The loop already accumulated all messages; the last call
             # produced a no-tool_calls response which we want streamed.
@@ -668,7 +695,7 @@ class AgentExecutor:
             return
 
         # analytical / conversational / unknown — non-streamed fallback
-        chat_resp = await self.run(message, session_id)
+        chat_resp = await self.run(message, session_id, history=history)
         yield chat_resp.response, None
         yield None, chat_resp.provenance
 
@@ -700,7 +727,12 @@ class AgentExecutor:
 
     # ── Reasoning modes ───────────────────────────────────────────────────────
 
-    async def _direct(self, message: str, prov: ProvenanceCollector) -> str:
+    async def _direct(
+        self,
+        message: str,
+        prov: ProvenanceCollector,
+        history: list[dict] | None = None,
+    ) -> str:
         context = ""
         primary = _pick_primary_retrieval_tool(self._agent.get("tools", []))
         if primary is not None:
@@ -710,20 +742,33 @@ class AgentExecutor:
         user_content = (
             f"Context:\n{context}\n\nQuestion: {message}" if context else message
         )
-        resp = await self._call_llm([{"role": "user", "content": user_content}])
+        messages = (history or []) + [{"role": "user", "content": user_content}]
+        resp = await self._call_llm(messages)
         return resp.text
 
-    async def _research(self, message: str, prov: ProvenanceCollector) -> str:
+    async def _research(
+        self,
+        message: str,
+        prov: ProvenanceCollector,
+        history: list[dict] | None = None,
+    ) -> str:
         """Native tool-use loop. The model decides which tools to call
         and when to stop, using each tool result as input to its next
         decision."""
         system = (self._agent.get("system_prompt") or "").strip() or (
             "You are a helpful research agent."
         )
-        final_text, _messages = await self._tool_use_loop(message, prov, system)
+        final_text, _messages = await self._tool_use_loop(
+            message, prov, system, history=history
+        )
         return final_text or "(no final answer produced)"
 
-    async def _analytical(self, message: str, prov: ProvenanceCollector) -> str:
+    async def _analytical(
+        self,
+        message: str,
+        prov: ProvenanceCollector,
+        history: list[dict] | None = None,
+    ) -> str:
         """Tool-use loop with a structured-reasoning system-prompt suffix.
 
         Same mechanics as research; the suffix nudges the model to lay
@@ -733,16 +778,28 @@ class AgentExecutor:
             "You are a careful analytical assistant."
         )
         system = configured + _ANALYTICAL_SUFFIX
-        final_text, _messages = await self._tool_use_loop(message, prov, system)
+        final_text, _messages = await self._tool_use_loop(
+            message, prov, system, history=history
+        )
         return final_text or "(no final answer produced)"
 
     async def _conversational(
-        self, message: str, session_id: str | None, prov: ProvenanceCollector
+        self,
+        message: str,
+        session_id: str | None,
+        prov: ProvenanceCollector,
+        history: list[dict] | None = None,
     ) -> tuple[str, str]:
         if session_id is None:
             session_id = str(uuid4())
 
-        history = list(_sessions.get(session_id, []))
+        # Prefer Postgres-backed history (STORY-031 / TASK-105) when
+        # available; fall back to the legacy in-process _sessions cache
+        # for callers that haven't passed a conversation_id through yet.
+        if history is not None:
+            prior_turns = list(history)
+        else:
+            prior_turns = list(_sessions.get(session_id, []))
 
         context = ""
         primary = _pick_primary_retrieval_tool(self._agent.get("tools", []))
@@ -756,10 +813,10 @@ class AgentExecutor:
 
         sp = self._agent.get("system_prompt", "You are a helpful assistant.")
         system = sp + _CONVERSATIONAL_SUFFIX
-        messages = history + [{"role": "user", "content": user_content}]
+        messages = prior_turns + [{"role": "user", "content": user_content}]
         resp = await self._call_llm(messages, system_prompt=system)
 
-        _sessions[session_id] = history + [
+        _sessions[session_id] = prior_turns + [
             {"role": "user", "content": message},
             {"role": "assistant", "content": resp.text},
         ]

@@ -117,6 +117,17 @@ async def chat_with_graph(
         conversation_id=body.conversation_id,
         first_message=body.query,
     )
+    # Load prior turns BEFORE writing the new user message so the
+    # executor sees only the historical context (not the message it's
+    # about to answer).
+    from app.core.config import settings as _settings
+
+    context_history = await _chat_history.load_context(
+        db,
+        conversation_id=conv.id,
+        max_turns=_settings.CHAT_CONTEXT_MAX_TURNS,
+        max_tokens=_settings.CHAT_CONTEXT_MAX_TOKENS,
+    )
     await _chat_history.write_user_message(
         db, conversation_id=conv.id, content=body.query
     )
@@ -131,7 +142,11 @@ async def chat_with_graph(
         executor = await AgentExecutor.from_chat_config(
             driver=neo4j_client.async_driver, agent_def=agent_def
         )
-        agent_response = await executor.run(message=body.query, session_id=None)
+        agent_response = await executor.run(
+            message=body.query,
+            session_id=None,
+            history=context_history or None,
+        )
     except Exception as e:
         latency_ms = int((time.monotonic() - started) * 1000)
         logger.error(f"Chat error for graph {body.graph_id}: {e}")
@@ -267,6 +282,8 @@ async def stream_chat_with_graph(
     # Persist the user turn + resolve conversation BEFORE streaming.
     # This commits in its own transaction so the user's message is
     # never lost even if the stream dies before the first chunk.
+    from app.core.config import settings as _settings
+
     async with async_session_maker() as setup_session:
         await setup_session.execute(
             sql_text("SELECT set_config('app.current_user_id', :uid, true)").bindparams(
@@ -280,6 +297,13 @@ async def stream_chat_with_graph(
             agent_id=None,
             conversation_id=body.conversation_id,
             first_message=body.query,
+        )
+        # Load context BEFORE writing the new user message.
+        context_history = await _chat_history.load_context(
+            setup_session,
+            conversation_id=conv.id,
+            max_turns=_settings.CHAT_CONTEXT_MAX_TURNS,
+            max_tokens=_settings.CHAT_CONTEXT_MAX_TOKENS,
         )
         await _chat_history.write_user_message(
             setup_session, conversation_id=conv.id, content=body.query
@@ -349,7 +373,9 @@ async def stream_chat_with_graph(
                 yield f"data: {json.dumps(source_payload)}\n\n"
 
             async for token, prov_payload in executor.run_stream(
-                message=body.query, session_id=None
+                message=body.query,
+                session_id=None,
+                history=context_history or None,
             ):
                 if token is not None:
                     full_response += token

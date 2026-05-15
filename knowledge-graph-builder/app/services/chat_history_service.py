@@ -23,7 +23,7 @@ import uuid
 from typing import Any
 
 import zstandard as zstd
-from sqlalchemy import select
+from sqlalchemy import asc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat import (
@@ -34,6 +34,31 @@ from app.models.chat import (
 from app.services.llm_pricing import estimate_cost_usd
 
 logger = logging.getLogger(__name__)
+
+# Token estimator — lazy-loaded so tests that don't use it don't pay the
+# import cost. ``cl100k_base`` is a sensible default approximation for
+# both OpenAI and Anthropic models; it overestimates slightly for
+# Claude (which uses a different tokenizer) but the cap is a soft
+# guardrail, not a hard contract.
+_TIKTOKEN_ENCODER = None
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token count for context budgeting. Best-effort."""
+    global _TIKTOKEN_ENCODER
+    if _TIKTOKEN_ENCODER is None:
+        try:
+            import tiktoken
+
+            _TIKTOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+        except Exception:  # pragma: no cover  — tiktoken always installed
+            _TIKTOKEN_ENCODER = False
+    if _TIKTOKEN_ENCODER is False:
+        # Char/4 ≈ tokens for English. Coarse but acceptable as a
+        # last-resort fallback.
+        return max(1, len(text) // 4)
+    return len(_TIKTOKEN_ENCODER.encode(text))
+
 
 # Caps for tool result persistence (ADR-020 / STORY-031 decisions table).
 MAX_RAW_BYTES = 50 * 1024 * 1024  # 50 MB pre-compression
@@ -218,6 +243,60 @@ class ChatHistoryService:
         db.add(row)
         await db.flush()
         return row
+
+    async def load_context(
+        self,
+        db: AsyncSession,
+        *,
+        conversation_id: uuid.UUID,
+        max_turns: int = 20,
+        max_tokens: int = 8000,
+    ) -> list[dict[str, str]]:
+        """Load prior turns to inject as conversation context for the agent.
+
+        Returns ``[{"role": "user|assistant", "content": "..."}]`` ordered
+        oldest → newest. Trimmed from the oldest end until both caps hold.
+
+        Excludes:
+        * ``cancelled = TRUE`` assistant turns — partial garbage is worse
+          than missing context.
+        * Empty assistant turns (error cases where ``content = ''``).
+        * System role turns — those are owned by the agent definition,
+          not by the conversation.
+
+        The current in-flight user message MUST NOT be in the conversation
+        yet when this is called — callers should invoke ``load_context``
+        BEFORE ``write_user_message``.
+        """
+        stmt = (
+            select(ChatMessage)
+            .where(
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.role.in_(("user", "assistant")),
+            )
+            .order_by(asc(ChatMessage.created_at))
+        )
+        rows = list((await db.execute(stmt)).scalars().all())
+
+        # Filter out unusable assistant turns.
+        cleaned: list[dict[str, str]] = []
+        for m in rows:
+            if m.role == "assistant" and (m.cancelled or not m.content):
+                continue
+            cleaned.append({"role": m.role, "content": m.content})
+
+        # Hard turn cap from the newest end.
+        if len(cleaned) > max_turns:
+            cleaned = cleaned[-max_turns:]
+
+        # Token cap — drop oldest entries until total estimated tokens
+        # are <= max_tokens.
+        total = sum(_estimate_tokens(m["content"]) for m in cleaned)
+        while cleaned and total > max_tokens:
+            removed = cleaned.pop(0)
+            total -= _estimate_tokens(removed["content"])
+
+        return cleaned
 
     async def update_message_for_cancel(
         self,
