@@ -454,7 +454,8 @@ async def delete_graph(
 @router.get(
     "/graphs/{graph_id}/chat/history",
     response_model=list[ChatHistoryEntry],
-    summary="Return persisted chat turns for a graph",
+    summary="DEPRECATED — flat chat-turn list. Use /chat/conversations instead.",
+    deprecated=True,
     responses={
         403: {"description": "Caller lacks read access to the graph"},
     },
@@ -464,23 +465,27 @@ async def get_chat_history(
     user_id: str = Depends(get_current_user_id),
 ):
     """
-    Return persisted chat turns for the requesting user, ordered ascending
-    by `created_at`.
+    DEPRECATED (STORY-031 / TASK-104). Use the conversation-aware
+    endpoints introduced by TASK-104:
 
-    **Status (TASK-050):** the backend does not yet persist chat turns.
-    This endpoint always returns an empty list with the typed
-    `ChatHistoryEntry` shape so the frontend can mount the route safely;
-    a follow-up task will add a transcript store (Postgres table or a
-    `(:ChatTurn)` Neo4j subgraph) and start populating it from the
-    `POST /chat` and `POST /chat/stream` handlers.
+    * ``GET /graphs/{graph_id}/chat/conversations`` — list threads
+    * ``GET /chat/conversations/{conversation_id}/messages`` — read turns
 
-    Requires `read`-level access via ReBAC.
+    The persistence layer landed under STORY-031 stores transcripts in
+    Postgres. This endpoint still returns an empty list for one
+    release cycle so existing clients don't 410 on cutover; the new
+    endpoints expose the same data with conversation grouping, audit
+    metadata, tool-call audit, and feedback.
+
+    Requires ``read``-level access via ReBAC.
     """
     # ReBAC check — read level required to view chat history
     await verify_graph_access(str(graph_id), "read", user_id)
 
-    # No persistence layer today (option (b) per TASK-050 decisions table).
-    # Return a typed empty list so the frontend contract holds.
+    # Soft-deprecation: the data exists now (TASK-103) but this
+    # endpoint never returned it. Returning an empty list preserves
+    # the original TASK-050 contract; clients should migrate to
+    # /chat/conversations.
     return []
 
 
