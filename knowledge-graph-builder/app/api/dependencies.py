@@ -1,12 +1,14 @@
 import contextvars
+import uuid as uuid_lib
 from collections.abc import AsyncGenerator
 from typing import Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import async_session_maker, get_db
 from app.services.auth_service import auth_service
 from app.services.rebac_service import rebac_service
 
@@ -43,6 +45,47 @@ async def get_database() -> AsyncGenerator[AsyncSession, None]:
     """Get database session"""
     async for session in get_db():
         yield session
+
+
+async def get_chat_db(
+    user_id: str = Depends(get_current_user_id),
+) -> AsyncGenerator[AsyncSession, None]:
+    """Database session for chat endpoints with row-level security enabled.
+
+    Sets the ``app.current_user_id`` Postgres GUC for the session via
+    ``set_config(name, value, is_local := true)`` so the RLS policies on
+    ``chat_conversations`` and ``chat_messages`` filter by the
+    authenticated principal. Defense-in-depth on top of the explicit
+    per-query ``user_id`` filter required by ADR-020.
+
+    The user_id is parsed as a UUID before being passed to set_config to
+    reject malformed input (defense against header injection / spoofing).
+    """
+    try:
+        uuid_lib.UUID(user_id)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid principal id",
+        ) from exc
+
+    async with async_session_maker() as session:
+        try:
+            # is_local=true scopes the setting to the current transaction.
+            # SQLAlchemy autobegins a transaction on the first execute, so
+            # this set_config call is the first statement and binds the
+            # GUC for everything that follows on this session.
+            await session.execute(
+                text("SELECT set_config('app.current_user_id', :uid, true)").bindparams(
+                    uid=user_id
+                )
+            )
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 
 
 async def verify_graph_access(
