@@ -4,10 +4,17 @@ CRUD for :Agent nodes and the chat execution endpoint.
 All operations are scoped to a single graph_id — no cross-graph access.
 """
 
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id, verify_graph_access
+from app.api.dependencies import (
+    get_chat_db,
+    get_current_user_id,
+    verify_graph_access,
+)
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.schemas.agent_schemas import (
@@ -21,9 +28,12 @@ from app.schemas.agent_schemas import (
 from app.services.agent_executor import AgentExecutor
 from app.services.agent_service import AgentService
 from app.services.agent_tools import ToolNotPermittedError
+from app.services.chat_history_service import ChatHistoryService
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+_chat_history = ChatHistoryService()
 
 
 def _agent_service() -> AgentService:
@@ -173,7 +183,14 @@ async def agent_chat(
     agent_id: str,
     body: ChatRequest,
     user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_chat_db),
 ):
+    """Run a chat turn against an agent and persist the conversation.
+
+    STORY-031: the user turn, the assistant turn, and per-tool audit
+    rows are written to Postgres before the response is returned.
+    A new conversation is created if ``body.conversation_id`` is None.
+    """
     await verify_graph_access(graph_id, "read", user_id)
 
     if not neo4j_client.async_driver:
@@ -181,6 +198,18 @@ async def agent_chat(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Neo4j connection not available",
         )
+
+    conv = await _chat_history.get_or_create_conversation(
+        db,
+        user_id=user_id,
+        graph_id=graph_id,
+        agent_id=agent_id,
+        conversation_id=body.conversation_id,
+        first_message=body.message,
+    )
+    await _chat_history.write_user_message(
+        db, conversation_id=conv.id, content=body.message
+    )
 
     try:
         executor = await AgentExecutor.from_neo4j(
@@ -199,10 +228,66 @@ async def agent_chat(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         )
 
+    started = time.monotonic()
     try:
-        return await executor.run(body.message, body.session_id)
+        result: AgentChatResponse = await executor.run(body.message, body.session_id)
     except ToolNotPermittedError as exc:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        await _chat_history.write_assistant_message(
+            db,
+            conversation_id=conv.id,
+            content="",
+            latency_ms=latency_ms,
+            error=str(exc),
+        )
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         )
+    except Exception as exc:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        await _chat_history.write_assistant_message(
+            db,
+            conversation_id=conv.id,
+            content="",
+            latency_ms=latency_ms,
+            error=str(exc),
+        )
+        await db.commit()
+        raise
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    asst_msg = await _chat_history.write_assistant_message(
+        db,
+        conversation_id=conv.id,
+        content=result.response,
+    )
+    # NOTE: model/provider/tokens are not surfaced by AgentExecutor today.
+    # A follow-up backend task should thread them through provenance so
+    # cost accounting becomes meaningful here. For now the audit row
+    # records latency only.
+    asst_msg.latency_ms = latency_ms
+
+    for idx, tc in enumerate(result.provenance.tool_calls or []):
+        try:
+            await _chat_history.write_tool_call(
+                db,
+                message_id=asst_msg.id,
+                sequence_index=idx,
+                tool_name=tc.get("name", "unknown"),
+                args=None,
+                result={"node_count": tc.get("node_count")}
+                if tc.get("node_count") is not None
+                else None,
+            )
+        except Exception:
+            logger.exception(
+                "agent_chat: failed to persist tool call %s", tc.get("name")
+            )
+
+    await db.commit()
+
+    # Surface the persisted conversation id to the caller.
+    result.conversation_id = str(conv.id)
+    return result

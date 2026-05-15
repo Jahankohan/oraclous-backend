@@ -16,17 +16,22 @@ The legacy ``ChatService`` remains importable but is deprecated.
 """
 
 import json
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import security, verify_graph_access
+from app.api.dependencies import (
+    get_chat_db,
+    get_current_user_id,
+    verify_graph_access,
+)
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.rate_limiter import limiter
 from app.schemas.chat_schemas import (
-    ChatMode,
+    ChatMode,  # noqa: F401  (re-exported for backwards-compat callers)
     ChatModesResponse,
     ChatRequest,
     ChatResponse,
@@ -35,17 +40,19 @@ from app.schemas.chat_schemas import (
     get_all_modes,
 )
 from app.services.agent_executor import AgentExecutor
-from app.services.auth_service import auth_service
 from app.services.chat_engine import (
     build_default_agent_config,
     derive_grounding,
     mode_to_retriever_label,
     tool_for_mode,
 )
+from app.services.chat_history_service import ChatHistoryService
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+_chat_history = ChatHistoryService()
 
 
 def _provenance_node_to_source(node: dict) -> SourceInfo:
@@ -81,7 +88,8 @@ def _provenance_node_to_source(node: dict) -> SourceInfo:
 async def chat_with_graph(
     request: Request,
     body: ChatRequest,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_chat_db),
 ) -> ChatResponse:
     """
     Send a natural language query to a knowledge graph and receive a
@@ -94,11 +102,26 @@ async def chat_with_graph(
     - ``hybrid`` / ``hybrid_plus`` — vector + fulltext + graph traversal
       (``hybrid_cypher_search``)
     - ``natural`` — text-to-Cypher (``cypher_query``)
+
+    STORY-031: the turn (user + assistant + tool calls) is persisted
+    to Postgres. If ``conversation_id`` is omitted the backend creates
+    a fresh conversation and returns its id in the response.
     """
-    user = await auth_service.verify_token(credentials.credentials)
-    user_id = str(user["id"])
     await verify_graph_access(body.graph_id, "read", user_id)
 
+    conv = await _chat_history.get_or_create_conversation(
+        db,
+        user_id=user_id,
+        graph_id=body.graph_id,
+        agent_id=None,
+        conversation_id=body.conversation_id,
+        first_message=body.query,
+    )
+    await _chat_history.write_user_message(
+        db, conversation_id=conv.id, content=body.query
+    )
+
+    started = time.monotonic()
     try:
         logger.info(f"chat: graph={body.graph_id} mode={body.mode}")
         agent_def = build_default_agent_config(
@@ -110,12 +133,25 @@ async def chat_with_graph(
         )
         agent_response = await executor.run(message=body.query, session_id=None)
     except Exception as e:
+        latency_ms = int((time.monotonic() - started) * 1000)
         logger.error(f"Chat error for graph {body.graph_id}: {e}")
+        # Persist the failed assistant turn so the conversation history
+        # reflects the attempt rather than dropping it silently.
+        await _chat_history.write_assistant_message(
+            db,
+            conversation_id=conv.id,
+            content="",
+            latency_ms=latency_ms,
+            reasoning_mode=body.mode.value if body.mode else "enhanced",
+            retriever_used=mode_to_retriever_label(body.mode),
+            error=str(e),
+        )
+        await db.commit()
         raise HTTPException(
             status_code=500, detail=f"Chat processing failed: {e!s}"
         ) from None
 
-    # Adapt AgentChatResponse → ChatResponse
+    latency_ms = int((time.monotonic() - started) * 1000)
     provenance = agent_response.provenance
     nodes = provenance.nodes or []
     is_grounded, confidence = derive_grounding(agent_response.response, nodes)
@@ -123,6 +159,35 @@ async def chat_with_graph(
     sources: list[SourceInfo] = []
     if body.include_sources:
         sources = [_provenance_node_to_source(n) for n in nodes]
+
+    asst_msg = await _chat_history.write_assistant_message(
+        db,
+        conversation_id=conv.id,
+        content=agent_response.response,
+        latency_ms=latency_ms,
+        reasoning_mode=body.mode.value if body.mode else "enhanced",
+        retriever_used=mode_to_retriever_label(body.mode),
+        sources=[s.model_dump(mode="json") for s in sources] if sources else None,
+    )
+
+    for idx, tc in enumerate(provenance.tool_calls or []):
+        try:
+            await _chat_history.write_tool_call(
+                db,
+                message_id=asst_msg.id,
+                sequence_index=idx,
+                tool_name=tc.get("name", "unknown"),
+                args=None,  # provenance doesn't surface tool args today
+                result={"node_count": tc.get("node_count")}
+                if tc.get("node_count") is not None
+                else None,
+            )
+        except Exception:
+            # Tool-call audit is best-effort — never fail the user
+            # response because a tool row couldn't be written.
+            logger.exception("failed to persist tool call %s", tc.get("name"))
+
+    await db.commit()
 
     context = None
     if body.return_context:
@@ -150,7 +215,7 @@ async def chat_with_graph(
         ),
         context=context,
         sources=sources if body.include_sources else None,
-        conversation_id=body.conversation_id,
+        conversation_id=str(conv.id),
         metadata={
             "engine": "agent_executor",
             "tool_used": tool_for_mode(body.mode.value if body.mode else None),
@@ -172,27 +237,72 @@ async def chat_with_graph(
 async def stream_chat_with_graph(
     request: Request,
     body: ChatRequest,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    user_id: str = Depends(get_current_user_id),
 ) -> StreamingResponse:
     """Stream a chat response via Server-Sent Events.
 
-    Event order (preserved from pre-STORY-8 ChatService contract):
-    1. One ``source`` event per retrieved node
-    2. Multiple ``answer_chunk`` events as the LLM streams its answer
-    3. A single ``done`` event with final metadata
-    4. An ``error`` event only on failure
+    Event order:
+
+    1. A ``meta`` event carrying the persisted ``conversation_id``
+    2. One ``source`` event per retrieved node
+    3. Multiple ``answer_chunk`` events as the LLM streams its answer
+    4. A single ``done`` event with final metadata
+    5. An ``error`` event only on failure
 
     Implementation note: we dispatch the retrieval tool once
     synchronously to emit ``source`` events, then route the LLM call
-    through ``executor.run_stream`` for token-by-token streaming. The
-    executor re-dispatches the same tool during run_stream — one extra
-    round trip in exchange for the source-first contract.
+    through ``executor.run_stream`` for token-by-token streaming.
+
+    STORY-031: the user turn is persisted in a setup transaction
+    before streaming begins. The assistant turn + tool calls are
+    persisted in a separate transaction after ``done`` fires, or as a
+    cancelled/error turn if the stream aborts.
     """
-    user = await auth_service.verify_token(credentials.credentials)
-    user_id = str(user["id"])
+    from sqlalchemy import text as sql_text
+
+    from app.core.database import async_session_maker
+
     await verify_graph_access(body.graph_id, "read", user_id)
 
+    # Persist the user turn + resolve conversation BEFORE streaming.
+    # This commits in its own transaction so the user's message is
+    # never lost even if the stream dies before the first chunk.
+    async with async_session_maker() as setup_session:
+        await setup_session.execute(
+            sql_text("SELECT set_config('app.current_user_id', :uid, true)").bindparams(
+                uid=user_id
+            )
+        )
+        conv = await _chat_history.get_or_create_conversation(
+            setup_session,
+            user_id=user_id,
+            graph_id=body.graph_id,
+            agent_id=None,
+            conversation_id=body.conversation_id,
+            first_message=body.query,
+        )
+        await _chat_history.write_user_message(
+            setup_session, conversation_id=conv.id, content=body.query
+        )
+        await setup_session.commit()
+        conversation_id_str = str(conv.id)
+
     async def event_generator():
+        # Emit meta event so the client knows which conversation this
+        # stream belongs to (especially important when conversation_id
+        # was omitted in the request and the backend created one).
+        yield (
+            "data: "
+            + json.dumps({"type": "meta", "conversation_id": conversation_id_str})
+            + "\n\n"
+        )
+
+        full_response = ""
+        retrieved_sources: list[dict] = []
+        tool_calls_seen: list[dict] = []
+        started = time.monotonic()
+        had_error: str | None = None
+
         try:
             agent_def = build_default_agent_config(
                 graph_id=str(body.graph_id),
@@ -226,10 +336,18 @@ async def stream_chat_with_graph(
                     "relevance_score": node_props.get("score"),
                     "content": node_props.get("text") or node.label,
                 }
+                # Buffer source rows for later persistence as the
+                # assistant turn's ``sources`` JSONB column.
+                retrieved_sources.append(
+                    {
+                        "node_id": node.id,
+                        "node_labels": [node.label] if node.label else None,
+                        "relevance_score": node_props.get("score"),
+                        "content": node_props.get("text") or node.label,
+                    }
+                )
                 yield f"data: {json.dumps(source_payload)}\n\n"
 
-            # Stream the answer tokens via the executor.
-            full_response = ""
             async for token, prov_payload in executor.run_stream(
                 message=body.query, session_id=None
             ):
@@ -242,6 +360,8 @@ async def stream_chat_with_graph(
                     )
                 else:
                     nodes = prov_payload.nodes if prov_payload else []
+                    if prov_payload:
+                        tool_calls_seen = list(prov_payload.tool_calls or [])
                     is_grounded, confidence = derive_grounding(
                         full_response,
                         [{"id": n.get("id"), "label": n.get("label")} for n in nodes],
@@ -254,8 +374,65 @@ async def stream_chat_with_graph(
                     }
                     yield f"data: {json.dumps(done_payload)}\n\n"
         except Exception as e:
+            had_error = str(e)
             logger.error(f"Stream chat error for graph {body.graph_id}: {e}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+        # Persist the assistant turn (or its failure) regardless of
+        # how the stream ended. Uses its own transaction with the GUC
+        # set so RLS lets the writes through.
+        latency_ms = int((time.monotonic() - started) * 1000)
+        try:
+            async with async_session_maker() as write_session:
+                await write_session.execute(
+                    sql_text(
+                        "SELECT set_config('app.current_user_id', :uid, true)"
+                    ).bindparams(uid=user_id)
+                )
+                # If the client disconnected mid-stream, full_response
+                # contains the partial content; mark cancelled.
+                cancelled = (
+                    had_error is None
+                    and full_response != ""
+                    and await request.is_disconnected()
+                )
+                asst_msg = await _chat_history.write_assistant_message(
+                    write_session,
+                    conversation_id=conv.id,
+                    content=full_response,
+                    latency_ms=latency_ms,
+                    reasoning_mode=body.mode.value if body.mode else "enhanced",
+                    retriever_used=mode_to_retriever_label(body.mode),
+                    sources=retrieved_sources or None,
+                    error=had_error,
+                    cancelled=cancelled,
+                )
+                for idx, tc in enumerate(tool_calls_seen):
+                    try:
+                        await _chat_history.write_tool_call(
+                            write_session,
+                            message_id=asst_msg.id,
+                            sequence_index=idx,
+                            tool_name=tc.get("name", "unknown"),
+                            args=None,
+                            result={"node_count": tc.get("node_count")}
+                            if tc.get("node_count") is not None
+                            else None,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "stream: failed to persist tool call %s",
+                            tc.get("name"),
+                        )
+                await write_session.commit()
+        except Exception:
+            # Persistence failure on the write path must not break the
+            # client connection — the response stream has already
+            # completed. Log and move on.
+            logger.exception(
+                "stream: failed to persist assistant turn for conversation %s",
+                conversation_id_str,
+            )
 
     return StreamingResponse(
         event_generator(),
@@ -270,12 +447,13 @@ async def stream_chat_with_graph(
     summary="List available chat modes",
 )
 async def get_chat_modes(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    user_id: str = Depends(get_current_user_id),
 ) -> ChatModesResponse:
     """
     Return all available chat modes with descriptions and use cases.
     """
-    await auth_service.verify_token(credentials.credentials)
+    # user_id is unused but its dependency chain enforces authentication.
+    del user_id
     return ChatModesResponse(
         modes=get_all_modes(),
         default_mode=ChatMode.ENHANCED,
