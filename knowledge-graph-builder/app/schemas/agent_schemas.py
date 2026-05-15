@@ -92,6 +92,10 @@ class AgentCreateResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+    # Persisted-conversation id (STORY-031). When omitted, the chat
+    # handler creates a new conversation and returns its id in
+    # AgentChatResponse.conversation_id.
+    conversation_id: str | None = None
 
 
 # ── Agent tool result types ───────────────────────────────────────────────────
@@ -128,4 +132,6 @@ class ProvenancePayload(BaseModel):
 class AgentChatResponse(BaseModel):
     response: str
     session_id: str | None = None
+    # Persisted conversation this turn was written to (STORY-031).
+    conversation_id: str | None = None
     provenance: ProvenancePayload

@@ -73,6 +73,10 @@ opentelemetry-instrumentation-celery==0.48b0
 opentelemetry-instrumentation-httpx==0.48b0
 opentelemetry-instrumentation-logging==0.48b0
 
+# Chat history (STORY-031): zstd-compress tool-call result blobs
+# before persisting to chat_message_tool_calls.result_compressed.
+zstandard==0.25.0
+
 # Development
 black==25.1.0
 isort==6.0.1
