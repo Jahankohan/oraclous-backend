@@ -64,8 +64,57 @@ def _estimate_tokens(text: str) -> int:
 MAX_RAW_BYTES = 50 * 1024 * 1024  # 50 MB pre-compression
 MAX_COMPRESSED_BYTES = 5 * 1024 * 1024  # 5 MB compressed cap
 
+# Hard cap on decompression output for adversarial zstd payloads (TASK-107).
+# A compressed blob that decompresses past this cap is rejected — the
+# write-path cap (MAX_RAW_BYTES) is the natural ceiling; this is the
+# safety net on the read path so a corrupted/adversarial row can't
+# allocate gigabytes of memory.
+MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024  # 64 MB
+
 _ZSTD_LEVEL = 3
 _compressor = zstd.ZstdCompressor(level=_ZSTD_LEVEL)
+
+
+class CompressionLimitExceeded(Exception):
+    """Decompressed payload exceeded MAX_DECOMPRESSED_BYTES (TASK-107)."""
+
+
+def decompress_result(
+    compressed: bytes | None,
+    compression: str | None,
+) -> bytes | None:
+    """Decompress a tool-call result blob, with a hard size cap.
+
+    Reader-side counterpart to ``_compress_result``. Future readers
+    (export endpoint, future memory features) MUST use this rather
+    than calling ``zstd.ZstdDecompressor().decompress()`` directly —
+    the cap is the only defense against an adversarial blob whose
+    decompression would balloon memory.
+
+    Raises ``CompressionLimitExceeded`` if the payload would exceed
+    ``MAX_DECOMPRESSED_BYTES`` (default 64 MB).
+    """
+    if compressed is None:
+        return None
+    if compression != "zstd":
+        # Unknown / no compression — return as-is.
+        return compressed
+    # Use streaming decompression so we can short-circuit before
+    # allocating the full output buffer.
+    dctx = zstd.ZstdDecompressor()
+    out = bytearray()
+    with dctx.stream_reader(compressed) as reader:
+        while True:
+            chunk = reader.read(65536)
+            if not chunk:
+                break
+            out.extend(chunk)
+            if len(out) > MAX_DECOMPRESSED_BYTES:
+                raise CompressionLimitExceeded(
+                    f"decompressed payload exceeded "
+                    f"{MAX_DECOMPRESSED_BYTES} bytes; refusing to allocate"
+                )
+    return bytes(out)
 
 
 class ChatHistoryService:
