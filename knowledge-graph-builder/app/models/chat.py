@@ -53,11 +53,12 @@ class ChatConversation(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # No FK on user_id — users live in the auth service, not Postgres.
     user_id = Column(UUID(as_uuid=True), nullable=False)
-    graph_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("knowledge_graphs.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # No FK on graph_id either: STORY-025 moved graph identity to Neo4j
+    # (the Postgres ``knowledge_graphs`` table is no longer maintained).
+    # See alembic/versions/chat_persistence_drop_graph_fk.py. A future
+    # task should move chat persistence to Neo4j under :__Chat__ to
+    # eliminate the soft reference entirely.
+    graph_id = Column(UUID(as_uuid=True), nullable=False)
     # No FK on agent_id — agents live in Neo4j (the :Agent:__Platform__ nodes).
     agent_id = Column(UUID(as_uuid=True), nullable=True)
     title = Column(Text, nullable=False)

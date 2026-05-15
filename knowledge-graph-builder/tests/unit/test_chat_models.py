@@ -120,6 +120,14 @@ class TestChatModelsRegistration:
         col = ChatConversation.__table__.c.user_id
         assert col.foreign_keys == set()
 
+    def test_conversation_no_graph_fk(self):
+        """``graph_id`` is a soft UUID reference — STORY-025 moved graph
+        identity to Neo4j, so chat_conversations cannot FK into the
+        Postgres knowledge_graphs table without re-introducing the
+        dual-write problem (see TASK-108)."""
+        col = ChatConversation.__table__.c.graph_id
+        assert col.foreign_keys == set()
+
     def test_conversation_no_agent_fk(self):
         """``agent_id`` is a plain UUID — agents live in Neo4j, not Postgres."""
         col = ChatConversation.__table__.c.agent_id
