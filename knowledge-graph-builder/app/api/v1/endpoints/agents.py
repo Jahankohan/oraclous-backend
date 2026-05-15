@@ -29,6 +29,7 @@ from app.services.agent_executor import AgentExecutor
 from app.services.agent_service import AgentService
 from app.services.agent_tools import ToolNotPermittedError
 from app.services.chat_history_service import ChatHistoryService
+from app.tasks.chat_projection import fire_and_forget as _project_chat_message
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -301,6 +302,10 @@ async def agent_chat(
             )
 
     await db.commit()
+
+    # Fire async Neo4j projection (TASK-106). Postgres is the source of
+    # truth; this is best-effort and never blocks the response.
+    _project_chat_message(str(asst_msg.id), user_id)
 
     # Surface the persisted conversation id to the caller.
     result.conversation_id = str(conv.id)
