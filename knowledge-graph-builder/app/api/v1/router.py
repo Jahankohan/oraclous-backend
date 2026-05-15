@@ -4,6 +4,7 @@ from app.api import schema
 from app.api.v1.endpoints import (
     agents,
     chat,
+    chat_history,
     code_graphs,
     communities,
     connectors,
@@ -36,6 +37,7 @@ api_router.include_router(integration.router, tags=["integration"])
 api_router.include_router(multimodal.router, tags=["multimodal"])
 api_router.include_router(code_graphs.router, tags=["code-knowledge-graph"])
 api_router.include_router(chat.router, tags=["chat"])
+api_router.include_router(chat_history.router, tags=["chat-history"])
 api_router.include_router(schema.router, tags=["schema"])
 api_router.include_router(evaluation.router, tags=["evaluation"])
 api_router.include_router(federation.router, tags=["federation"])

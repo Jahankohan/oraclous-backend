@@ -414,6 +414,102 @@ class ChatHistoryEntry(BaseModel):
     )
 
 
+# ──────────────────────────────────────────────────────────────────────────── #
+# Chat persistence (STORY-031) — schemas for the conversation/message API
+# ──────────────────────────────────────────────────────────────────────────── #
+
+
+class ConversationSummary(BaseModel):
+    """Lightweight row for the conversation-list endpoint."""
+
+    id: str
+    agent_id: str | None = None
+    title: str
+    created_at: datetime
+    last_message_at: datetime
+
+
+class ConversationsListResponse(BaseModel):
+    """Cursor-paginated conversation list."""
+
+    items: list[ConversationSummary]
+    # Cursor for the *next* page (older results). Null when no more.
+    next_cursor: str | None = None
+
+
+class ToolCallEntry(BaseModel):
+    """One tool invocation persisted with an assistant turn."""
+
+    id: str
+    sequence_index: int
+    tool_name: str
+    args_json: dict | None = None
+    result_summary: str | None = None
+    result_truncated: bool = False
+    latency_ms: int | None = None
+    error: str | None = None
+
+
+class MessageWithMetadata(BaseModel):
+    """A persisted chat turn with full audit metadata.
+
+    Returned by ``GET /chat/conversations/{cid}/messages``. Richer than
+    ``ChatHistoryEntry`` (which is the legacy flat shape).
+    """
+
+    id: str
+    role: str
+    content: str
+    created_at: datetime
+    # Audit (assistant turns only — None on user turns)
+    model: str | None = None
+    provider: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    latency_ms: int | None = None
+    cost_usd: str | None = None
+    reasoning_mode: str | None = None
+    retriever_used: str | None = None
+    error: str | None = None
+    cancelled: bool = False
+    sources: list[dict] | None = None
+    # Feedback
+    feedback_rating: int | None = None
+    feedback_comment: str | None = None
+    feedback_at: datetime | None = None
+    # Tool calls associated with this turn
+    tool_calls: list[ToolCallEntry] = []
+
+
+class MessagesListResponse(BaseModel):
+    items: list[MessageWithMetadata]
+    next_cursor: str | None = None
+
+
+class CreateConversationRequest(BaseModel):
+    agent_id: str | None = Field(
+        default=None,
+        description="Optional Neo4j :Agent id to bind this conversation to.",
+    )
+    title: str | None = Field(
+        default=None, max_length=200, description="Optional explicit title."
+    )
+
+
+class CreateConversationResponse(BaseModel):
+    id: str
+    title: str
+
+
+class PatchConversationRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+
+
+class FeedbackRequest(BaseModel):
+    rating: int = Field(..., description="+1 for thumbs-up, -1 for thumbs-down.")
+    comment: str | None = Field(default=None, max_length=2000)
+
+
 class ErrorResponse(BaseModel):
     """Standardized error response"""
 
