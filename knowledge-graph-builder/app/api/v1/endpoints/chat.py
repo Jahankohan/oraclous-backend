@@ -47,6 +47,7 @@ from app.services.chat_engine import (
     tool_for_mode,
 )
 from app.services.chat_history_service import ChatHistoryService
+from app.tasks.chat_projection import fire_and_forget as _project_chat_message
 
 logger = get_logger(__name__)
 
@@ -203,6 +204,10 @@ async def chat_with_graph(
             logger.exception("failed to persist tool call %s", tc.get("name"))
 
     await db.commit()
+
+    # Fire async Neo4j projection (TASK-106). Postgres is the source of
+    # truth; this is best-effort and never blocks the response.
+    _project_chat_message(str(asst_msg.id), user_id)
 
     context = None
     if body.return_context:
@@ -451,6 +456,9 @@ async def stream_chat_with_graph(
                             tc.get("name"),
                         )
                 await write_session.commit()
+                # Fire Neo4j projection AFTER the Postgres commit so
+                # the row is visible to the worker.
+                _project_chat_message(str(asst_msg.id), user_id)
         except Exception:
             # Persistence failure on the write path must not break the
             # client connection — the response stream has already

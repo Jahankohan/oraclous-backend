@@ -1244,8 +1244,8 @@ class GraphAnalyticsService:
                 // Create temporary graph projection
                 CALL gds.graph.project.cypher(
                     'temp-pagerank-' + $graph_id,
-                    'MATCH (n) WHERE n.graph_id = "' + $graph_id + '" RETURN id(n) AS id, n.name AS name',
-                    'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" RETURN id(a) AS source, id(b) AS target'
+                    'MATCH (n) WHERE n.graph_id = "' + $graph_id + '" AND NOT n:__Chat__ RETURN id(n) AS id, n.name AS name',
+                    'MATCH (a)-[r]-(b) WHERE a.graph_id = "' + $graph_id + '" AND b.graph_id = "' + $graph_id + '" AND r.graph_id = "' + $graph_id + '" AND NOT a:__Chat__ AND NOT b:__Chat__ RETURN id(a) AS source, id(b) AS target'
                 )
                 YIELD graphName
 
@@ -1253,9 +1253,12 @@ class GraphAnalyticsService:
                 CALL gds.pageRank.stream('temp-pagerank-' + $graph_id)
                 YIELD nodeId, score
 
-                // Get original nodes with scores
+                // Get original nodes with scores. Exclude chat-namespaced
+                // projection nodes (STORY-031 / ADR-020).
                 MATCH (node)
-                WHERE id(node) = nodeId AND node.graph_id = $graph_id
+                WHERE id(node) = nodeId
+                  AND node.graph_id = $graph_id
+                  AND NOT node:__Chat__
 
                 WITH node, score
                 ORDER BY score DESC
@@ -1310,10 +1313,13 @@ class GraphAnalyticsService:
         Returns:
             Dictionary containing influential nodes based on degree centrality
         """
-        # Find high-degree nodes in this specific graph
+        # Find high-degree nodes in this specific graph. Exclude
+        # chat-namespaced nodes so the conversation shadow doesn't
+        # inflate degree centrality (STORY-031 / ADR-020).
         cypher_query = """
         MATCH (n)
         WHERE n.graph_id = $graph_id
+          AND NOT n:__Chat__
 
         OPTIONAL MATCH (n)-[r]-()
         WHERE r.graph_id = $graph_id
@@ -1666,10 +1672,12 @@ class GraphAnalyticsService:
             Dictionary containing graph statistics
         """
         try:
-            # Basic graph statistics
+            # Basic graph statistics. Exclude chat-namespaced nodes so
+            # the conversation shadow projected by TASK-106 doesn't
+            # inflate node counts (STORY-031 / ADR-020).
             stats_query = """
             MATCH (n)
-            WHERE n.graph_id = $graph_id
+            WHERE n.graph_id = $graph_id AND NOT n:__Chat__
             WITH count(n) as node_count
 
             MATCH ()-[r]-()
@@ -1677,7 +1685,7 @@ class GraphAnalyticsService:
             WITH node_count, count(r) as rel_count
 
             MATCH (n)
-            WHERE n.graph_id = $graph_id
+            WHERE n.graph_id = $graph_id AND NOT n:__Chat__
             WITH node_count, rel_count, labels(n) as node_labels
             UNWIND node_labels as label
             WITH node_count, rel_count, label
