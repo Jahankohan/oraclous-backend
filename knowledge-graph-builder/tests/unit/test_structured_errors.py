@@ -36,7 +36,7 @@ def test_app():
     """
     with (
         patch("app.core.neo4j_client.neo4j_client.connect", new=AsyncMock()),
-        patch("app.core.database.create_tables", new=AsyncMock()),
+        patch("app.core.database.init_database_schema", new=AsyncMock()),
         patch("app.core.telemetry.setup_telemetry"),
         patch("app.core.telemetry.instrument_fastapi"),
     ):
@@ -324,9 +324,9 @@ class TestErrorCodeConsistency:
         ]
         for attr in attrs:
             code, _ = getattr(KGBError, attr)
-            assert code.startswith(
-                "KGB-"
-            ), f"{attr}: code '{code}' must start with KGB-"
+            assert code.startswith("KGB-"), (
+                f"{attr}: code '{code}' must start with KGB-"
+            )
 
     @pytest.mark.unit
     def test_error_codes_are_unique_no_collisions(self):
@@ -342,6 +342,6 @@ class TestErrorCodeConsistency:
             KGBError.PERMISSION_DENIED[0],
             KGBError.RATE_LIMIT_EXCEEDED[0],
         ]
-        assert len(all_codes) == len(
-            set(all_codes)
-        ), f"Duplicate error codes found: {all_codes}"
+        assert len(all_codes) == len(set(all_codes)), (
+            f"Duplicate error codes found: {all_codes}"
+        )

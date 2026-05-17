@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.database import create_tables
+from app.core.database import init_database_schema
 from app.core.errors import KGBError
 from app.core.logging import get_logger, setup_logging
 from app.core.neo4j_client import neo4j_client
@@ -36,8 +36,8 @@ async def lifespan(app: FastAPI):
     setup_telemetry()
 
     try:
-        # Initialize databases
-        await create_tables()
+        # Bring the SQL schema up to date (Alembic is the source of truth)
+        await init_database_schema()
         await neo4j_client.connect()
         neo4j_client.connect_sync()
 

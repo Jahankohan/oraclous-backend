@@ -81,7 +81,7 @@ async def test_lifespan_calls_connect_sync(monkeypatch):
 
     with (
         patch("app.core.neo4j_client.neo4j_client", mock_client),
-        patch("app.core.database.create_tables", new_callable=AsyncMock),
+        patch("app.core.database.init_database_schema", new_callable=AsyncMock),
         patch("app.core.database.async_session_maker", return_value=mock_session),
         patch("app.core.telemetry.setup_telemetry"),
         patch("app.core.telemetry.shutdown_telemetry"),
@@ -149,12 +149,12 @@ def test_main_py_calls_connect_sync_after_connect():
     call_names = [name for _, name in calls]
 
     assert "connect" in call_names, "lifespan must call neo4j_client.connect()"
-    assert (
-        "connect_sync" in call_names
-    ), "lifespan must call neo4j_client.connect_sync() — ORA-218 regression guard"
+    assert "connect_sync" in call_names, (
+        "lifespan must call neo4j_client.connect_sync() — ORA-218 regression guard"
+    )
 
     connect_idx = call_names.index("connect")
     connect_sync_idx = call_names.index("connect_sync")
-    assert (
-        connect_idx < connect_sync_idx
-    ), "connect_sync() must be called after connect()"
+    assert connect_idx < connect_sync_idx, (
+        "connect_sync() must be called after connect()"
+    )

@@ -202,7 +202,7 @@ def test_main_app_has_limiter_attached():
     # We patch all heavy startup side-effects so we can import the app module cleanly.
     with (
         patch("app.core.neo4j_client.neo4j_client.connect", new=AsyncMock()),
-        patch("app.core.database.create_tables", new=AsyncMock()),
+        patch("app.core.database.init_database_schema", new=AsyncMock()),
         patch("app.core.telemetry.setup_telemetry"),
         patch("app.core.telemetry.instrument_fastapi"),
     ):
@@ -218,7 +218,7 @@ def test_main_app_has_rate_limit_exception_handler():
     """The production FastAPI app registers a 429 handler for RateLimitExceeded."""
     with (
         patch("app.core.neo4j_client.neo4j_client.connect", new=AsyncMock()),
-        patch("app.core.database.create_tables", new=AsyncMock()),
+        patch("app.core.database.init_database_schema", new=AsyncMock()),
         patch("app.core.telemetry.setup_telemetry"),
         patch("app.core.telemetry.instrument_fastapi"),
     ):

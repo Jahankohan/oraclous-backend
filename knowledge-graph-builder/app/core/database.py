@@ -65,11 +65,57 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
-async def create_tables():
-    """Create all tables"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables created")
+def _alembic_config():
+    """Build an Alembic Config with absolute paths (cwd-independent)."""
+    from pathlib import Path
+
+    from alembic.config import Config
+
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg = Config(str(repo_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(repo_root / "alembic"))
+    return cfg
+
+
+async def _database_is_fresh() -> bool:
+    """True when the DB has never been initialised (no alembic_version table)."""
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name = 'alembic_version')"
+            )
+        )
+        return not bool(result.scalar())
+
+
+async def init_database_schema() -> None:
+    """Bring the SQL schema up to date. Alembic is the single source of truth.
+
+    - Existing database: apply any pending migrations (``alembic upgrade head``).
+    - Brand-new database: bootstrap the tables once from the ORM models, then
+      stamp Alembic at ``head``.
+
+    The app must NOT run ``Base.metadata.create_all`` over a live database on
+    every startup. Doing so races migrations: a model-created table makes the
+    matching ``CREATE TABLE`` migration fail with "already exists", leaving the
+    schema half-owned (table present, ``alembic_version`` not advanced).
+    """
+    import asyncio
+
+    from alembic import command
+
+    cfg = _alembic_config()
+    if await _database_is_fresh():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        await asyncio.to_thread(command.stamp, cfg, "head")
+        logger.info("Fresh database bootstrapped from models; Alembic stamped at head")
+    else:
+        await asyncio.to_thread(command.upgrade, cfg, "head")
+        logger.info("Database schema up to date (alembic upgrade head)")
 
 
 async def check_db_health() -> dict[str, str | bool]:

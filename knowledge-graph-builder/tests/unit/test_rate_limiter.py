@@ -582,7 +582,7 @@ class TestRateLimitErrorCode:
 
         with (
             patch("app.core.neo4j_client.neo4j_client.connect", new=AsyncMock()),
-            patch("app.core.database.create_tables", new=AsyncMock()),
+            patch("app.core.database.init_database_schema", new=AsyncMock()),
             patch("app.core.telemetry.setup_telemetry"),
             patch("app.core.telemetry.instrument_fastapi"),
         ):
@@ -615,7 +615,7 @@ class TestRateLimitErrorCode:
 
         with (
             patch("app.core.neo4j_client.neo4j_client.connect", new=AsyncMock()),
-            patch("app.core.database.create_tables", new=AsyncMock()),
+            patch("app.core.database.init_database_schema", new=AsyncMock()),
             patch("app.core.telemetry.setup_telemetry"),
             patch("app.core.telemetry.instrument_fastapi"),
         ):
