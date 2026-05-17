@@ -297,9 +297,11 @@ async def agent_chat(
                 sequence_index=idx,
                 tool_name=tc.get("name", "unknown"),
                 args=None,
-                result={"node_count": tc.get("node_count")}
-                if tc.get("node_count") is not None
-                else None,
+                result=(
+                    {"node_count": tc.get("node_count")}
+                    if tc.get("node_count") is not None
+                    else None
+                ),
             )
         except Exception:
             logger.exception(
