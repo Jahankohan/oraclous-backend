@@ -265,6 +265,65 @@ async def check_agent_graph_permission(
     return bool(record["is_home"]) or bool(record["has_grant"])
 
 
+async def list_member_org_agents(
+    driver: AsyncDriver, org_id: str, user_id: str
+) -> list[dict]:
+    """Return the org's agents that operate on a subgraph *user_id* can access.
+
+    Scoping rule (TASK-209): a non-owner member sees an org agent only when it
+    touches a subgraph the caller has an *active* ``HAS_ROLE`` on — either
+
+      1. the agent's home graph (``a.graph_id``) is such a graph, or
+      2. the agent has a ``CAN_ACCESS`` edge to such a graph.
+
+    "Such a graph" means a graph the org ``OWNS`` on which the caller holds an
+    active ``HAS_ROLE`` edge (``hr.is_active = true``). Soft-deleted agents
+    (``deactivated_at`` set) are excluded. The dict shape matches
+    :func:`list_org_agents` exactly.
+    """
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            // The org's subgraphs the caller can actively access.
+            MATCH (:Organization:__Platform__ {org_id: $org_id})
+                  -[:OWNS]->(accessible:Graph:__Platform__)
+            WHERE coalesce(accessible.status, 'active') <> 'deactivated'
+            MATCH (:User:__Platform__ {user_id: $uid})
+                  -[hr:HAS_ROLE {graph_id: accessible.graph_id}]->(:Role:__System__)
+            WHERE hr.is_active = true
+            WITH collect(DISTINCT accessible.graph_id) AS accessible_ids
+            // Org agents whose home graph is accessible, OR that CAN_ACCESS one.
+            MATCH (a:Agent:__Platform__ {org_id: $org_id})
+            WHERE a.deactivated_at IS NULL
+              AND (
+                a.graph_id IN accessible_ids
+                OR EXISTS {
+                    MATCH (a)-[:CAN_ACCESS]->(cg:Graph:__Platform__)
+                    WHERE cg.graph_id IN accessible_ids
+                }
+              )
+            RETURN a.agent_id     AS agent_id,
+                   a.org_id       AS org_id,
+                   a.graph_id     AS graph_id,
+                   a.name         AS name,
+                   a.description  AS description
+            ORDER BY a.created_at DESC
+            """,
+            {"org_id": org_id, "uid": user_id},
+        )
+        return [
+            {
+                "agent_id": record["agent_id"],
+                "org_id": record["org_id"],
+                "graph_id": record["graph_id"],
+                "name": record["name"],
+                "description": record["description"] or "",
+                "deactivated_at": None,
+            }
+            async for record in result
+        ]
+
+
 async def list_org_agents(driver: AsyncDriver, org_id: str) -> list[dict]:
     """Return every active :Agent owned by *org_id*.
 

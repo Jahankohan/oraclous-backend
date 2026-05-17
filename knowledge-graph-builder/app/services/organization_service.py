@@ -273,6 +273,54 @@ async def list_org_graphs(
         return [dict(record["graph"]) async for record in result]
 
 
+async def list_member_org_graphs(
+    driver: AsyncDriver,
+    org_id: str,
+    user_id: str,
+) -> list[dict]:
+    """Return the org's subgraphs the *user_id* can access (TASK-209).
+
+    An org's subgraphs are the graphs it ``OWNS``:
+    ``(:Organization {org_id})-[:OWNS]->(:Graph:__Platform__)``. This filters
+    that set to the graphs on which the caller holds an *active* ``HAS_ROLE``
+    edge (``hr.is_active = true``). Soft-deleted graphs
+    (``status == 'deactivated'``) are excluded, matching :func:`list_org_graphs`.
+
+    The projection is identical to :func:`list_org_graphs` so both the owner
+    and the member paths map cleanly onto ``GraphResponse``.
+    """
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (:Organization:__Platform__ {org_id: $org_id})
+                  -[:OWNS]->(g:Graph:__Platform__)
+            WHERE coalesce(g.status, 'active') <> 'deactivated'
+              AND EXISTS {
+                MATCH (:User:__Platform__ {user_id: $uid})
+                      -[hr:HAS_ROLE {graph_id: g.graph_id}]->(:Role:__System__)
+                WHERE hr.is_active = true
+              }
+            RETURN g {
+                .graph_id,
+                .name,
+                .description,
+                .user_id,
+                .org_id,
+                .created_at,
+                .updated_at,
+                .node_count,
+                .relationship_count,
+                .status,
+                .federatable,
+                .federation_group
+            } AS graph
+            ORDER BY g.created_at DESC
+            """,
+            {"org_id": org_id, "uid": user_id},
+        )
+        return [dict(record["graph"]) async for record in result]
+
+
 async def update_organization(
     db: AsyncSession,
     driver: AsyncDriver,

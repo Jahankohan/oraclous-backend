@@ -8,13 +8,13 @@ Routes:
   GET    /organizations               — list orgs the current user belongs to
   GET    /organizations/{org_id}      — get one org (any member)
   PATCH  /organizations/{org_id}      — update one org (owner-only)
-  GET    /organizations/{org_id}/graphs — list the org's subgraphs (owner-only)
+  GET    /organizations/{org_id}/graphs — list the org's subgraphs (any member)
   POST   /organizations/{org_id}/members — register an org member (owner-only)
-  GET    /organizations/{org_id}/members — list org members (owner-only)
+  GET    /organizations/{org_id}/members — list org members (any member)
   DELETE /organizations/{org_id}/members/{user_id} — remove a member (owner-only)
   POST   /organizations/{org_id}/members/{user_id}/subgraph-grants
                                           — grant a member subgraph access (owner-only)
-  GET    /organizations/{org_id}/agents   — list the org's agents (owner-only)
+  GET    /organizations/{org_id}/agents   — list the org's agents (any member)
   POST   /organizations/{org_id}/agents/{agent_id}/subgraph-grants
                                           — grant an agent subgraph access (owner-only)
   GET    /organizations/{org_id}/agents/{agent_id}/subgraph-grants
@@ -22,12 +22,15 @@ Routes:
   DELETE /organizations/{org_id}/agents/{agent_id}/subgraph-grants/{graph_id}
                                           — revoke an agent's subgraph grant (owner-only)
 
-Access control: the org list/read routes (GET /organizations and GET
-/organizations/{org_id}) are member-readable — the caller must hold a
-``:User-[:BELONGS_TO]->:Organization`` edge (TASK-208). Every mutating route
-and the member/agent/subgraph-grant routes remain owner-only: the current user
-must equal the org's ``owner_user_id``. The not-owner / not-member case returns
-404 (not 403) so org existence is never leaked. The member registry
+Access control: the org read routes — GET /organizations, GET
+/organizations/{org_id} (TASK-208), and the three content listings GET
+.../graphs, .../members, .../agents (TASK-209) — are member-readable: the
+caller must hold a ``:User-[:BELONGS_TO]->:Organization`` edge. The graphs and
+agents listings are additionally scoped for non-owner members to the subgraphs
+they hold an active ReBAC ``HAS_ROLE`` on; the owner always sees everything.
+Every mutating route and every subgraph-grant route remains owner-only: the
+current user must equal the org's ``owner_user_id``. The not-owner / not-member
+case returns 404 (not 403) so org existence is never leaked. The member registry
 (TASK-203 Part 1) and agent registry (TASK-203 Part 2) are purely additive —
 they do not modify existing per-graph member/agent endpoints or ReBAC code.
 """
@@ -226,18 +229,27 @@ async def list_organization_graphs(
     db: AsyncSession = Depends(get_database),
     driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ) -> list[GraphResponse]:
-    """List the knowledge graphs (subgraphs) owned by an organization.
+    """List the knowledge graphs (subgraphs) of an organization.
 
-    Owner-only — 404 if the org is missing or not owned by the caller, so
-    org existence is never leaked. Soft-deleted graphs are excluded (TASK-202).
+    Member-readable (TASK-209): 404 if the org is missing or the caller holds
+    no ``BELONGS_TO`` edge, so org existence is never leaked. The org owner
+    sees every subgraph; a non-owner member sees only the subgraphs they hold
+    an active ReBAC ``HAS_ROLE`` on. Soft-deleted graphs are excluded (TASK-202).
     """
     org = await organization_service.get_organization(db, org_id)
-    if org is None or str(org.owner_user_id) != user_id:
+    org_role = await organization_service.get_user_org_role(driver, org_id, user_id)
+    if org is None or org_role is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
         )
 
-    graphs = await organization_service.list_org_graphs(driver, org_id)
+    is_owner = org_role == "owner"
+    if is_owner:
+        graphs = await organization_service.list_org_graphs(driver, org_id)
+    else:
+        graphs = await organization_service.list_member_org_graphs(
+            driver, org_id, user_id
+        )
     return [_serialize_graph(g) for g in graphs]
 
 
@@ -259,6 +271,25 @@ async def _require_org_owner(
             status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
         )
     return org
+
+
+async def _require_org_member(
+    db: AsyncSession, driver: AsyncDriver, org_id: str, user_id: str
+) -> tuple[Organization, str]:
+    """Return ``(org, org_role)`` if *user_id* belongs to the org, else 404.
+
+    The member-readable counterpart of :func:`_require_org_owner` (TASK-209):
+    used by the org content-listing GET routes. Missing org and not-a-member
+    both yield 404 so existence is never leaked to non-members. ``org_role`` is
+    the caller's ``BELONGS_TO`` role (``owner|admin|member``).
+    """
+    org = await organization_service.get_organization(db, org_id)
+    org_role = await organization_service.get_user_org_role(driver, org_id, user_id)
+    if org is None or org_role is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+        )
+    return org, org_role
 
 
 @router.post(
@@ -330,9 +361,10 @@ async def list_organization_members(
 ) -> list[OrgMemberResponse]:
     """List the organization's members with their org_role and subgraph grants.
 
-    Owner-only — 404 if the org is missing or not owned by the caller.
+    Member-readable (TASK-209): any member sees the full org roster, read-only.
+    404 if the org is missing or the caller holds no ``BELONGS_TO`` edge.
     """
-    await _require_org_owner(db, org_id, user_id)
+    await _require_org_member(db, driver, org_id, user_id)
 
     members = await org_member_service.list_members(driver, org_id)
     return [
@@ -426,13 +458,20 @@ async def list_organization_agents(
     db: AsyncSession = Depends(get_database),
     driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ) -> list[OrgAgentResponse]:
-    """List the agents that belong to the organization. Owner-only.
+    """List the agents that belong to the organization.
 
-    404 if the org is missing or not owned by the caller — existence is masked.
+    Member-readable (TASK-209): 404 if the org is missing or the caller holds
+    no ``BELONGS_TO`` edge — existence is masked. The org owner sees every
+    agent; a non-owner member sees only agents that operate on a subgraph they
+    can access (the agent's home graph, or a ``CAN_ACCESS``-granted graph, on
+    which the caller holds an active ``HAS_ROLE``).
     """
-    await _require_org_owner(db, org_id, user_id)
+    _, org_role = await _require_org_member(db, driver, org_id, user_id)
 
-    agents = await org_agent_service.list_org_agents(driver, org_id)
+    if org_role == "owner":
+        agents = await org_agent_service.list_org_agents(driver, org_id)
+    else:
+        agents = await org_agent_service.list_member_org_agents(driver, org_id, user_id)
     return [
         OrgAgentResponse(
             agent_id=a["agent_id"],
