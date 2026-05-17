@@ -456,12 +456,21 @@ async def _process_pipeline_ingestion_async(
                 "error": f"Document processing failed: {str(e)}",
             }
 
-        # STEP 4: Convert processed document to GraphRAG format
+        # STEP 4: Convert processed document to GraphRAG format.
+        # `source` is the document's stable identity — it keys the Document
+        # node's `path`, the INCREMENTAL hash guard, the chunk-level delta and
+        # node provenance. Keying it on the per-job id (`job_<uuid>`) made
+        # every ingest a brand-new "document": INCREMENTAL mode could never
+        # match a prior version, and the Document node showed `job_<uuid>`
+        # instead of the filename. Use the filename so re-ingesting the same
+        # file is recognised as the same document. Fall back to the job id
+        # when there is no filename (e.g. pasted-text ingests).
+        doc_source = job.filename or f"job_{job_id}"
         documents = [
             {
                 "text": document_text,
-                "source": f"job_{job_id}",
-                "title": f"Document from job {job_id}",
+                "source": doc_source,
+                "title": job.filename or f"Document from job {job_id}",
                 "id": job_id,  # Add explicit document ID
                 "metadata": {
                     **base_metadata,  # Include processed metadata
@@ -470,8 +479,8 @@ async def _process_pipeline_ingestion_async(
                     "user_id": user_id,
                     "source_type": job.source_type or "text",
                     "created_at": datetime.now(UTC).isoformat(),
-                    "document_title": f"Document from job {job_id}",
-                    "document_source": f"job_{job_id}",
+                    "document_title": job.filename or f"Document from job {job_id}",
+                    "document_source": doc_source,
                 },
             }
         ]
@@ -1362,11 +1371,15 @@ async def _process_image_ingestion_async(
                 "note": "No entities could be extracted from this image",
             }
 
+        # `source` is the document's stable identity — key it on the image
+        # filename so a re-ingest is recognised as the same document, not a
+        # fresh one. Falls back to the job id when there is no filename.
+        doc_source = job.filename or f"job_{job_id}"
         documents = [
             {
                 "text": text,
-                "source": f"job_{job_id}",
-                "title": f"Image from job {job_id}",
+                "source": doc_source,
+                "title": job.filename or f"Image from job {job_id}",
                 "id": job_id,
                 "metadata": {
                     "job_id": job_id,
