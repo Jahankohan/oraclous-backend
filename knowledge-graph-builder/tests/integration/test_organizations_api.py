@@ -18,6 +18,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
+from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -50,16 +51,28 @@ async def db_session():
     await engine.dispose()
 
 
+async def _mock_user_id(request: Request) -> str:
+    """Resolve the test user from the per-client ``X-Test-User`` header.
+
+    A single shared override serves every client; each client carries its own
+    user id in a header. This is required because ``app.dependency_overrides``
+    is app-global — two clients overriding the same key would otherwise clobber
+    one another, and the last fixture to initialise would win for both.
+    """
+    return request.headers.get("x-test-user", OWNER_USER_ID)
+
+
 def _client_for(user_id: str) -> AsyncClient:
-    """Build an async HTTP client with auth mocked to return *user_id*."""
+    """Build an async HTTP client that authenticates as *user_id*."""
     from app.api.dependencies import get_current_user_id
     from app.main import app
 
-    async def _mock_user_id() -> str:
-        return user_id
-
     app.dependency_overrides[get_current_user_id] = _mock_user_id
-    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    return AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-Test-User": user_id},
+    )
 
 
 @pytest_asyncio.fixture
