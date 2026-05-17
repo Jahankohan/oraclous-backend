@@ -88,6 +88,11 @@ async def lifespan(app: FastAPI):
 
         await database_connector_service.ensure_constraints()
 
+        # Initialize cross-subgraph LINKED_TO indexes (TASK-204, idempotent)
+        from app.services import linked_to_service
+
+        await linked_to_service.initialize_schema(neo4j_client.async_driver)
+
         logger.info("All services initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")

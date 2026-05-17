@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     graphs,
     health,
     integration,
+    linked_to,
     llm_configs,
     memories,
     multimodal,
@@ -49,3 +50,4 @@ api_router.include_router(connectors.router, tags=["connectors"])
 api_router.include_router(organizations.router, tags=["organizations"])
 api_router.include_router(webhooks.router, tags=["webhooks"])
 api_router.include_router(service_accounts.router, tags=["service-accounts"])
+api_router.include_router(linked_to.router, tags=["linked-to"])
