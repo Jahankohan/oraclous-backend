@@ -28,6 +28,11 @@ logger = get_logger(__name__)
 # ADR-021 §2 — the three org-level roles a member can be invited as.
 _VALID_ORG_ROLES: frozenset[str] = frozenset({"owner", "admin", "member"})
 
+# The 5 per-subgraph ReBAC roles accepted inside a subgraph_grants spec.
+_VALID_SUBGRAPH_ROLES: frozenset[str] = frozenset(
+    {"owner", "admin", "editor", "viewer", "restricted_viewer"}
+)
+
 
 def _is_expired(invitation: OrgInvitation) -> bool:
     """True when the invitation's ``expires_at`` is in the past."""
@@ -46,12 +51,20 @@ async def create_invitation(
     email: str,
     org_role: str,
     invited_by_user_id: str,
+    subgraph_grants: dict | None = None,
 ) -> OrgInvitation:
     """Create a pending invitation and return it.
 
     Supersedes any still-pending invitation for the same (org, email) so only
-    one invite per address is ever live. Raises ``ValueError`` on a bad
-    ``org_role`` or a malformed email.
+    one invite per address is ever live.
+
+    ``subgraph_grants`` — when given, a ``{"role": <rebac role>, "graph_ids":
+    [...] | "all"}`` map applied at accept time so a ``member`` invitee lands
+    with workspace access. The ReBAC role is validated here; the graph_ids are
+    validated against org ownership at accept time.
+
+    Raises ``ValueError`` on a bad ``org_role``, a malformed email, or a bad
+    ``subgraph_grants`` role.
     """
     if org_role not in _VALID_ORG_ROLES:
         raise ValueError(
@@ -60,6 +73,13 @@ async def create_invitation(
     email = email.strip().lower()
     if "@" not in email or email.startswith("@") or email.endswith("@"):
         raise ValueError(f"Invalid email address {email!r}")
+    if subgraph_grants is not None:
+        grant_role = subgraph_grants.get("role")
+        if grant_role not in _VALID_SUBGRAPH_ROLES:
+            raise ValueError(
+                f"Invalid subgraph_grants role {grant_role!r} — must be one of "
+                f"{sorted(_VALID_SUBGRAPH_ROLES)}"
+            )
 
     # Supersede any still-pending invite for the same address.
     await db.execute(
@@ -79,6 +99,7 @@ async def create_invitation(
         token=secrets.token_urlsafe(32),
         status="pending",
         invited_by_user_id=UUID(invited_by_user_id),
+        subgraph_grants=subgraph_grants,
         expires_at=datetime.now(UTC) + timedelta(hours=settings.INVITE_TTL_HOURS),
     )
     db.add(invitation)
@@ -154,7 +175,8 @@ async def accept_invitation(
         raise ValueError("Invitation has expired")
 
     org_id = str(invitation.org_id)
-    # Register the BELONGS_TO membership edge in Neo4j.
+    # Register the BELONGS_TO membership edge in Neo4j. For owner/admin this
+    # also auto-grants ReBAC on every org subgraph (see org_member_service).
     await org_member_service.add_member(
         driver,
         org_id=org_id,
@@ -162,6 +184,29 @@ async def accept_invitation(
         org_role=invitation.org_role,
         email=invitation.email,
     )
+
+    # Apply the invite's pre-selected workspace access (member invites). Owner/
+    # admin already have all subgraphs from add_member, so this is only
+    # meaningful for member invites. Best-effort — a grant failure must not
+    # block the join; the invitation still completes and access can be granted
+    # later via the member subgraph-grants endpoint.
+    if invitation.subgraph_grants:
+        spec = invitation.subgraph_grants
+        try:
+            await org_member_service.grant_member_subgraphs(
+                driver,
+                org_id=org_id,
+                user_id=accepting_user_id,
+                role=spec["role"],
+                graph_ids=spec["graph_ids"],
+                granted_by=accepting_user_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — grant is not load-bearing
+            logger.warning(
+                "accept_invitation: applying subgraph_grants for invite %s failed: %s",
+                invitation.id,
+                exc,
+            )
 
     invitation.status = "accepted"
     invitation.accepted_by_user_id = UUID(accepting_user_id)

@@ -10,14 +10,23 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.schemas.org_member_schemas import SubgraphGrantSpec
+
 # ── Request models ─────────────────────────────────────────────────────────
 
 
 class OrgInvitationCreate(BaseModel):
-    """Create an invitation for *email* to join the org as *org_role*."""
+    """Create an invitation for *email* to join the org as *org_role*.
+
+    ``subgraph_grants`` optionally pre-selects the workspaces the invitee
+    lands with (a ReBAC role + a list of graph_ids or ``"all"``). It is
+    meaningful for ``member`` invites — owner/admin invitees get every
+    subgraph automatically, so the field is ignored for them.
+    """
 
     email: str = Field(..., min_length=3, max_length=320)
     org_role: str = Field(default="member", min_length=1, max_length=64)
+    subgraph_grants: SubgraphGrantSpec | None = None
 
 
 # ── Response models ────────────────────────────────────────────────────────
@@ -42,6 +51,7 @@ class OrgInvitationResponse(BaseModel):
     created_at: str
     expires_at: str
     accepted_at: str | None = None
+    subgraph_grants: dict | None = None
     invite_url: str | None = None
     email_sent: bool | None = None
 

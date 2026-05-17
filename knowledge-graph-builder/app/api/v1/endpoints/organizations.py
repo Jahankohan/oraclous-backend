@@ -501,6 +501,7 @@ def _serialize_invitation(
         created_at=inv.created_at.isoformat() if inv.created_at else "",
         expires_at=inv.expires_at.isoformat() if inv.expires_at else "",
         accepted_at=inv.accepted_at.isoformat() if inv.accepted_at else None,
+        subgraph_grants=inv.subgraph_grants,
         invite_url=invite_url,
         email_sent=email_sent,
     )
@@ -533,6 +534,9 @@ async def create_organization_invitation(
             email=body.email,
             org_role=body.org_role,
             invited_by_user_id=user_id,
+            subgraph_grants=(
+                body.subgraph_grants.model_dump() if body.subgraph_grants else None
+            ),
         )
     except ValueError as exc:
         raise HTTPException(

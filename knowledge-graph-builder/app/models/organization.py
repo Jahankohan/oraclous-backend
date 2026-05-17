@@ -55,6 +55,10 @@ class OrgInvitation(Base):
     org_role = Column(String(64), nullable=False, default="member")
     token = Column(String(64), nullable=False, unique=True, index=True)
     status = Column(String(32), nullable=False, default="pending")
+    # Optional per-subgraph access to apply when the invite is accepted —
+    # {"role": <rebac role>, "graph_ids": [...] | "all"}. Used for `member`
+    # invites (owner/admin get all subgraphs automatically). Null = none.
+    subgraph_grants = Column(JSON, nullable=True)
     invited_by_user_id = Column(UUID(as_uuid=True), nullable=False)
     accepted_by_user_id = Column(UUID(as_uuid=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
