@@ -73,9 +73,21 @@ class GraphNodeService:
     ]
 
     def create_graph(
-        self, graph_id: str, name: str, user_id: str, description: str | None = None
+        self,
+        graph_id: str,
+        name: str,
+        user_id: str,
+        description: str | None = None,
+        org_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create a new Graph node in Neo4j and ensure temporal indexes exist."""
+        """Create a new Graph node in Neo4j and ensure temporal indexes exist.
+
+        When ``org_id`` is provided (TASK-202), it is stored as a property on
+        the :Graph node and the ownership edges are wired in the same call:
+
+          * ``(:Organization {org_id})-[:OWNS]->(:Graph)``
+          * ``(:User {user_id})-[:CREATED]->(:Graph)``
+        """
 
         query = """
         CREATE (g:Graph:__Platform__ {
@@ -83,6 +95,7 @@ class GraphNodeService:
             name: $name,
             description: $description,
             user_id: $user_id,
+            org_id: $org_id,
             created_at: datetime(),
             updated_at: datetime(),
             node_count: 0,
@@ -106,6 +119,7 @@ class GraphNodeService:
                         "name": name,
                         "description": description or "",
                         "user_id": user_id,
+                        "org_id": org_id,
                     },
                 )
 
@@ -115,6 +129,28 @@ class GraphNodeService:
 
                 graph_data = dict(record["g"])
 
+                # TASK-202: wire ownership edges when an org owns the graph.
+                if org_id:
+                    session.run(
+                        """
+                        MATCH (o:Organization {org_id: $org_id})
+                        MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
+                        MERGE (o)-[:OWNS]->(g)
+                        """,
+                        {"org_id": org_id, "graph_id": graph_id},
+                    )
+                    session.run(
+                        """
+                        MERGE (u:User:__Platform__ {
+                            user_id: $user_id, graph_id: "__system__"
+                        })
+                        WITH u
+                        MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
+                        MERGE (u)-[:CREATED]->(g)
+                        """,
+                        {"user_id": user_id, "graph_id": graph_id},
+                    )
+
             # Ensure temporal indexes exist (idempotent — IF NOT EXISTS)
             self._ensure_temporal_indexes()
 
@@ -123,6 +159,7 @@ class GraphNodeService:
                 "name": graph_data["name"],
                 "description": graph_data["description"],
                 "user_id": graph_data["user_id"],
+                "org_id": graph_data.get("org_id"),
                 "created_at": graph_data["created_at"].isoformat(),
                 "updated_at": graph_data["updated_at"].isoformat(),
                 "node_count": graph_data["node_count"],
@@ -164,6 +201,7 @@ class GraphNodeService:
             .name,
             .description,
             .user_id,
+            .org_id,
             .created_at,
             .updated_at,
             .node_count,
@@ -186,6 +224,7 @@ class GraphNodeService:
                     data = dict(record["graph"])
                     data.setdefault("federatable", False)
                     data.setdefault("federation_group", None)
+                    data.setdefault("org_id", None)
                     return data
                 return None
 
@@ -212,6 +251,7 @@ class GraphNodeService:
             .name,
             .description,
             .user_id,
+            .org_id,
             .created_at,
             .updated_at,
             .node_count,
@@ -235,6 +275,7 @@ class GraphNodeService:
                     data = dict(record["graph"])
                     data.setdefault("federatable", False)
                     data.setdefault("federation_group", None)
+                    data.setdefault("org_id", None)
                     graphs.append(data)
 
                 return graphs
@@ -295,6 +336,7 @@ class GraphNodeService:
             .name,
             .description,
             .user_id,
+            .org_id,
             .created_at,
             .updated_at,
             .node_count,
@@ -313,6 +355,7 @@ class GraphNodeService:
             .name,
             .description,
             .user_id,
+            .org_id,
             .created_at,
             .updated_at,
             .node_count,
@@ -335,6 +378,7 @@ class GraphNodeService:
                     data = dict(record["graph"])
                     data.setdefault("federatable", False)
                     data.setdefault("federation_group", None)
+                    data.setdefault("org_id", None)
                     return data
                 return None
 

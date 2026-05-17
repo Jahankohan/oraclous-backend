@@ -548,6 +548,13 @@ class GraphCreate(BaseModel):
         None, max_length=1000, examples=["Internal org chart and company relationships"]
     )
     schema_config: dict[str, Any] | None = Field(None)
+    org_id: str | None = Field(
+        None,
+        description=(
+            "Owning organization; defaults to the caller's personal "
+            "organization when omitted"
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -587,6 +594,10 @@ class GraphResponse(BaseModel):
     name: str
     description: str | None
     user_id: UUID
+    org_id: str | None = Field(
+        default=None,
+        description="Owning organization id (TASK-202). Null for pre-TASK-202 graphs.",
+    )
     schema_config: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime

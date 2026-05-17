@@ -124,6 +124,77 @@ async def list_organizations(
     return list(result.scalars().all())
 
 
+async def get_or_create_default_org(
+    db: AsyncSession,
+    driver: AsyncDriver,
+    user_id: str,
+) -> str:
+    """Return the ``org_id`` of the user's default (personal) organization.
+
+    The default organization is defined as the *oldest* ``Organization`` row
+    the user owns. If the user owns none, one is created via
+    :func:`create_organization` (name ``"Personal Organization"``, empty
+    description and settings, owner = ``user_id``).
+
+    Idempotent: once a personal organization exists, repeated calls return its
+    id without creating duplicates.
+    """
+    result = await db.execute(
+        select(Organization)
+        .where(Organization.owner_user_id == user_id)
+        .order_by(Organization.created_at)
+        .limit(1)
+    )
+    existing = result.scalar_one_or_none()
+    if existing is not None:
+        return str(existing.id)
+
+    organization = await create_organization(
+        db,
+        driver,
+        name="Personal Organization",
+        description="",
+        settings={},
+        owner_user_id=user_id,
+    )
+    return str(organization.id)
+
+
+async def list_org_graphs(
+    driver: AsyncDriver,
+    org_id: str,
+) -> list[dict]:
+    """Return the :Graph:__Platform__ nodes owned by *org_id*.
+
+    Soft-deleted graphs (``status == 'deactivated'``) are excluded. The caller
+    is responsible for verifying that the requester owns the organization.
+    """
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (g:Graph:__Platform__ {org_id: $org_id})
+            WHERE coalesce(g.status, 'active') <> 'deactivated'
+            RETURN g {
+                .graph_id,
+                .name,
+                .description,
+                .user_id,
+                .org_id,
+                .created_at,
+                .updated_at,
+                .node_count,
+                .relationship_count,
+                .status,
+                .federatable,
+                .federation_group
+            } AS graph
+            ORDER BY g.created_at DESC
+            """,
+            {"org_id": org_id},
+        )
+        return [dict(record["graph"]) async for record in result]
+
+
 async def update_organization(
     db: AsyncSession,
     driver: AsyncDriver,

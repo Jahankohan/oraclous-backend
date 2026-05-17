@@ -16,6 +16,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import Response
+from neo4j import AsyncDriver
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +28,7 @@ from app.api.dependencies import (
     verify_graph_access,
 )
 from app.core.config import settings
+from app.core.dependencies import get_neo4j_async_driver
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.rate_limiter import limiter
@@ -80,6 +82,7 @@ from app.schemas.graph_schemas import (
     VersionListResponse,
     VersionResponse,
 )
+from app.services import organization_service
 from app.services.background_job_service import background_job_service
 
 # Neo4j Services
@@ -123,7 +126,10 @@ def convert_neo4j_datetime_to_python(neo4j_datetime: Any) -> datetime:
     },
 )
 async def create_graph(
-    graph_data: GraphCreate, user_id: str = Depends(get_current_user_id)
+    graph_data: GraphCreate,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Create a new knowledge graph in Neo4j.
@@ -131,6 +137,9 @@ async def create_graph(
     Each graph is scoped to the authenticated user and acts as an isolated
     container for entities and relationships extracted from your documents.
     After creating a graph, use `POST /graphs/{id}/ingest` to populate it.
+
+    The graph is owned by an organization (TASK-202). When ``org_id`` is
+    omitted the caller's personal organization is used (created on first use).
     """
 
     try:
@@ -139,6 +148,21 @@ async def create_graph(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Neo4j connection not available",
+            )
+
+        # Resolve the owning organization (TASK-202).
+        if graph_data.org_id is not None:
+            org = await organization_service.get_organization(db, graph_data.org_id)
+            if org is None or str(org.owner_user_id) != user_id:
+                # Never leak org existence to non-owners.
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organization not found",
+                )
+            org_id = str(org.id)
+        else:
+            org_id = await organization_service.get_or_create_default_org(
+                db, driver, user_id
             )
 
         graph_service = GraphNodeService(neo4j_client.sync_driver)
@@ -154,6 +178,7 @@ async def create_graph(
             user_id=user_id,
             name=graph_data.name,
             description=graph_data.description,
+            org_id=org_id,
         )
 
         logger.info(
@@ -183,6 +208,7 @@ async def create_graph(
             name=graph_result["name"],
             description=graph_result.get("description"),
             user_id=UUID(user_id),
+            org_id=graph_result.get("org_id"),
             created_at=convert_neo4j_datetime_to_python(graph_result["created_at"]),
             updated_at=convert_neo4j_datetime_to_python(graph_result["updated_at"]),
             node_count=graph_result.get("node_count", 0),
@@ -233,6 +259,7 @@ async def list_graphs(user_id: str = Depends(get_current_user_id)):
                     name=graph["name"],
                     description=graph.get("description", ""),
                     user_id=UUID(user_id),
+                    org_id=graph.get("org_id"),
                     created_at=convert_neo4j_datetime_to_python(graph["created_at"]),
                     updated_at=convert_neo4j_datetime_to_python(graph["updated_at"]),
                     node_count=graph.get("node_count", 0),
@@ -291,6 +318,7 @@ async def get_graph(graph_id: UUID, user_id: str = Depends(get_current_user_id))
             name=graph["name"],
             description=graph.get("description", ""),
             user_id=UUID(user_id),
+            org_id=graph.get("org_id"),
             created_at=convert_neo4j_datetime_to_python(graph["created_at"]),
             updated_at=convert_neo4j_datetime_to_python(graph["updated_at"]),
             node_count=graph.get("node_count", 0),
@@ -368,6 +396,7 @@ async def update_graph(
             name=updated_graph["name"],
             description=updated_graph.get("description", ""),
             user_id=UUID(user_id),
+            org_id=updated_graph.get("org_id"),
             created_at=convert_neo4j_datetime_to_python(updated_graph["created_at"]),
             updated_at=convert_neo4j_datetime_to_python(updated_graph["updated_at"]),
             node_count=updated_graph.get("node_count", 0),
