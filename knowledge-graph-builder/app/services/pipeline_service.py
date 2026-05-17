@@ -1005,26 +1005,37 @@ class MultiTenantGraphRAGPipeline:
         # 6.7. Embed entities into the entity_embeddings vector index.
         # The pipeline embeds chunks but not the entities it extracts; without
         # this stage the entity_embeddings index stays empty and entity-level
-        # semantic search (graph_search / hybrid retrieval / dedup's embedding
-        # pass / federation entity-resolution) silently returns nothing. Runs
-        # after dedup so the consolidated canonical set is embedded, not the
-        # duplicates. only_missing=True keeps re-ingests cheap.
-        if self.driver and self.embedder is not None:
+        # features (dedup's embedding pass / federation entity-resolution)
+        # silently degrade. Runs after dedup so the consolidated canonical set
+        # is embedded, not the duplicates. only_missing=True keeps re-ingests
+        # cheap.
+        #
+        # Best-effort: entity embedding is an enhancement, never load-bearing
+        # for the ingest. Any failure here is logged and swallowed so it can
+        # neither fail the job nor corrupt its entity/relationship/chunk counts.
+        if self.embedder is not None:
             with _pipeline_tracer.start_as_current_span(
                 "pipeline.stage.embed_entities"
             ) as ee_span:
-                from app.services.entity_embedding_service import (
-                    embed_graph_entities,
-                )
+                try:
+                    from app.services.entity_embedding_service import (
+                        embed_graph_entities,
+                    )
 
-                ee_stats = await embed_graph_entities(
-                    self.driver, graph_id=self.graph_id, only_missing=True
-                )
-                ee_span.set_attribute("entities.embedded", ee_stats["embedded"])
-                logger.info(
-                    f"Entity embedding completed for graph {self.graph_id}: "
-                    f"{ee_stats['embedded']}/{ee_stats['total']} entities"
-                )
+                    ee_stats = await embed_graph_entities(
+                        graph_id=self.graph_id, only_missing=True
+                    )
+                    ee_span.set_attribute("entities.embedded", ee_stats["embedded"])
+                    logger.info(
+                        f"Entity embedding completed for graph {self.graph_id}: "
+                        f"{ee_stats['embedded']}/{ee_stats['total']} entities"
+                    )
+                except Exception as ee_exc:
+                    ee_span.record_exception(ee_exc)
+                    logger.warning(
+                        f"Entity embedding stage failed for graph "
+                        f"{self.graph_id} (non-fatal): {ee_exc}"
+                    )
 
         # Return statistics
         return {
