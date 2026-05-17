@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     llm_configs,
     memories,
     multimodal,
+    organizations,
     permissions,
     service_accounts,
     webhooks,
@@ -45,5 +46,6 @@ api_router.include_router(graph_federation_router, tags=["federation"])
 api_router.include_router(permissions.router, tags=["permissions"])
 api_router.include_router(memories.router, tags=["memories"])
 api_router.include_router(connectors.router, tags=["connectors"])
+api_router.include_router(organizations.router, tags=["organizations"])
 api_router.include_router(webhooks.router, tags=["webhooks"])
 api_router.include_router(service_accounts.router, tags=["service-accounts"])
