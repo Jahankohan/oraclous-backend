@@ -1,0 +1,54 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+
+            DEPLOY_PATH="/root/oraclous-backend"
+            cd "$DEPLOY_PATH"
+
+            echo "==> Updating code to origin/main"
+            git fetch --all --prune
+            git reset --hard origin/main
+
+            echo "==> Verifying per-service .env files exist"
+            for svc in auth-service oraclous-core-service credential-broker-service knowledge-graph-builder; do
+              if [ ! -f "$svc/.env" ]; then
+                echo "ERROR: missing $svc/.env on server — create it before deploying" >&2
+                exit 1
+              fi
+            done
+
+            echo "==> Building images"
+            docker compose build
+
+            echo "==> Starting services"
+            docker compose up -d --remove-orphans
+
+            echo "==> Pruning dangling images"
+            docker image prune -f
+
+            echo "==> Service status"
+            docker compose ps
