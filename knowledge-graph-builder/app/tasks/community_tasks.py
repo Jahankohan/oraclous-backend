@@ -296,8 +296,13 @@ def _count_entities(session, graph_id: str) -> int:
 
 
 def _get_entity_ids(session, graph_id: str) -> list[str]:
+    # Entity identity is the domain `id` property when present (structured
+    # ingest), else the stable Neo4j elementId. Extraction-built entities
+    # (neo4j_graphrag, :__KGBuilder__) carry no `id` — keying blindly on
+    # `e.id` yields an all-null list and the pipeline aborts "No entities".
     result = session.run(
-        "MATCH (e:__Entity__ {graph_id: $graph_id}) RETURN e.id AS eid",
+        "MATCH (e:__Entity__ {graph_id: $graph_id}) "
+        "RETURN coalesce(e.id, elementId(e)) AS eid",
         {"graph_id": graph_id},
     )
     return [r["eid"] for r in result if r["eid"]]
@@ -308,8 +313,9 @@ def _extract_adjacency_list(session, graph_id: str) -> list[tuple[str, str, int]
     result = session.run(
         """
         MATCH (a:__Entity__ {graph_id: $graph_id})-[r]->(b:__Entity__ {graph_id: $graph_id})
-        WHERE a.id IS NOT NULL AND b.id IS NOT NULL
-        RETURN a.id AS src, b.id AS tgt, count(r) AS weight
+        RETURN coalesce(a.id, elementId(a)) AS src,
+               coalesce(b.id, elementId(b)) AS tgt,
+               count(r) AS weight
         """,
         {"graph_id": graph_id},
     )
@@ -323,8 +329,8 @@ def _get_entity_names_and_types(
     result = session.run(
         """
         MATCH (e:__Entity__ {graph_id: $graph_id})
-        WHERE e.id IN $entity_ids
-        RETURN e.id AS eid, e.name AS name, labels(e) AS lbls
+        WHERE coalesce(e.id, elementId(e)) IN $entity_ids
+        RETURN coalesce(e.id, elementId(e)) AS eid, e.name AS name, labels(e) AS lbls
         """,
         {"graph_id": graph_id, "entity_ids": entity_ids},
     )
@@ -344,7 +350,8 @@ def _get_relationships_between(
     result = session.run(
         """
         MATCH (a:__Entity__ {graph_id: $graph_id})-[r]->(b:__Entity__ {graph_id: $graph_id})
-        WHERE a.id IN $entity_ids AND b.id IN $entity_ids
+        WHERE coalesce(a.id, elementId(a)) IN $entity_ids
+          AND coalesce(b.id, elementId(b)) IN $entity_ids
         RETURN a.name AS src, type(r) AS rel, b.name AS tgt
         LIMIT $lim
         """,
@@ -685,7 +692,8 @@ def _upsert_communities(
             for eid in members:
                 session.run(
                     """
-                    MATCH (e:__Entity__ {id: $eid, graph_id: $graph_id})
+                    MATCH (e:__Entity__ {graph_id: $graph_id})
+                    WHERE coalesce(e.id, elementId(e)) = $eid
                     MATCH (c:__Community__ {id: $cid, graph_id: $graph_id})
                     MERGE (e)-[r:IN_COMMUNITY {graph_id: $graph_id, level: $level}]->(c)
                     """,
