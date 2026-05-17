@@ -1002,6 +1002,30 @@ class MultiTenantGraphRAGPipeline:
                 entity_ids, job_id, ingestion_source=source
             )
 
+        # 6.7. Embed entities into the entity_embeddings vector index.
+        # The pipeline embeds chunks but not the entities it extracts; without
+        # this stage the entity_embeddings index stays empty and entity-level
+        # semantic search (graph_search / hybrid retrieval / dedup's embedding
+        # pass / federation entity-resolution) silently returns nothing. Runs
+        # after dedup so the consolidated canonical set is embedded, not the
+        # duplicates. only_missing=True keeps re-ingests cheap.
+        if self.driver and self.embedder is not None:
+            with _pipeline_tracer.start_as_current_span(
+                "pipeline.stage.embed_entities"
+            ) as ee_span:
+                from app.services.entity_embedding_service import (
+                    embed_graph_entities,
+                )
+
+                ee_stats = await embed_graph_entities(
+                    self.driver, graph_id=self.graph_id, only_missing=True
+                )
+                ee_span.set_attribute("entities.embedded", ee_stats["embedded"])
+                logger.info(
+                    f"Entity embedding completed for graph {self.graph_id}: "
+                    f"{ee_stats['embedded']}/{ee_stats['total']} entities"
+                )
+
         # Return statistics
         return {
             "entities_created": len(graph.nodes) if graph and graph.nodes else 0,
@@ -1629,8 +1653,7 @@ class MultiTenantGraphRAGPipeline:
             or (hasattr(n, "labels") and "__Entity__" in getattr(n, "labels", []))
             or (
                 # neo4j_graphrag uses `label` as a single string
-                getattr(n, "label", None)
-                == "__Entity__"
+                getattr(n, "label", None) == "__Entity__"
             )
         ]
 
@@ -1877,9 +1900,9 @@ class PipelineService:
 
     def __init__(self):
         """Initialize pipeline service."""
-        self._pipeline_cache: dict[str, MultiTenantGraphRAGPipeline] = (
-            {}
-        )  # Cache pipelines per graph_id
+        self._pipeline_cache: dict[
+            str, MultiTenantGraphRAGPipeline
+        ] = {}  # Cache pipelines per graph_id
         logger.info("PipelineService initialized")
 
     def get_pipeline(
