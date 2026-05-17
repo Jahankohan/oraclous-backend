@@ -110,6 +110,29 @@ async def add_member(
         # ownership first, so this is a defensive guard.
         raise ValueError(f"Organization {org_id!r} not found")
 
+    # Org owners and admins see + access every subgraph the org owns; a plain
+    # member gets no implicit subgraph access (it must be granted explicitly).
+    # Materialise the owner/admin rule as a ReBAC `admin` grant on each current
+    # subgraph. Best-effort: the BELONGS_TO membership is the primary effect —
+    # a ReBAC hiccup must not undo it or fail the join.
+    if org_role in ("owner", "admin"):
+        try:
+            await grant_member_subgraphs(
+                driver,
+                org_id=org_id,
+                user_id=user_id,
+                role="admin",
+                graph_ids="all",
+                granted_by=user_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — grant is derived, not load-bearing
+            logger.warning(
+                "add_member: subgraph auto-grant for %s on org %s failed: %s",
+                user_id,
+                org_id,
+                exc,
+            )
+
     return {
         "user_id": record["user_id"],
         "email": record["email"],
@@ -289,3 +312,48 @@ async def grant_member_subgraphs(
         org_id,
     )
     return granted
+
+
+async def grant_privileged_members_on_graph(
+    driver: AsyncDriver,
+    org_id: str,
+    graph_id: str,
+    granted_by: str,
+) -> list[str]:
+    """Grant every owner/admin member of *org_id* the ReBAC ``admin`` role on
+    *graph_id*.
+
+    Org owners and admins see + access every subgraph the org owns. When a new
+    subgraph is created under the org, this re-asserts that rule for the new
+    graph — without it, members who joined *before* the subgraph existed would
+    not be able to open it. Idempotent (``rebac_service.grant_role`` MERGEs).
+    Returns the user_ids granted.
+    """
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (u:User:__Platform__)-[r:BELONGS_TO]->
+                  (:Organization:__Platform__ {org_id: $org_id})
+            WHERE r.org_role IN ['owner', 'admin']
+            RETURN u.user_id AS user_id
+            """,
+            {"org_id": org_id},
+        )
+        user_ids = [record["user_id"] async for record in result]
+
+    for user_id in user_ids:
+        await rebac_service.grant_role(
+            driver,
+            graph_id=graph_id,
+            target_user_id=user_id,
+            role_name="admin",
+            granted_by=granted_by,
+        )
+
+    logger.info(
+        "Granted %d owner/admin member(s) of org %s admin on subgraph %s",
+        len(user_ids),
+        org_id,
+        graph_id,
+    )
+    return user_ids

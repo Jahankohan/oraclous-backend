@@ -253,8 +253,9 @@ async def list_organization_graphs(
             status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
         )
 
-    is_owner = org_role == "owner"
-    if is_owner:
+    # Org owners and admins see every subgraph the org owns; a plain member
+    # sees only the subgraphs they hold an active ReBAC role on.
+    if org_role in ("owner", "admin"):
         graphs = await organization_service.list_org_graphs(driver, org_id)
     else:
         graphs = await organization_service.list_member_org_graphs(
@@ -666,7 +667,9 @@ async def list_organization_agents(
     """
     _, org_role = await _require_org_member(db, driver, org_id, user_id)
 
-    if org_role == "owner":
+    # Org owners and admins see every agent; a plain member sees only agents
+    # operating on a subgraph they can access.
+    if org_role in ("owner", "admin"):
         agents = await org_agent_service.list_org_agents(driver, org_id)
     else:
         agents = await org_agent_service.list_member_org_agents(driver, org_id, user_id)

@@ -203,6 +203,23 @@ async def create_graph(
                     f"ReBAC graph registration failed (non-fatal): {rebac_exc}"
                 )
 
+            # Org owners and admins see + access every subgraph the org owns.
+            # The creator was just registered above; grant the org's other
+            # privileged members ReBAC admin on this new subgraph too.
+            try:
+                from app.services import org_member_service
+
+                await org_member_service.grant_privileged_members_on_graph(
+                    _neo4j_client.async_driver,
+                    org_id=org_id,
+                    graph_id=graph_id,
+                    granted_by=user_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"Org owner/admin grant on new subgraph failed (non-fatal): {exc}"
+                )
+
         # Return response in expected format
         return GraphResponse(
             id=UUID(graph_result["graph_id"]),
