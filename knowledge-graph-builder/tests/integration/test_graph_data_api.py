@@ -172,8 +172,11 @@ async def _make_entity(
     if extra:
         props.update(extra)
     async with driver.session() as session:
+        # Real extracted entities also carry :__KGBuilder__ (the neo4j_graphrag
+        # marker). Include it so the suite exercises realistic nodes — the
+        # graph-data node filter must NOT exclude :__KGBuilder__.
         await session.run(
-            f"CREATE (e:{label}:__Entity__ $props)",
+            f"CREATE (e:{label}:__Entity__:__KGBuilder__ $props)",
             {"props": props},
         )
 
@@ -455,5 +458,48 @@ async def test_non_read_caller_gets_403(
         await _make_entity(neo4j_test_driver, gid, f"{_ENTITY_PREFIX}x")
         resp = await stranger_client.get(f"/api/v1/graphs/{gid}/graph-data")
         assert resp.status_code == 403, resp.text
+    finally:
+        await _clean_neo4j(neo4j_test_driver, [gid])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entities_without_id_property(
+    owner_client: AsyncClient, neo4j_test_driver
+) -> None:
+    """Extraction-path entities carry no `id` property — graph-data must still
+    return them (elementId fallback) with their relationships and weights."""
+    await _clean_neo4j(neo4j_test_driver, [])
+    gid = await _make_graph(neo4j_test_driver, OWNER_USER_ID)
+    try:
+        # No `id` property — exactly as neo4j_graphrag-extracted entities are.
+        async with neo4j_test_driver.session() as session:
+            await session.run(
+                """
+                CREATE (a:Organization:__Entity__:__KGBuilder__
+                          {graph_id: $gid, name: '__gdtest__noid-a'})
+                CREATE (b:Organization:__Entity__:__KGBuilder__
+                          {graph_id: $gid, name: '__gdtest__noid-b'})
+                MERGE (a)-[:CITES {graph_id: $gid, weight: 4}]->(b)
+                """,
+                {"gid": gid},
+            )
+
+        resp = await owner_client.get(f"/api/v1/graphs/{gid}/graph-data")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+
+        assert len(body["nodes"]) == 2
+        node_ids = {n["id"] for n in body["nodes"]}
+        # every node has a real, non-empty id (elementId fallback)
+        assert all(nid for nid in node_ids)
+        names = {n["properties"]["name"] for n in body["nodes"]}
+        assert names == {"__gdtest__noid-a", "__gdtest__noid-b"}
+
+        # the relationship is returned and its endpoints match the node ids
+        assert len(body["edges"]) == 1
+        edge = body["edges"][0]
+        assert edge["source"] in node_ids and edge["target"] in node_ids
+        assert edge["weight"] == 4.0  # r.weight, via the coalesce
     finally:
         await _clean_neo4j(neo4j_test_driver, [gid])

@@ -43,6 +43,10 @@ _RESERVED_LABELS: set[str] = {
 #   id         — already surfaced as the top-level node id
 _DROPPED_PROPERTIES: set[str] = {"embedding", "graph_id", "id"}
 
+# Node id: a domain `id` property when the entity has one (structured-ingest
+# path), else the stable Neo4j elementId. Extraction-path entities carry no
+# `id` property — using `n.id` blindly yields null ids and breaks edge joins.
+
 # Hard cap on returned nodes — keeps the payload (and the browser) bounded.
 HARD_CAP = 2000
 DEFAULT_LIMIT = 500
@@ -108,7 +112,11 @@ async def get_graph_data(
     # The optional filters are appended as parameterised WHERE clauses. The
     # full match-count is taken BEFORE the LIMIT so `truncated` is accurate.
     node_filters = ["n:__Entity__"]
-    for marker in _RESERVED_LABELS - {"__Entity__"}:
+    # `__KGBuilder__` is a marker neo4j_graphrag stamps on EVERY extracted
+    # entity — it must not be an exclusion, or every real entity is dropped.
+    # It stays in `_RESERVED_LABELS` so `_display_label` still skips it; it is
+    # only removed here, from the node-exclusion filter.
+    for marker in _RESERVED_LABELS - {"__Entity__", "__KGBuilder__"}:
         # `marker` is from a fixed internal set — safe to inline as a label.
         node_filters.append(f"NOT n:{marker}")
     if node_type is not None:
@@ -141,7 +149,7 @@ async def get_graph_data(
     ORDER BY coalesce(ic.level, 2147483647) ASC
     WITH n, degree, collect(c.id)[0] AS community_id
     WITH collect({{
-        id: n.id,
+        id: coalesce(n.id, elementId(n)),
         labels: labels(n),
         type: n.type,
         degree: degree,
@@ -192,12 +200,13 @@ async def get_graph_data(
         MATCH (a:__Entity__ {graph_id: $graph_id})
               -[r {graph_id: $graph_id}]->
               (b:__Entity__ {graph_id: $graph_id})
-        WHERE a.id IN $node_ids AND b.id IN $node_ids
+        WHERE coalesce(a.id, elementId(a)) IN $node_ids
+          AND coalesce(b.id, elementId(b)) IN $node_ids
         RETURN elementId(r) AS id,
-               a.id AS source,
-               b.id AS target,
+               coalesce(a.id, elementId(a)) AS source,
+               coalesce(b.id, elementId(b)) AS target,
                type(r) AS type,
-               toFloat(coalesce(r.count, r.score, 1.0)) AS weight
+               toFloat(coalesce(r.weight, r.count, r.score, 1.0)) AS weight
         """
         async with driver.session() as session:
             result = await session.run(
