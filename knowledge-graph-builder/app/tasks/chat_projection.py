@@ -79,7 +79,10 @@ async def _project_async(
     under the user's RLS context, (2) write the Neo4j shadow via the
     chat_queries templates.
     """
-    from app.core.database import async_session_maker
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.core.config import settings
 
     # ── Phase 1: load from Postgres ───────────────────────────────────────────
     try:
@@ -93,50 +96,64 @@ async def _project_async(
         )
         return {"status": "skipped", "reason": "malformed_id"}
 
-    async with async_session_maker() as db:
-        await db.execute(
-            sql_text("SELECT set_config('app.current_user_id', :uid, true)").bindparams(
-                uid=str(user_uuid)
-            )
-        )
-        msg = (
-            await db.execute(select(ChatMessage).where(ChatMessage.id == msg_uuid))
-        ).scalar_one_or_none()
-        if msg is None:
-            logger.info(
-                "chat_projection: message %s not found (RLS or deleted); skipping",
-                message_id,
-            )
-            return {"status": "skipped", "reason": "message_not_visible"}
-        conv = (
+    # Celery runs each task on a fresh event loop (AsyncTaskExecutor) that is
+    # closed when the task ends. The module-global async engine pools asyncpg
+    # connections bound to the loop that opened them; reusing one on the next
+    # task's loop raises "Future attached to a different loop" /
+    # "Event loop is closed". A task-scoped NullPool engine opens and closes
+    # its connection entirely within this task's loop. Mirrors the sync
+    # NullPool pattern in community_tasks.py.
+    pg_engine = create_async_engine(settings.POSTGRES_URL, poolclass=NullPool)
+    try:
+        session_maker = async_sessionmaker(pg_engine, expire_on_commit=False)
+        async with session_maker() as db:
             await db.execute(
-                select(ChatConversation).where(
-                    ChatConversation.id == msg.conversation_id
-                )
+                sql_text(
+                    "SELECT set_config('app.current_user_id', :uid, true)"
+                ).bindparams(uid=str(user_uuid))
             )
-        ).scalar_one_or_none()
-        if conv is None:
-            return {"status": "skipped", "reason": "conversation_not_visible"}
+            msg = (
+                await db.execute(select(ChatMessage).where(ChatMessage.id == msg_uuid))
+            ).scalar_one_or_none()
+            if msg is None:
+                logger.info(
+                    "chat_projection: message %s not found (RLS or deleted); skipping",
+                    message_id,
+                )
+                return {"status": "skipped", "reason": "message_not_visible"}
+            conv = (
+                await db.execute(
+                    select(ChatConversation).where(
+                        ChatConversation.id == msg.conversation_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if conv is None:
+                return {"status": "skipped", "reason": "conversation_not_visible"}
 
-        conv_id = str(conv.id)
-        conv_user_id = str(conv.user_id)
-        conv_graph_id = str(conv.graph_id)
-        conv_agent_id = str(conv.agent_id) if conv.agent_id else None
-        conv_title = conv.title
-        conv_created_at = (
-            conv.created_at.isoformat() if conv.created_at is not None else None
-        )
-        conv_last_message_at = (
-            conv.last_message_at.isoformat()
-            if conv.last_message_at is not None
-            else None
-        )
+            conv_id = str(conv.id)
+            conv_user_id = str(conv.user_id)
+            conv_graph_id = str(conv.graph_id)
+            conv_agent_id = str(conv.agent_id) if conv.agent_id else None
+            conv_title = conv.title
+            conv_created_at = (
+                conv.created_at.isoformat() if conv.created_at is not None else None
+            )
+            conv_last_message_at = (
+                conv.last_message_at.isoformat()
+                if conv.last_message_at is not None
+                else None
+            )
 
-        message_id_str = str(msg.id)
-        role = msg.role
-        content = msg.content or ""
-        snippet = content[:_SNIPPET_MAX_CHARS]
-        created_at = msg.created_at.isoformat() if msg.created_at is not None else None
+            message_id_str = str(msg.id)
+            role = msg.role
+            content = msg.content or ""
+            snippet = content[:_SNIPPET_MAX_CHARS]
+            created_at = (
+                msg.created_at.isoformat() if msg.created_at is not None else None
+            )
+    finally:
+        await pg_engine.dispose()
 
     # ── Phase 2: project into Neo4j ───────────────────────────────────────────
     async with WorkerNeo4jManager() as neo4j:
