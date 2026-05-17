@@ -9,10 +9,16 @@ Routes:
   GET    /organizations/{org_id}      — get one org (owner-only)
   PATCH  /organizations/{org_id}      — update one org (owner-only)
   GET    /organizations/{org_id}/graphs — list the org's subgraphs (owner-only)
+  POST   /organizations/{org_id}/members — register an org member (owner-only)
+  GET    /organizations/{org_id}/members — list org members (owner-only)
+  DELETE /organizations/{org_id}/members/{user_id} — remove a member (owner-only)
+  POST   /organizations/{org_id}/members/{user_id}/subgraph-grants
+                                          — grant a member subgraph access (owner-only)
 
-Access control for TASK-201 is owner-only: the current user must equal the
-org's ``owner_user_id``. The not-owner case returns 404 (not 403) so org
-existence is never leaked. Membership-based access is a later task (TASK-203).
+Access control here is owner-only: the current user must equal the org's
+``owner_user_id``. The not-owner case returns 404 (not 403) so org existence
+is never leaked. The member registry (TASK-203 Part 1) is purely additive —
+it does not modify existing per-graph member endpoints or ReBAC code.
 """
 
 from __future__ import annotations
@@ -29,12 +35,17 @@ from app.api.dependencies import get_current_user_id, get_database
 from app.core.dependencies import get_neo4j_async_driver
 from app.models.organization import Organization
 from app.schemas.graph_schemas import GraphResponse
+from app.schemas.org_member_schemas import (
+    OrgMemberCreate,
+    OrgMemberResponse,
+    SubgraphGrantSpec,
+)
 from app.schemas.organization_schemas import (
     OrganizationCreate,
     OrganizationResponse,
     OrganizationUpdate,
 )
-from app.services import organization_service
+from app.services import org_member_service, organization_service
 
 router = APIRouter()
 
@@ -192,3 +203,175 @@ async def list_organization_graphs(
 
     graphs = await organization_service.list_org_graphs(driver, org_id)
     return [_serialize_graph(g) for g in graphs]
+
+
+# ── Member registry (TASK-203 Part 1) ──────────────────────────────────────
+
+
+async def _require_org_owner(
+    db: AsyncSession, org_id: str, user_id: str
+) -> Organization:
+    """Return the org if *user_id* owns it, else raise 404.
+
+    Mirrors the owner-only guard used by the org GET/PATCH/graphs routes:
+    the not-owner and missing cases both yield 404 so existence is never
+    leaked to non-owners.
+    """
+    org = await organization_service.get_organization(db, org_id)
+    if org is None or str(org.owner_user_id) != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+        )
+    return org
+
+
+@router.post(
+    "/organizations/{org_id}/members",
+    response_model=OrgMemberResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_organization_member(
+    org_id: str,
+    body: OrgMemberCreate,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+) -> OrgMemberResponse:
+    """Register a member at the organization. Owner-only.
+
+    If ``subgraph_grants`` is supplied, the member is also granted the given
+    ReBAC role on the named subgraphs (or all of them) in the same call.
+    """
+    await _require_org_owner(db, org_id, user_id)
+
+    try:
+        member = await org_member_service.add_member(
+            driver,
+            org_id=org_id,
+            user_id=body.user_id,
+            org_role=body.org_role,
+            email=body.email,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    grants: list[dict] = []
+    if body.subgraph_grants is not None:
+        try:
+            grants = await org_member_service.grant_member_subgraphs(
+                driver,
+                org_id=org_id,
+                user_id=body.user_id,
+                role=body.subgraph_grants.role,
+                graph_ids=body.subgraph_grants.graph_ids,
+                granted_by=user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+
+    return OrgMemberResponse(
+        user_id=member["user_id"],
+        email=member["email"],
+        org_role=member["org_role"],
+        since=member["since"],
+        subgraph_grants=grants,
+    )
+
+
+@router.get(
+    "/organizations/{org_id}/members",
+    response_model=list[OrgMemberResponse],
+)
+async def list_organization_members(
+    org_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+) -> list[OrgMemberResponse]:
+    """List the organization's members with their org_role and subgraph grants.
+
+    Owner-only — 404 if the org is missing or not owned by the caller.
+    """
+    await _require_org_owner(db, org_id, user_id)
+
+    members = await org_member_service.list_members(driver, org_id)
+    return [
+        OrgMemberResponse(
+            user_id=m["user_id"],
+            email=m["email"],
+            org_role=m["org_role"],
+            since=m["since"],
+            subgraph_grants=m["subgraph_grants"],
+        )
+        for m in members
+    ]
+
+
+@router.delete(
+    "/organizations/{org_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def remove_organization_member(
+    org_id: str,
+    user_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+) -> None:
+    """Remove a member from the organization. Owner-only.
+
+    Returns 409 if it would remove the org's last owner; 204 otherwise.
+    """
+    await _require_org_owner(db, org_id, current_user_id)
+
+    try:
+        await org_member_service.remove_member(driver, org_id, user_id)
+    except ValueError as exc:
+        # "not a member" and "only owner" both surface here; treat the
+        # last-owner refusal as a conflict, a missing membership as 404.
+        message = str(exc)
+        if "only owner" in message:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=message
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=message
+        ) from exc
+
+
+@router.post(
+    "/organizations/{org_id}/members/{user_id}/subgraph-grants",
+    response_model=list[dict],
+)
+async def grant_member_subgraph_access(
+    org_id: str,
+    user_id: str,
+    body: SubgraphGrantSpec,
+    current_user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+) -> list[dict]:
+    """Grant an existing member a ReBAC role on the org's subgraphs. Owner-only.
+
+    Returns the list of ``{graph_id, role}`` actually granted.
+    """
+    await _require_org_owner(db, org_id, current_user_id)
+
+    try:
+        return await org_member_service.grant_member_subgraphs(
+            driver,
+            org_id=org_id,
+            user_id=user_id,
+            role=body.role,
+            graph_ids=body.graph_ids,
+            granted_by=current_user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
