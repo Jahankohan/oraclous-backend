@@ -30,8 +30,8 @@ from app.api.dependencies import (
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
 from app.core.rate_limiter import limiter
-from app.schemas.chat_schemas import (
-    ChatMode,  # noqa: F401  (re-exported for backwards-compat callers)
+from app.schemas.chat_schemas import (  # noqa: F401  (re-exported for backwards-compat callers)
+    ChatMode,
     ChatModesResponse,
     ChatRequest,
     ChatResponse,
@@ -198,9 +198,11 @@ async def chat_with_graph(
                 sequence_index=idx,
                 tool_name=tc.get("name", "unknown"),
                 args=None,  # provenance doesn't surface tool args today
-                result={"node_count": tc.get("node_count")}
-                if tc.get("node_count") is not None
-                else None,
+                result=(
+                    {"node_count": tc.get("node_count")}
+                    if tc.get("node_count") is not None
+                    else None
+                ),
             )
         except Exception:
             # Tool-call audit is best-effort — never fail the user
@@ -458,9 +460,11 @@ async def stream_chat_with_graph(
                             sequence_index=idx,
                             tool_name=tc.get("name", "unknown"),
                             args=None,
-                            result={"node_count": tc.get("node_count")}
-                            if tc.get("node_count") is not None
-                            else None,
+                            result=(
+                                {"node_count": tc.get("node_count")}
+                                if tc.get("node_count") is not None
+                                else None
+                            ),
                         )
                     except Exception:
                         logger.exception(

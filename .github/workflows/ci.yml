@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches-ignore: ["main"]
   pull_request:
     branches: ["main", "develop"]
 
@@ -23,16 +23,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install lint dependencies
-        run: pip install ruff black isort
+        run: pip install ruff==0.12.11
 
       - name: Run ruff
         run: ruff check app/ tests/
 
-      - name: Check black formatting
-        run: black --check app/ tests/
-
-      - name: Check isort
-        run: isort --check app/ tests/
+      - name: Check formatting
+        run: ruff format --check app/ tests/
 
   unit-tests:
     name: Unit Tests
