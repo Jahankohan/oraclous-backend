@@ -35,7 +35,6 @@ python-magic>=0.4.27     # MIME type detection for uploaded files
 # LLM required configurations
 langchain-anthropic==0.3.19
 langchain-google-genai==2.1.9
-sentence-transformers==5.1.0
 langchain-experimental==0.3.4
 tiktoken==0.11.0
 celery[redis]==5.5.3
