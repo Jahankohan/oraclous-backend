@@ -231,27 +231,39 @@ class DefaultRetrieverConfigs:
 
     @staticmethod
     def get_vector_cypher_config(graph_id: str) -> VectorCypherRetrieverConfig:
-        """Get default VectorCypherRetriever configuration with multi-tenant support"""
+        """Get default VectorCypherRetriever configuration with multi-tenant support.
+
+        TASK-205: ``graph_id`` is no longer f-string-interpolated into the
+        Cypher. The retrieval query filters with a parameterized
+        ``graph_id IN $graph_ids`` so a single subgraph query can fan out
+        across visibility-checked LINKED_TO targets. The caller passes
+        ``query_params={"graph_ids": [...]}``. For a single-graph query
+        the list has one element and ``IN ['x']`` is equivalent to
+        ``= 'x'`` — behaviour is identical to the pre-TASK-205 query.
+        """
         return VectorCypherRetrieverConfig(
             index_name="text_embeddings_primary",
-            retrieval_query=f"""
-            // Multi-tenant filter for graph_id
-            WHERE node.graph_id = '{graph_id}'
+            retrieval_query="""
+            // Multi-tenant filter for graph_id (TASK-205: span linked subgraphs)
+            WHERE node.graph_id IN $graph_ids
 
             // Get entities that are connected to this chunk
-            MATCH (entity {{graph_id: '{graph_id}'}})-[:FROM_CHUNK]->(node)
-            OPTIONAL MATCH (node)-[:FROM_DOCUMENT]->(document {{graph_id: '{graph_id}'}})
+            MATCH (entity)-[:FROM_CHUNK]->(node)
+            WHERE entity.graph_id IN $graph_ids
+            OPTIONAL MATCH (node)-[:FROM_DOCUMENT]->(document)
+                WHERE document.graph_id IN $graph_ids
 
             // Traverse entity relationships for context
-            OPTIONAL MATCH (entity)-[r]-(related_entity {{graph_id: '{graph_id}'}})
+            OPTIONAL MATCH (entity)-[r]-(related_entity)
+                WHERE related_entity.graph_id IN $graph_ids
 
             RETURN node.text as text,
                    document.path as document_path,
                    collect(DISTINCT entity.name) as entities,
-                   collect(DISTINCT {{
+                   collect(DISTINCT {
                        entity: related_entity.name,
                        relationship: type(r)
-                   }}) as relationships,
+                   }) as relationships,
                    score
             ORDER BY score DESC
             """,
@@ -271,28 +283,37 @@ class DefaultRetrieverConfigs:
 
     @staticmethod
     def get_hybrid_cypher_config(graph_id: str) -> HybridCypherRetrieverConfig:
-        """Get default HybridCypherRetriever configuration with multi-tenant support"""
+        """Get default HybridCypherRetriever configuration with multi-tenant support.
+
+        TASK-205: ``graph_id`` is parameterized as ``graph_id IN $graph_ids``
+        — see :meth:`get_vector_cypher_config` for the rationale. A
+        single-graph query (one-element list) behaves identically to the
+        pre-TASK-205 query.
+        """
         return HybridCypherRetrieverConfig(
             vector_index_name="text_embeddings_primary",
             fulltext_index_name="fulltext_chunks",
-            retrieval_query=f"""
-            // Multi-tenant filter for graph_id
-            WHERE node.graph_id = '{graph_id}'
+            retrieval_query="""
+            // Multi-tenant filter for graph_id (TASK-205: span linked subgraphs)
+            WHERE node.graph_id IN $graph_ids
 
             // Get entities that are connected to this chunk
-            MATCH (entity {{graph_id: '{graph_id}'}})-[:FROM_CHUNK]->(node)
-            OPTIONAL MATCH (node)-[:FROM_DOCUMENT]->(document {{graph_id: '{graph_id}'}})
+            MATCH (entity)-[:FROM_CHUNK]->(node)
+            WHERE entity.graph_id IN $graph_ids
+            OPTIONAL MATCH (node)-[:FROM_DOCUMENT]->(document)
+                WHERE document.graph_id IN $graph_ids
 
             // Traverse entity relationships for context
-            OPTIONAL MATCH (entity)-[r]-(related_entity {{graph_id: '{graph_id}'}})
+            OPTIONAL MATCH (entity)-[r]-(related_entity)
+                WHERE related_entity.graph_id IN $graph_ids
 
             RETURN node.text as text,
                    document.path as document_path,
                    collect(DISTINCT entity.name) as entities,
-                   collect(DISTINCT {{
+                   collect(DISTINCT {
                        entity: related_entity.name,
                        relationship: type(r)
-                   }}) as relationships,
+                   }) as relationships,
                    score
             ORDER BY score DESC
             """,

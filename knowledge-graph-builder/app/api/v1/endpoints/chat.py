@@ -141,7 +141,11 @@ async def chat_with_graph(
             mode=body.mode.value if body.mode else None,
         )
         executor = await AgentExecutor.from_chat_config(
-            driver=neo4j_client.async_driver, agent_def=agent_def
+            driver=neo4j_client.async_driver,
+            agent_def=agent_def,
+            # TASK-205: thread the requesting user so retrieval can span
+            # the LINKED_TO subgraphs this user is allowed to see.
+            requesting_user_id=user_id,
         )
         agent_response = await executor.run(
             message=body.query,
@@ -338,7 +342,11 @@ async def stream_chat_with_graph(
                 mode=body.mode.value if body.mode else None,
             )
             executor = await AgentExecutor.from_chat_config(
-                driver=neo4j_client.async_driver, agent_def=agent_def
+                driver=neo4j_client.async_driver,
+                agent_def=agent_def,
+                # TASK-205: thread the requesting user so retrieval can
+                # span the LINKED_TO subgraphs this user can see.
+                requesting_user_id=user_id,
             )
 
             # Pre-fetch retrieval results so source events emit first.
@@ -347,7 +355,11 @@ async def stream_chat_with_graph(
             pre_nodes = []
             if tool_method is not None:
                 try:
-                    pre_nodes = await tool_method(str(body.graph_id), query=body.query)
+                    # TASK-205: resolve the same effective graph-id set
+                    # the streamed answer will be grounded on, so the
+                    # pre-stream `source` events match the final answer.
+                    pre_graph_ids = await executor.resolve_effective_graph_ids()
+                    pre_nodes = await tool_method(pre_graph_ids, query=body.query)
                 except Exception as pre_exc:
                     logger.warning(
                         "pre-stream retrieval via %s failed: %s — continuing "

@@ -28,6 +28,36 @@ class ToolNotPermittedError(Exception):
         self.tool_name = tool_name
 
 
+def _as_graph_ids(graph_id: str | list[str]) -> list[str]:
+    """Normalize a tool's first argument to a non-empty list of graph ids.
+
+    TASK-205: agent tools used to take a single ``graph_id: str``. To let a
+    query span LINKED_TO subgraphs the executor now passes the effective
+    graph-id set (source graph first, then visibility-checked linked
+    targets). For full backward compatibility a plain ``str`` is still
+    accepted and wrapped into a one-element list — and a one-element list
+    produces Cypher results identical to the pre-TASK-205 ``= $gid`` form
+    (``IN ['x']`` is equivalent to ``= 'x'``).
+
+    The result is order-preserving and de-duplicated (source graph stays
+    first). Raises ``ValueError`` on an empty set so tenant isolation
+    fails closed — a query is never run without a graph_id filter.
+    """
+    if isinstance(graph_id, str):
+        ids = [graph_id]
+    else:
+        ids = list(graph_id)
+    seen: set[str] = set()
+    out: list[str] = []
+    for gid in ids:
+        if gid and gid not in seen:
+            seen.add(gid)
+            out.append(gid)
+    if not out:
+        raise ValueError("graph_id set must contain at least one graph id")
+    return out
+
+
 def _node_to_result(props: dict[str, Any]) -> NodeResult:
     _skip = {"id", "node_id", "qualified_name", "label", "name", "embedding"}
     return NodeResult(
@@ -84,25 +114,31 @@ class AgentToolkit:
     # ── Tools ─────────────────────────────────────────────────────────────────
 
     async def graph_search(
-        self, graph_id: str, query: str, max_results: int = 10
+        self, graph_id: str | list[str], query: str, max_results: int = 10
     ) -> list[NodeResult]:
-        """Semantic similarity search over the graph's embedding space."""
+        """Semantic similarity search over the graph's embedding space.
+
+        TASK-205: ``graph_id`` may be a single id (legacy) or the effective
+        graph-id set spanning LINKED_TO subgraphs. A one-element set is
+        byte-identical to the pre-TASK-205 ``= $gid`` query.
+        """
         self._require("graph_search")
+        gids = _as_graph_ids(graph_id)
         embedding = await self._embed(query)
         result = await self._driver.execute_query(
             """
             CALL db.index.vector.queryNodes('text_embeddings_primary', $max_results, $embedding)
             YIELD node, score
-            WHERE node.graph_id = $gid
+            WHERE node.graph_id IN $gids
             RETURN node, score
             ORDER BY score DESC
             """,
-            {"gid": graph_id, "max_results": max_results, "embedding": embedding},
+            {"gids": gids, "max_results": max_results, "embedding": embedding},
         )
         return [_node_to_result(dict(rec["node"])) for rec in result.records]
 
     async def community_members(
-        self, graph_id: str, community_id: str, max_results: int = 50
+        self, graph_id: str | list[str], community_id: str, max_results: int = 50
     ) -> list[NodeResult]:
         """Return all member nodes of a community across any registered kind.
 
@@ -110,8 +146,12 @@ class AgentToolkit:
         a match for ``community_id`` is found. This avoids forcing the
         calling LLM to know whether ``community_id`` points at an entity
         community or a chunk community.
+
+        TASK-205: ``graph_id`` may be the effective graph-id set; both the
+        member node and its community must live in that set.
         """
         self._require("community_members")
+        gids = _as_graph_ids(graph_id)
         # Imported lazily so the toolkit can still be used in tests that
         # don't have the full app package wired up.
         from app.schemas.community_kinds import all_kinds
@@ -122,16 +162,17 @@ class AgentToolkit:
             # interpolation here is safe. Identifiers wrapped in backticks
             # for defense-in-depth.
             query = (
-                f"MATCH (n:`{spec.member_label}` {{graph_id: $gid}})"
+                f"MATCH (n:`{spec.member_label}`)"
                 f"-[:`{spec.member_rel}`]->"
                 f"(c:`{spec.community_label}` "
-                f"{{`{spec.id_property}`: $cid, graph_id: $gid}}) "
+                f"{{`{spec.id_property}`: $cid}}) "
+                "WHERE n.graph_id IN $gids AND c.graph_id IN $gids "
                 "RETURN n "
                 "LIMIT $max_results"
             )
             result = await self._driver.execute_query(
                 query,
-                {"gid": graph_id, "cid": community_id, "max_results": max_results},
+                {"gids": gids, "cid": community_id, "max_results": max_results},
             )
             if result.records:
                 return [_node_to_result(dict(rec["n"])) for rec in result.records]
@@ -140,13 +181,23 @@ class AgentToolkit:
 
     async def neighbors(
         self,
-        graph_id: str,
+        graph_id: str | list[str],
         node_id: str,
         edge_type: str | None = None,
         depth: int = 1,
     ) -> list[NodeResult]:
-        """BFS from node_id up to `depth` hops, optionally filtered by relationship type."""
+        """BFS from node_id up to `depth` hops, optionally filtered by relationship type.
+
+        TASK-205 — single-graph by design. A bounded variable-length
+        traversal is scoped to the **source** graph only (the first id in
+        the effective set). Knowledge edges (``FROM_CHUNK`` etc.) never
+        span subgraphs, so widening the node filter to the linked set
+        would not reach linked data anyway while changing path
+        cardinality semantics. The source graph is used; linked targets
+        are intentionally ignored for this traversal tool.
+        """
         self._require("neighbors")
+        graph_id = _as_graph_ids(graph_id)[0]
         depth = min(max(1, depth), _MAX_DEPTH)
         # depth embedded as f-string — Neo4j 5.x does not allow range upper bounds as params
         edge_filter = (
@@ -164,28 +215,39 @@ class AgentToolkit:
         return [_node_to_result(dict(rec["m"])) for rec in result.records]
 
     async def degree_centrality(
-        self, graph_id: str, node_label: str, top_n: int = 10
+        self, graph_id: str | list[str], node_label: str, top_n: int = 10
     ) -> list[NodeResult]:
-        """Return top_n most-connected nodes of the given label (Cypher COUNT, not GDS)."""
+        """Return top_n most-connected nodes of the given label (Cypher COUNT, not GDS).
+
+        TASK-205: spans the effective graph-id set; a one-element set is
+        identical to the pre-TASK-205 query.
+        """
         self._require("degree_centrality")
+        gids = _as_graph_ids(graph_id)
         label = _safe_label(node_label)
         # label cannot be a Cypher parameter; validated above
         query = f"""
-        MATCH (n:{label} {{graph_id: $gid}})-[r]-()
+        MATCH (n:{label})-[r]-()
+        WHERE n.graph_id IN $gids
         RETURN n, count(r) AS degree
         ORDER BY degree DESC
         LIMIT $top_n
         """
-        result = await self._driver.execute_query(
-            query, {"gid": graph_id, "top_n": top_n}
-        )
+        result = await self._driver.execute_query(query, {"gids": gids, "top_n": top_n})
         return [_node_to_result(dict(rec["n"])) for rec in result.records]
 
     async def shortest_path(
-        self, graph_id: str, from_qname: str, to_qname: str
+        self, graph_id: str | list[str], from_qname: str, to_qname: str
     ) -> PathResult | None:
-        """Return shortest undirected path between two nodes by qualified_name."""
+        """Return shortest undirected path between two nodes by qualified_name.
+
+        TASK-205 — single-graph by design. Every node on the path must
+        share one ``graph_id``; knowledge edges do not cross subgraphs,
+        so the traversal is scoped to the **source** graph (first id of
+        the effective set). Linked targets are intentionally ignored.
+        """
         self._require("shortest_path")
+        graph_id = _as_graph_ids(graph_id)[0]
         result = await self._driver.execute_query(
             """
             MATCH p = shortestPath(
@@ -205,10 +267,16 @@ class AgentToolkit:
         return PathResult(nodes=nodes, hop_count=rec["hop_count"])
 
     async def taint_trace(
-        self, graph_id: str, source_qname: str, depth: int = 10
+        self, graph_id: str | list[str], source_qname: str, depth: int = 10
     ) -> list[NodeResult]:
-        """Follow FLOWS_TO edges from source_qname (valid for code knowledge graphs)."""
+        """Follow FLOWS_TO edges from source_qname (valid for code knowledge graphs).
+
+        TASK-205 — single-graph by design. ``FLOWS_TO`` is an intra-graph
+        code edge; the traversal is scoped to the **source** graph (first
+        id of the effective set). Linked targets are intentionally ignored.
+        """
         self._require("taint_trace")
+        graph_id = _as_graph_ids(graph_id)[0]
         depth = min(max(1, depth), _MAX_DEPTH)
         # depth embedded as f-string — Neo4j 5.x does not allow range upper bounds as params
         query = f"""
@@ -223,7 +291,7 @@ class AgentToolkit:
 
     async def cypher_query(
         self,
-        graph_id: str,
+        graph_id: str | list[str],
         cypher: str,
         max_results: int = 25,
     ) -> list[NodeResult]:
@@ -235,9 +303,16 @@ class AgentToolkit:
           - Require the query to constrain by ``graph_id`` (tenant isolation).
           - Cap result size at ``max_results`` via injected LIMIT clause if absent.
 
+        TASK-205 — single-graph by design. The LLM generates the Cypher
+        text and binds ``$graph_id`` as a scalar; spanning linked
+        subgraphs would require re-prompting the model to emit
+        ``IN``-form queries. The query stays scoped to the **source**
+        graph (first id of the effective set).
+
         Returns the first node-valued column from each record.
         """
         self._require("cypher_query")
+        graph_id = _as_graph_ids(graph_id)[0]
         if not isinstance(cypher, str) or not cypher.strip():
             raise ValueError("cypher must be a non-empty string")
         # Strip leading EXPLAIN/PROFILE for safety check, but reject EXPLAIN/PROFILE writes.
@@ -297,24 +372,30 @@ class AgentToolkit:
 
     async def temporal_slice(
         self,
-        graph_id: str,
+        graph_id: str | list[str],
         node_label: str,
         at_time: int,
         max_results: int = 50,
     ) -> list[NodeResult]:
-        """Return nodes valid at a given point in time (bitemporal valid_from/valid_to)."""
+        """Return nodes valid at a given point in time (bitemporal valid_from/valid_to).
+
+        TASK-205: spans the effective graph-id set; a one-element set is
+        identical to the pre-TASK-205 query.
+        """
         self._require("temporal_slice")
+        gids = _as_graph_ids(graph_id)
         label = _safe_label(node_label)
         # label cannot be a Cypher parameter; validated above
         query = f"""
-        MATCH (n:{label} {{graph_id: $gid}})
-        WHERE n.valid_from <= $at_time
+        MATCH (n:{label})
+        WHERE n.graph_id IN $gids
+          AND n.valid_from <= $at_time
           AND (n.valid_to IS NULL OR n.valid_to >= $at_time)
         RETURN n
         LIMIT $max_results
         """
         result = await self._driver.execute_query(
-            query, {"gid": graph_id, "at_time": at_time, "max_results": max_results}
+            query, {"gids": gids, "at_time": at_time, "max_results": max_results}
         )
         return [_node_to_result(dict(rec["n"])) for rec in result.records]
 
@@ -322,12 +403,15 @@ class AgentToolkit:
 
     async def find_communities(
         self,
-        graph_id: str,
+        graph_id: str | list[str],
         query: str,
         kind: str | None = None,
         top_k: int = 5,
     ) -> list[NodeResult]:
         """Find communities related to a query via vector search over summaries.
+
+        TASK-205: spans the effective graph-id set; a one-element set is
+        identical to the pre-TASK-205 query.
 
         ``kind=None`` searches every registered kind that has a populated
         vector index, then merges results by score. ``kind="chunk"`` or
@@ -339,6 +423,7 @@ class AgentToolkit:
         agent prompts can read the result in a glance.
         """
         self._require("find_communities")
+        gids = _as_graph_ids(graph_id)
         from app.schemas.community_kinds import all_kinds, get_kind
 
         if kind is not None:
@@ -357,7 +442,7 @@ class AgentToolkit:
             cypher = (
                 f"CALL db.index.vector.queryNodes('{spec.index_name}', "
                 f"$top_k, $embedding) YIELD node, score "
-                f"WHERE node.graph_id = $gid AND node.summary IS NOT NULL "
+                f"WHERE node.graph_id IN $gids AND node.summary IS NOT NULL "
                 f"RETURN node.`{spec.id_property}` AS community_id, "
                 f"node.summary AS summary, "
                 f"node.`{spec.size_property}` AS size, "
@@ -370,7 +455,7 @@ class AgentToolkit:
                 result = await self._driver.execute_query(
                     cypher,
                     {
-                        "gid": graph_id,
+                        "gids": gids,
                         "top_k": per_index_k,
                         "embedding": embedding,
                     },
@@ -431,12 +516,15 @@ class AgentToolkit:
 
     async def describe_community(
         self,
-        graph_id: str,
+        graph_id: str | list[str],
         community_id: str,
         kind: str | None = None,
     ) -> list[NodeResult]:
         """Return metadata for one community: summary, keywords, excerpt,
         size, plus up to 5 sample member names.
+
+        TASK-205: spans the effective graph-id set; a one-element set is
+        identical to the pre-TASK-205 query.
 
         Auto-detects kind by probing the registry (entity first → one
         round trip on the common case) when ``kind`` is None. The agent
@@ -448,6 +536,7 @@ class AgentToolkit:
         summary preview.
         """
         self._require("describe_community")
+        gids = _as_graph_ids(graph_id)
         from app.schemas.community_kinds import all_kinds, get_kind
 
         if kind is not None:
@@ -468,14 +557,15 @@ class AgentToolkit:
 
             cypher = (
                 f"MATCH (c:`{spec.community_label}` "
-                f"{{`{spec.id_property}`: $cid, graph_id: $gid}}) "
+                f"{{`{spec.id_property}`: $cid}}) "
+                "WHERE c.graph_id IN $gids "
                 f"RETURN c.`{spec.id_property}` AS community_id, "
                 "c.summary AS summary, "
                 f"c.`{spec.size_property}` AS size, "
                 f"{summary_extras}"
             )
             result = await self._driver.execute_query(
-                cypher, {"cid": community_id, "gid": graph_id}
+                cypher, {"cid": community_id, "gids": gids}
             )
             if not result.records:
                 continue
@@ -487,26 +577,28 @@ class AgentToolkit:
             # without calling community_members for the full list.
             if spec.kind == "chunk":
                 members_cypher = (
-                    f"MATCH (m:`{spec.member_label}` {{graph_id: $gid}})"
+                    f"MATCH (m:`{spec.member_label}`)"
                     f"-[:`{spec.member_rel}`]->"
                     f"(c:`{spec.community_label}` "
-                    f"{{`{spec.id_property}`: $cid, graph_id: $gid}}) "
+                    f"{{`{spec.id_property}`: $cid}}) "
+                    "WHERE m.graph_id IN $gids AND c.graph_id IN $gids "
                     "RETURN m.id AS member_id, "
                     "substring(coalesce(m.text, ''), 0, 80) AS member_preview "
                     "ORDER BY m.id LIMIT 5"
                 )
             else:
                 members_cypher = (
-                    f"MATCH (m:`{spec.member_label}` {{graph_id: $gid}})"
+                    f"MATCH (m:`{spec.member_label}`)"
                     f"-[:`{spec.member_rel}`]->"
                     f"(c:`{spec.community_label}` "
-                    f"{{`{spec.id_property}`: $cid, graph_id: $gid}}) "
+                    f"{{`{spec.id_property}`: $cid}}) "
+                    "WHERE m.graph_id IN $gids AND c.graph_id IN $gids "
                     "RETURN coalesce(m.id, elementId(m)) AS member_id, "
                     "coalesce(m.name, '') AS member_preview "
                     "ORDER BY m.name LIMIT 5"
                 )
             mres = await self._driver.execute_query(
-                members_cypher, {"cid": community_id, "gid": graph_id}
+                members_cypher, {"cid": community_id, "gids": gids}
             )
             sample_members = [
                 {"id": m["member_id"], "preview": m["member_preview"]}
@@ -549,7 +641,7 @@ class AgentToolkit:
 
     async def vector_cypher_search(
         self,
-        graph_id: str,
+        graph_id: str | list[str],
         query: str,
         top_k: int = 5,
     ) -> list[NodeResult]:
@@ -561,12 +653,19 @@ class AgentToolkit:
         graph-derived context, not just text. This is the default
         retriever for ``POST /chat`` after STORY-8.
 
+        TASK-205: ``graph_id`` may be the effective graph-id set spanning
+        LINKED_TO subgraphs. The default retrieval query filters with
+        ``graph_id IN $graph_ids`` and the set is passed through
+        ``query_params``. A one-element set is byte-identical to the
+        pre-TASK-205 single-graph query.
+
         Returns a list of NodeResult where each result's ``label`` is the
         chunk text and ``properties`` carries ``score``, ``entities``,
         and ``relationships``. The agent (or chat adapter) can quote
         these directly.
         """
         self._require("vector_cypher_search")
+        gids = _as_graph_ids(graph_id)
         # Imported lazily so the toolkit can be used in tests without
         # constructing the full retriever stack.
         from app.schemas.retriever_schemas import (
@@ -576,11 +675,14 @@ class AgentToolkit:
         )
         from app.services.retriever_factory import retriever_factory
 
-        cfg = DefaultRetrieverConfigs.get_vector_cypher_config(graph_id)
+        # source graph (first id) keeps the per-graph factory cache keys
+        # and log lines stable; the multi-graph filter is applied via the
+        # parameterized $graph_ids passed to search() below.
+        cfg = DefaultRetrieverConfigs.get_vector_cypher_config(gids[0])
         cfg.top_k = top_k
         retriever = await retriever_factory.create_retriever(
             RetrieverConfig(type=RetrieverType.VECTOR_CYPHER, config=cfg),
-            graph_id,
+            gids[0],
         )
         # neo4j_graphrag retrievers are sync — call via to_thread to
         # avoid blocking the executor's event loop. Explicit
@@ -592,7 +694,7 @@ class AgentToolkit:
             return retriever.search(
                 query_text=query,
                 top_k=top_k,
-                query_params={"graph_id": graph_id},
+                query_params={"graph_ids": gids},
             )
 
         result = await _asyncio.to_thread(_do_search)
@@ -600,7 +702,7 @@ class AgentToolkit:
 
     async def hybrid_cypher_search(
         self,
-        graph_id: str,
+        graph_id: str | list[str],
         query: str,
         top_k: int = 5,
     ) -> list[NodeResult]:
@@ -613,11 +715,16 @@ class AgentToolkit:
         semantic matches. The graph-traversal half is identical to the
         vector-cypher version.
 
+        TASK-205: ``graph_id`` may be the effective graph-id set; see
+        :meth:`vector_cypher_search`. A one-element set is byte-identical
+        to the pre-TASK-205 single-graph query.
+
         Requires the ``fulltext_chunks`` index to exist. If it doesn't,
         the underlying retriever will error — callers should fall back
         to ``vector_cypher_search`` on failure.
         """
         self._require("hybrid_cypher_search")
+        gids = _as_graph_ids(graph_id)
         from app.schemas.retriever_schemas import (
             DefaultRetrieverConfigs,
             RetrieverConfig,
@@ -625,11 +732,11 @@ class AgentToolkit:
         )
         from app.services.retriever_factory import retriever_factory
 
-        cfg = DefaultRetrieverConfigs.get_hybrid_cypher_config(graph_id)
+        cfg = DefaultRetrieverConfigs.get_hybrid_cypher_config(gids[0])
         cfg.top_k = top_k
         retriever = await retriever_factory.create_retriever(
             RetrieverConfig(type=RetrieverType.HYBRID_CYPHER, config=cfg),
-            graph_id,
+            gids[0],
         )
         import asyncio as _asyncio
 
@@ -637,7 +744,7 @@ class AgentToolkit:
             return retriever.search(
                 query_text=query,
                 top_k=top_k,
-                query_params={"graph_id": graph_id},
+                query_params={"graph_ids": gids},
             )
 
         result = await _asyncio.to_thread(_do_search)

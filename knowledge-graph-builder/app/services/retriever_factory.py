@@ -336,8 +336,13 @@ class RetrieverFactory:
 
         Uses $graph_id parameter — never interpolates values directly into Cypher.
         The caller must pass {"graph_id": graph_id_value} as query_params when executing.
+
+        TASK-205: a query that already references either ``$graph_id`` or the
+        multi-graph ``$graph_ids`` parameter is left untouched — the default
+        VECTOR_CYPHER / HYBRID_CYPHER configs now carry their own
+        parameterized ``graph_id IN $graph_ids`` filter.
         """
-        if "$graph_id" in retrieval_query:
+        if "$graph_ids" in retrieval_query or "$graph_id" in retrieval_query:
             return retrieval_query
 
         if "WHERE" in retrieval_query.upper():

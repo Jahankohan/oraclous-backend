@@ -224,7 +224,12 @@ async def agent_chat(
 
     try:
         executor = await AgentExecutor.from_neo4j(
-            neo4j_client.async_driver, graph_id, agent_id
+            neo4j_client.async_driver,
+            graph_id,
+            agent_id,
+            # TASK-205: thread the requesting user so retrieval can span
+            # the LINKED_TO subgraphs this user is allowed to see.
+            requesting_user_id=user_id,
         )
     except ValueError:
         raise HTTPException(

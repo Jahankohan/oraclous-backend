@@ -211,11 +211,24 @@ class AgentExecutor:
         toolkit: AgentToolkit,
         llm: AsyncOpenAI,
         model: str,
+        driver: AsyncDriver | None = None,
+        requesting_user_id: str | None = None,
     ) -> None:
         self._agent = agent_def
         self._toolkit = toolkit
         self._llm = llm
         self._model = model
+        # TASK-205: the Neo4j driver + the requesting user are kept so the
+        # executor can resolve the effective graph-id set (source graph +
+        # visibility-checked LINKED_TO targets) once per turn. When
+        # ``requesting_user_id`` is None (legacy callers, tests, SDK
+        # paths) the executor falls back to the source graph only —
+        # retrieval behaviour is then byte-identical to pre-TASK-205.
+        self._driver = driver
+        self._requesting_user_id = requesting_user_id
+        # Per-turn cache of the resolved effective graph-id set, keyed by
+        # source graph_id. Populated lazily by ``_effective_graph_ids``.
+        self._effective_graph_ids_cache: dict[str, list[str]] = {}
 
     # ── Factory ───────────────────────────────────────────────────────────────
 
@@ -225,7 +238,16 @@ class AgentExecutor:
         driver: AsyncDriver,
         graph_id: str,
         agent_id: str,
+        requesting_user_id: str | None = None,
     ) -> "AgentExecutor":
+        """Build an executor for a persisted ``:Agent`` node.
+
+        ``requesting_user_id`` (TASK-205, optional) is the user driving the
+        chat turn. When supplied the executor resolves and queries the
+        effective graph-id set — the source graph plus every LINKED_TO
+        target the user can see. Defaults to None so existing callers and
+        tests are unaffected (retrieval stays scoped to the source graph).
+        """
         svc = AgentService(driver)
         agent_def = await svc.get_agent(graph_id, agent_id)
         if not agent_def:
@@ -269,13 +291,21 @@ class AgentExecutor:
             model=settings.EMBEDDING_MODEL or "text-embedding-3-large",
         )
         toolkit = AgentToolkit(driver, agent_def["tools"], embedder=embedder)
-        return cls(agent_def, toolkit, llm, model)
+        return cls(
+            agent_def,
+            toolkit,
+            llm,
+            model,
+            driver=driver,
+            requesting_user_id=requesting_user_id,
+        )
 
     @classmethod
     async def from_chat_config(
         cls,
         driver: AsyncDriver,
         agent_def: dict[str, Any],
+        requesting_user_id: str | None = None,
     ) -> "AgentExecutor":
         """Factory for in-memory chat configs (STORY-8).
 
@@ -284,6 +314,11 @@ class AgentExecutor:
         LLM resolution falls through to env-var defaults (org-level
         LLMConfig isn't consulted because the synthetic agent has no
         ``org_id``); this matches what ChatService used to do.
+
+        ``requesting_user_id`` (TASK-205, optional) is threaded so the
+        executor can span LINKED_TO subgraphs the user can see. Defaults
+        to None — retrieval then stays scoped to the source graph,
+        byte-identical to pre-TASK-205 behaviour.
         """
         api_key = settings.LLM_API_KEY or settings.OPENAI_API_KEY
         if not api_key:
@@ -307,7 +342,94 @@ class AgentExecutor:
             model=settings.EMBEDDING_MODEL or "text-embedding-3-large",
         )
         toolkit = AgentToolkit(driver, agent_def["tools"], embedder=embedder)
-        return cls(agent_def, toolkit, llm, model)
+        return cls(
+            agent_def,
+            toolkit,
+            llm,
+            model,
+            driver=driver,
+            requesting_user_id=requesting_user_id,
+        )
+
+    # ── TASK-205: effective graph-id resolution ───────────────────────────────
+
+    async def _effective_graph_ids(self, source_graph_id: str) -> list[str]:
+        """Resolve the graph-id set a retrieval query should span.
+
+        Returns ``[source_graph_id]`` plus every ``LINKED_TO`` target the
+        requesting user is allowed to see. The visibility filter (the
+        ADR-021 §4 ``min_role`` gate) is applied entirely inside
+        ``linked_to_service.list_graph_links`` — this method never
+        re-implements it.
+
+        Fallbacks that all yield exactly the source graph (byte-identical
+        to pre-TASK-205 behaviour):
+
+          * ``requesting_user_id`` is falsy — no user context to check
+            visibility against;
+          * the Neo4j driver was not supplied to the executor;
+          * ``list_graph_links`` raises (a link-resolution failure must
+            never break the chat path) — logged, then source-only.
+
+        The result is order-preserving (source graph first) and
+        de-duplicated, and cached per source graph for the turn.
+        """
+        cached = self._effective_graph_ids_cache.get(source_graph_id)
+        if cached is not None:
+            return cached
+
+        if not self._requesting_user_id or self._driver is None:
+            result = [source_graph_id]
+            self._effective_graph_ids_cache[source_graph_id] = result
+            return result
+
+        try:
+            # Imported lazily to keep the executor importable in test
+            # environments that don't wire up the full service package.
+            from app.services import linked_to_service
+
+            links = await linked_to_service.list_graph_links(
+                self._driver, source_graph_id, self._requesting_user_id
+            )
+        except Exception as exc:
+            # Fail safe — a link-lookup failure scopes retrieval to the
+            # source graph rather than breaking the turn.
+            logger.warning(
+                "TASK-205: list_graph_links failed for graph %s — "
+                "retrieval scoped to source graph only: %s",
+                source_graph_id,
+                exc,
+            )
+            result = [source_graph_id]
+            self._effective_graph_ids_cache[source_graph_id] = result
+            return result
+
+        seen = {source_graph_id}
+        result = [source_graph_id]
+        for link in links:
+            tgt = link.get("target_graph_id")
+            if tgt and tgt not in seen:
+                seen.add(tgt)
+                result.append(tgt)
+
+        if len(result) > 1:
+            logger.info(
+                "TASK-205: retrieval for graph %s spans %d linked subgraph(s)",
+                source_graph_id,
+                len(result) - 1,
+            )
+        self._effective_graph_ids_cache[source_graph_id] = result
+        return result
+
+    async def resolve_effective_graph_ids(self) -> list[str]:
+        """Public accessor for the effective graph-id set of this agent's
+        source graph (TASK-205).
+
+        Used by the ``/chat/stream`` endpoint, whose pre-stream retrieval
+        bypasses ``_dispatch`` to emit ``source`` SSE events — it needs
+        the same span-set the streamed answer is grounded on.
+        """
+        return await self._effective_graph_ids(self._agent["graph_id"])
 
     # ── Public entry point ────────────────────────────────────────────────────
 
@@ -708,12 +830,18 @@ class AgentExecutor:
         prov: ProvenanceCollector,
         tool_call_id: str | None = None,
     ) -> list[NodeResult]:
-        graph_id = self._agent["graph_id"]
+        source_graph_id = self._agent["graph_id"]
         method = getattr(self._toolkit, name, None)
         if method is None:
             raise ToolNotPermittedError(name)
 
-        result = await method(graph_id, **args)
+        # TASK-205: pass the effective graph-id set (source graph +
+        # visibility-checked LINKED_TO targets). With no links — or no
+        # requesting user — this is a one-element list and the toolkit
+        # produces results byte-identical to pre-TASK-205.
+        graph_ids = await self._effective_graph_ids(source_graph_id)
+
+        result = await method(graph_ids, **args)
 
         if isinstance(result, PathResult):
             nodes = result.nodes

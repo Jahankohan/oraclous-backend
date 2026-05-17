@@ -167,13 +167,17 @@ class TestDirectMode:
         tk.graph_search.assert_called_once()
 
     async def test_graph_id_passed_to_graph_search(self):
+        # TASK-205: _dispatch passes the effective graph-id *set* to the
+        # tool. With no requesting user / no driver the set falls back to
+        # exactly the source graph — a one-element list. The toolkit
+        # treats `['my-graph']` identically to the legacy `'my-graph'`.
         tk = _make_toolkit()
         ex = _executor(
             agent=_make_agent(graph_id="my-graph"), toolkit=tk, responses=["ok"]
         )
         await ex.run("q", session_id=None)
         call_args = tk.graph_search.call_args
-        assert call_args[0][0] == "my-graph"
+        assert call_args[0][0] == ["my-graph"]
 
     async def test_provenance_records_tool_call(self):
         ex = _executor(responses=["answer"])

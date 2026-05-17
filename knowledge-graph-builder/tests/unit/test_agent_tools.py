@@ -117,6 +117,9 @@ class TestGraphSearch:
         embedder.embed_query.assert_called_once_with("my question")
 
     async def test_graph_id_in_params(self):
+        # TASK-205: graph_search now scopes with `graph_id IN $gids`. A
+        # single-graph call wraps the id into a one-element list — which
+        # is equivalent to the pre-TASK-205 `= $gid` filter.
         driver, _ = _make_driver()
         embedder = AsyncMock()
         embedder.embed_query = AsyncMock(return_value=[0.0])
@@ -124,7 +127,19 @@ class TestGraphSearch:
             "target-graph", "q"
         )
         params = driver.execute_query.call_args[0][1]
-        assert params["gid"] == "target-graph"
+        assert params["gids"] == ["target-graph"]
+
+    async def test_graph_search_spans_multiple_graphs(self):
+        # TASK-205: a list of graph ids is passed straight through to the
+        # `IN $gids` filter, de-duplicated and order-preserving.
+        driver, _ = _make_driver()
+        embedder = AsyncMock()
+        embedder.embed_query = AsyncMock(return_value=[0.0])
+        await _toolkit(driver, ["graph_search"], embedder).graph_search(
+            ["src-graph", "linked-graph", "src-graph"], "q"
+        )
+        params = driver.execute_query.call_args[0][1]
+        assert params["gids"] == ["src-graph", "linked-graph"]
 
     async def test_max_results_in_params(self):
         driver, _ = _make_driver()
@@ -151,10 +166,11 @@ class TestCommunityMembers:
         assert isinstance(results[0], NodeResult)
 
     async def test_graph_id_in_params(self):
+        # TASK-205: community_members scopes with `graph_id IN $gids`.
         driver, _ = _make_driver()
         await _toolkit(driver, ["community_members"]).community_members("g-xyz", "c1")
         params = driver.execute_query.call_args[0][1]
-        assert params["gid"] == "g-xyz"
+        assert params["gids"] == ["g-xyz"]
 
     async def test_community_id_in_params(self):
         driver, _ = _make_driver()
@@ -244,12 +260,13 @@ class TestDegreeCentrality:
         assert ":Concept" in cypher
 
     async def test_graph_id_in_params(self):
+        # TASK-205: degree_centrality scopes with `graph_id IN $gids`.
         driver, _ = _make_driver()
         await _toolkit(driver, ["degree_centrality"]).degree_centrality(
             "g-123", "Entity"
         )
         params = driver.execute_query.call_args[0][1]
-        assert params["gid"] == "g-123"
+        assert params["gids"] == ["g-123"]
 
     async def test_top_n_in_params(self):
         driver, _ = _make_driver()
@@ -375,12 +392,13 @@ class TestTemporalSlice:
         assert len(results) == 1
 
     async def test_graph_id_in_params(self):
+        # TASK-205: temporal_slice scopes with `graph_id IN $gids`.
         driver, _ = _make_driver()
         await _toolkit(driver, ["temporal_slice"]).temporal_slice(
             "g-time", "Event", 1000
         )
         params = driver.execute_query.call_args[0][1]
-        assert params["gid"] == "g-time"
+        assert params["gids"] == ["g-time"]
 
     async def test_at_time_in_params(self):
         driver, _ = _make_driver()
@@ -495,7 +513,8 @@ class TestFindCommunities:
             driver, ["find_communities"], embedder=embedder
         ).find_communities("my-graph", "q", kind="chunk")
         params = driver.execute_query.call_args[0][1]
-        assert params["gid"] == "my-graph"
+        # TASK-205: find_communities scopes with `graph_id IN $gids`.
+        assert params["gids"] == ["my-graph"]
 
     async def test_keywords_parsed_from_json(self):
         driver, _ = _make_driver()
@@ -681,4 +700,5 @@ class TestDescribeCommunity:
         )
         # The first call is the community-row fetch
         params = driver.execute_query.call_args_list[0][0][1]
-        assert params["gid"] == "my-graph"
+        # TASK-205: describe_community scopes with `graph_id IN $gids`.
+        assert params["gids"] == ["my-graph"]
