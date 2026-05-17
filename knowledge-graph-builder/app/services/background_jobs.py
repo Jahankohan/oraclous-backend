@@ -215,6 +215,7 @@ celery_app = Celery(
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
     include=[
+        "app.tasks.chat_projection",
         "app.tasks.community_tasks",
         "app.tasks.federation_tasks",
         "app.tasks.ontology_tasks",
