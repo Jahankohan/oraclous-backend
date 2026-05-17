@@ -33,3 +33,30 @@ class Organization(Base):
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class OrgInvitation(Base):
+    """A pending invitation for someone to join an organization as a member.
+
+    An org owner or admin creates an invitation for an email address; the
+    invitee receives a link carrying ``token`` and, once authenticated,
+    accepts it — which registers them as an org member with ``org_role``.
+
+    Postgres-only: the ``BELONGS_TO`` membership edge in Neo4j is created at
+    accept time via ``org_member_service.add_member``. ``status`` is one of
+    ``pending | accepted | revoked | expired``.
+    """
+
+    __tablename__ = "org_invitations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    email = Column(String(320), nullable=False)
+    org_role = Column(String(64), nullable=False, default="member")
+    token = Column(String(64), nullable=False, unique=True, index=True)
+    status = Column(String(32), nullable=False, default="pending")
+    invited_by_user_id = Column(UUID(as_uuid=True), nullable=False)
+    accepted_by_user_id = Column(UUID(as_uuid=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)

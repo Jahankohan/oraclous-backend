@@ -34,6 +34,22 @@ class Settings(BaseSettings):
         "http://localhost:8003"  # used to build endpoint_url in PublishAgentResponse
     )
 
+    # Email (SMTP) — organization member-invitation emails. For Gmail set
+    # SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_USERNAME=<gmail address>,
+    # SMTP_PASSWORD=<Google app password>. When SMTP_HOST is unset, invitations
+    # are still created but no email is sent (email_sent=false in the response).
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM: str | None = None  # defaults to SMTP_USERNAME when unset
+    SMTP_USE_TLS: bool = True  # STARTTLS on port 587
+
+    # Member invitations. INVITE_BASE_URL is the frontend page the invite link
+    # points at; the accept token is appended as /{token}.
+    INVITE_BASE_URL: str = "http://localhost:3000/invitations"
+    INVITE_TTL_HOURS: int = 168  # invitation token lifetime — 7 days
+
     # LLM Configuration
     OPENAI_API_KEY: str | None = None
     LLM_API_KEY: str | None = (

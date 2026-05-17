@@ -77,6 +77,9 @@ opentelemetry-instrumentation-logging==0.48b0
 # before persisting to chat_message_tool_calls.result_compressed.
 zstandard==0.25.0
 
+# Email — organization member-invitation emails (SMTP)
+aiosmtplib==4.0.1
+
 # Development
 black==25.1.0
 isort==6.0.1
