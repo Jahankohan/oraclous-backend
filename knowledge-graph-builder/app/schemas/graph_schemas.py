@@ -1390,3 +1390,43 @@ class RollbackJobResponse(BaseModel):
     started_at: Any | None = None
     completed_at: Any | None = None
     created_at: Any | None = None
+
+
+# ==================== GRAPH-DATA VISUALIZATION (TASK-210) ====================
+
+
+class GraphDataNode(BaseModel):
+    """A single entity node in the Graph Explorer visualization payload."""
+
+    id: str
+    label: str
+    type: str | None = None
+    community_id: str | None = None
+    degree: int = 0
+    properties: dict[str, Any] = Field(default_factory=dict)
+
+
+class GraphDataEdge(BaseModel):
+    """A single entity-to-entity relationship in the visualization payload.
+
+    Only edges whose two endpoints are both in the returned node set appear
+    here (the induced subgraph) — no dangling edges, no non-entity edges.
+    """
+
+    id: str
+    source: str
+    target: str
+    type: str
+    weight: float = 1.0
+
+
+class GraphDataResponse(BaseModel):
+    """Read-only graph-visualization payload for the frontend Graph Explorer.
+
+    ``truncated`` is true when more nodes matched the supplied filters than
+    the (capped) ``limit`` returned.
+    """
+
+    nodes: list[GraphDataNode] = Field(default_factory=list)
+    edges: list[GraphDataEdge] = Field(default_factory=list)
+    truncated: bool = False

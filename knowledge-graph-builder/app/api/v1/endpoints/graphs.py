@@ -53,6 +53,7 @@ from app.schemas.graph_schemas import (
     EntityDeduplicateRequest,
     EntityDeduplicateResponse,
     GraphCreate,
+    GraphDataResponse,
     GraphInstructions,
     GraphInstructionsResponse,
     GraphLLMConfigResponse,
@@ -82,7 +83,7 @@ from app.schemas.graph_schemas import (
     VersionListResponse,
     VersionResponse,
 )
-from app.services import organization_service
+from app.services import graph_data_service, organization_service
 from app.services.background_job_service import background_job_service
 
 # Neo4j Services
@@ -2532,3 +2533,74 @@ async def get_rollback_job_status(
             status_code=status.HTTP_404_NOT_FOUND, detail="Rollback job not found"
         )
     return RollbackJobResponse(**job)
+
+
+# ==================== GRAPH-DATA VISUALIZATION (TASK-210) ====================
+
+
+@router.get(
+    "/graphs/{graph_id}/graph-data",
+    response_model=GraphDataResponse,
+    summary="Get graph data for visualization",
+    responses={
+        403: {"description": "Caller lacks read access to the graph"},
+    },
+)
+async def get_graph_data(
+    graph_id: UUID,
+    limit: int = Query(
+        default=500,
+        ge=1,
+        description=(
+            "Maximum number of nodes to return. Hard-capped at 2000 — values "
+            "above the cap are clamped silently."
+        ),
+    ),
+    node_type: str | None = Query(
+        default=None,
+        description="Keep only nodes carrying this label (e.g. 'Person').",
+    ),
+    community_id: str | None = Query(
+        default=None,
+        description="Keep only nodes IN_COMMUNITY with this community id.",
+    ),
+    min_degree: int | None = Query(
+        default=None,
+        ge=0,
+        description="Keep only nodes whose entity-to-entity degree is >= this.",
+    ),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    user_id: str = Depends(get_current_user_id),
+) -> GraphDataResponse:
+    """Return the entity nodes and induced edges for the Graph Explorer.
+
+    Read-only. The payload is the *induced subgraph* over the (filtered, then
+    capped) entity node set: an edge appears only when both its endpoints are
+    in the returned node set, so there are no dangling edges and no non-entity
+    relationships (FROM_CHUNK / IN_COMMUNITY / LINKED_TO / SAME_AS, etc.).
+
+    ``truncated`` is true when more nodes matched the filters than the cap
+    returned. Embeddings are never included in node ``properties``.
+
+    Requires ``read``-level access via ReBAC — denial is always 403.
+    """
+    # ReBAC check — always 403 on denial, prevents graph_id enumeration.
+    await verify_graph_access(str(graph_id), "read", user_id)
+
+    try:
+        data = await graph_data_service.get_graph_data(
+            driver,
+            graph_id=str(graph_id),
+            limit=limit,
+            node_type=node_type,
+            community_id=community_id,
+            min_degree=min_degree,
+        )
+    except Exception as e:
+        logger.error(f"Failed to build graph data for {graph_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to build graph data",
+        ) from None
+
+    return GraphDataResponse(**data)
