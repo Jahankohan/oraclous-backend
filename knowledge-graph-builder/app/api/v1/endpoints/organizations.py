@@ -5,8 +5,8 @@ Makes :Organization a first-class entity with CRUD over the PostgreSQL
 
 Routes:
   POST   /organizations               — create an org (current user becomes owner)
-  GET    /organizations               — list orgs owned by the current user
-  GET    /organizations/{org_id}      — get one org (owner-only)
+  GET    /organizations               — list orgs the current user belongs to
+  GET    /organizations/{org_id}      — get one org (any member)
   PATCH  /organizations/{org_id}      — update one org (owner-only)
   GET    /organizations/{org_id}/graphs — list the org's subgraphs (owner-only)
   POST   /organizations/{org_id}/members — register an org member (owner-only)
@@ -22,11 +22,14 @@ Routes:
   DELETE /organizations/{org_id}/agents/{agent_id}/subgraph-grants/{graph_id}
                                           — revoke an agent's subgraph grant (owner-only)
 
-Access control here is owner-only: the current user must equal the org's
-``owner_user_id``. The not-owner case returns 404 (not 403) so org existence
-is never leaked. The member registry (TASK-203 Part 1) and agent registry
-(TASK-203 Part 2) are purely additive — they do not modify existing per-graph
-member/agent endpoints or ReBAC code.
+Access control: the org list/read routes (GET /organizations and GET
+/organizations/{org_id}) are member-readable — the caller must hold a
+``:User-[:BELONGS_TO]->:Organization`` edge (TASK-208). Every mutating route
+and the member/agent/subgraph-grant routes remain owner-only: the current user
+must equal the org's ``owner_user_id``. The not-owner / not-member case returns
+404 (not 403) so org existence is never leaked. The member registry
+(TASK-203 Part 1) and agent registry (TASK-203 Part 2) are purely additive —
+they do not modify existing per-graph member/agent endpoints or ReBAC code.
 """
 
 from __future__ import annotations
@@ -95,8 +98,12 @@ def _serialize_graph(graph: dict) -> GraphResponse:
     )
 
 
-def _serialize(org: Organization) -> OrganizationResponse:
-    """Map a SQL Organization row to the API response (ISO-8601 datetimes)."""
+def _serialize(org: Organization, org_role: str | None = None) -> OrganizationResponse:
+    """Map a SQL Organization row to the API response (ISO-8601 datetimes).
+
+    ``org_role`` is the calling user's role on this org (owner|admin|member),
+    or None when the caller's role is not resolved for the route.
+    """
     return OrganizationResponse(
         id=str(org.id),
         name=org.name,
@@ -106,6 +113,7 @@ def _serialize(org: Organization) -> OrganizationResponse:
         status=org.status,
         created_at=org.created_at.isoformat() if org.created_at else "",
         updated_at=org.updated_at.isoformat() if org.updated_at else "",
+        org_role=org_role,
     )
 
 
@@ -129,7 +137,7 @@ async def create_organization(
         settings=body.settings,
         owner_user_id=user_id,
     )
-    return _serialize(org)
+    return _serialize(org, org_role="owner")
 
 
 @router.get(
@@ -139,10 +147,14 @@ async def create_organization(
 async def list_organizations(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ) -> list[OrganizationResponse]:
-    """List all organizations owned by the current user."""
-    orgs = await organization_service.list_organizations(db, user_id)
-    return [_serialize(o) for o in orgs]
+    """List every organization the current user belongs to (any role).
+
+    Each response carries ``org_role`` — the caller's role on that org.
+    """
+    orgs = await organization_service.list_user_organizations(db, driver, user_id)
+    return [_serialize(o, org_role=role) for o, role in orgs]
 
 
 @router.get(
@@ -153,15 +165,22 @@ async def get_organization(
     org_id: str,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ) -> OrganizationResponse:
-    """Get a single organization. Owner-only — 404 if missing or not owned."""
+    """Get a single organization. Readable by any member (owner|admin|member).
+
+    404 if the org is missing OR the caller holds no BELONGS_TO edge to it —
+    existence is never leaked to non-members. The response carries the
+    caller's ``org_role``.
+    """
     org = await organization_service.get_organization(db, org_id)
-    if org is None or str(org.owner_user_id) != user_id:
-        # Never leak existence to non-owners.
+    role = await organization_service.get_user_org_role(driver, org_id, user_id)
+    if org is None or role is None:
+        # Never leak existence to non-members.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
         )
-    return _serialize(org)
+    return _serialize(org, org_role=role)
 
 
 @router.patch(
@@ -194,7 +213,7 @@ async def update_organization(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
         )
-    return _serialize(updated)
+    return _serialize(updated, org_role="owner")
 
 
 @router.get(

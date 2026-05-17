@@ -29,3 +29,7 @@ class OrganizationResponse(BaseModel):
     status: str
     created_at: str
     updated_at: str
+    org_role: str | None = Field(
+        default=None,
+        description="The calling user's role on this org: owner|admin|member",
+    )

@@ -124,6 +124,84 @@ async def list_organizations(
     return list(result.scalars().all())
 
 
+async def list_user_organizations(
+    db: AsyncSession,
+    driver: AsyncDriver,
+    user_id: str,
+) -> list[tuple[Organization, str]]:
+    """List every organization the user belongs to, with their role.
+
+    The set of memberships is read from Neo4j (the ``:User-[:BELONGS_TO]->
+    :Organization`` edges), then the matching ``Organization`` SQL rows are
+    loaded. Any ``org_id`` with a Neo4j edge but no SQL row is skipped
+    defensively, so a partial two-store state never yields a 500.
+
+    Returns ``[(Organization, org_role), ...]`` ordered by org creation time.
+    """
+    # 1. Read the user's memberships (org_id + role) from Neo4j.
+    roles_by_org_id: dict[str, str] = {}
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (:User:__Platform__ {user_id: $uid})
+                  -[r:BELONGS_TO]->(o:Organization:__Platform__)
+            RETURN o.org_id AS org_id, r.org_role AS org_role
+            """,
+            {"uid": user_id},
+        )
+        async for record in result:
+            org_id = record["org_id"]
+            if org_id is not None:
+                roles_by_org_id[org_id] = record["org_role"]
+
+    if not roles_by_org_id:
+        return []
+
+    # 2. Parse org_ids to UUIDs (skip malformed ones defensively).
+    org_uuids: list[uuid.UUID] = []
+    for org_id in roles_by_org_id:
+        try:
+            org_uuids.append(uuid.UUID(org_id))
+        except (ValueError, TypeError):
+            logger.warning("Skipping malformed org_id from BELONGS_TO edge: %r", org_id)
+
+    if not org_uuids:
+        return []
+
+    # 3. SQL-load the matching Organization rows.
+    result = await db.execute(
+        select(Organization)
+        .where(Organization.id.in_(org_uuids))
+        .order_by(Organization.created_at)
+    )
+    organizations = list(result.scalars().all())
+
+    # 4. Pair each row with its role; skip any org_id with no SQL row.
+    return [(org, roles_by_org_id[str(org.id)]) for org in organizations]
+
+
+async def get_user_org_role(
+    driver: AsyncDriver,
+    org_id: str,
+    user_id: str,
+) -> str | None:
+    """Return the caller's ``org_role`` on the org, or None if not a member.
+
+    Reads the ``:User-[:BELONGS_TO]->:Organization`` edge directly from Neo4j.
+    """
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (:User:__Platform__ {user_id: $uid})
+                  -[r:BELONGS_TO]->(:Organization:__Platform__ {org_id: $org_id})
+            RETURN r.org_role AS org_role
+            """,
+            {"uid": user_id, "org_id": org_id},
+        )
+        record = await result.single()
+    return record["org_role"] if record is not None else None
+
+
 async def get_or_create_default_org(
     db: AsyncSession,
     driver: AsyncDriver,
