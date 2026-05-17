@@ -73,6 +73,9 @@ class AgentUpdate(BaseModel):
 class AgentResponse(BaseModel):
     agent_id: str
     graph_id: str
+    # TASK-203 Part 2 — the owning organization. Legacy agents created before
+    # the org registry carry no org_id, so this is optional with a None default.
+    org_id: str | None = None
     name: str
     description: str
     system_prompt: str

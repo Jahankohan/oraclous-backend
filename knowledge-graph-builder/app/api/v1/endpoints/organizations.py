@@ -14,11 +14,19 @@ Routes:
   DELETE /organizations/{org_id}/members/{user_id} — remove a member (owner-only)
   POST   /organizations/{org_id}/members/{user_id}/subgraph-grants
                                           — grant a member subgraph access (owner-only)
+  GET    /organizations/{org_id}/agents   — list the org's agents (owner-only)
+  POST   /organizations/{org_id}/agents/{agent_id}/subgraph-grants
+                                          — grant an agent subgraph access (owner-only)
+  GET    /organizations/{org_id}/agents/{agent_id}/subgraph-grants
+                                          — list an agent's subgraph grants (owner-only)
+  DELETE /organizations/{org_id}/agents/{agent_id}/subgraph-grants/{graph_id}
+                                          — revoke an agent's subgraph grant (owner-only)
 
 Access control here is owner-only: the current user must equal the org's
 ``owner_user_id``. The not-owner case returns 404 (not 403) so org existence
-is never leaked. The member registry (TASK-203 Part 1) is purely additive —
-it does not modify existing per-graph member endpoints or ReBAC code.
+is never leaked. The member registry (TASK-203 Part 1) and agent registry
+(TASK-203 Part 2) are purely additive — they do not modify existing per-graph
+member/agent endpoints or ReBAC code.
 """
 
 from __future__ import annotations
@@ -35,6 +43,11 @@ from app.api.dependencies import get_current_user_id, get_database
 from app.core.dependencies import get_neo4j_async_driver
 from app.models.organization import Organization
 from app.schemas.graph_schemas import GraphResponse
+from app.schemas.org_agent_schemas import (
+    AgentGrantResponse,
+    AgentSubgraphGrantSpec,
+    OrgAgentResponse,
+)
 from app.schemas.org_member_schemas import (
     OrgMemberCreate,
     OrgMemberResponse,
@@ -45,7 +58,11 @@ from app.schemas.organization_schemas import (
     OrganizationResponse,
     OrganizationUpdate,
 )
-from app.services import org_member_service, organization_service
+from app.services import (
+    org_agent_service,
+    org_member_service,
+    organization_service,
+)
 
 router = APIRouter()
 
@@ -375,3 +392,136 @@ async def grant_member_subgraph_access(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
+
+
+# ── Agent registry (TASK-203 Part 2) ────────────────────────────────────────
+
+
+@router.get(
+    "/organizations/{org_id}/agents",
+    response_model=list[OrgAgentResponse],
+)
+async def list_organization_agents(
+    org_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+) -> list[OrgAgentResponse]:
+    """List the agents that belong to the organization. Owner-only.
+
+    404 if the org is missing or not owned by the caller — existence is masked.
+    """
+    await _require_org_owner(db, org_id, user_id)
+
+    agents = await org_agent_service.list_org_agents(driver, org_id)
+    return [
+        OrgAgentResponse(
+            agent_id=a["agent_id"],
+            org_id=a["org_id"],
+            graph_id=a["graph_id"],
+            name=a["name"],
+            description=a.get("description", ""),
+            active=a.get("deactivated_at") is None,
+        )
+        for a in agents
+    ]
+
+
+@router.post(
+    "/organizations/{org_id}/agents/{agent_id}/subgraph-grants",
+    response_model=list[AgentGrantResponse],
+)
+async def grant_agent_subgraph_access(
+    org_id: str,
+    agent_id: str,
+    body: AgentSubgraphGrantSpec,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+) -> list[AgentGrantResponse]:
+    """Grant an org agent ``CAN_ACCESS`` on the org's subgraphs. Owner-only.
+
+    Returns the list of ``{graph_id, level}`` actually granted. A bad level,
+    an agent that does not belong to the org, or a graph the org does not own
+    all surface as 400.
+    """
+    await _require_org_owner(db, org_id, user_id)
+
+    try:
+        granted = await org_agent_service.grant_agent_subgraphs(
+            driver,
+            org_id=org_id,
+            agent_id=agent_id,
+            level=body.level,
+            graph_ids=body.graph_ids,
+            granted_by=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    return [AgentGrantResponse(**g) for g in granted]
+
+
+@router.get(
+    "/organizations/{org_id}/agents/{agent_id}/subgraph-grants",
+    response_model=list[AgentGrantResponse],
+)
+async def list_agent_subgraph_grants(
+    org_id: str,
+    agent_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+) -> list[AgentGrantResponse]:
+    """List an org agent's ``CAN_ACCESS`` subgraph grants. Owner-only.
+
+    An agent that does not belong to the org surfaces as 400.
+    """
+    await _require_org_owner(db, org_id, user_id)
+
+    try:
+        grants = await org_agent_service.list_agent_grants(driver, org_id, agent_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    return [AgentGrantResponse(**g) for g in grants]
+
+
+@router.delete(
+    "/organizations/{org_id}/agents/{agent_id}/subgraph-grants/{graph_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def revoke_agent_subgraph_grant(
+    org_id: str,
+    agent_id: str,
+    graph_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+) -> None:
+    """Revoke an org agent's ``CAN_ACCESS`` grant on a subgraph. Owner-only.
+
+    204 on success; 404 if there was no such grant. An agent that does not
+    belong to the org surfaces as 400.
+    """
+    await _require_org_owner(db, org_id, user_id)
+
+    try:
+        deleted = await org_agent_service.revoke_agent_grant(
+            driver, org_id, agent_id, graph_id
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No such subgraph grant for this agent",
+        )

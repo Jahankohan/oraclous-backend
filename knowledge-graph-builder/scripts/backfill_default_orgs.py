@@ -13,9 +13,13 @@ brings legacy graphs up to the TASK-202 model:
        - set ``g.org_id``
        - MERGE ``(:Organization)-[:OWNS]->(:Graph)``
        - MERGE ``(:User)-[:CREATED]->(:Graph)``
+  4. (TASK-203 Part 2) For every :Agent:__Platform__ that still lacks an
+     ``org_id``, copy the ``org_id`` from its home graph and MERGE
+     ``(:Organization)-[:HAS_AGENT]->(:Agent)``.
 
 Idempotent — safe to re-run. Graphs that already have an ``org_id`` are skipped
-because step 1 only selects graphs where ``org_id`` IS NULL.
+because step 1 only selects graphs where ``org_id`` IS NULL; the agent step
+only touches agents whose ``org_id`` is null/absent.
 
 Run with:
     python scripts/backfill_default_orgs.py
@@ -92,6 +96,35 @@ async def _backfill_user_graphs(driver, user_id: str, org_id: str) -> int:
         return int(record["touched"]) if record else 0
 
 
+async def _backfill_agent_orgs(driver) -> int:
+    """Wire every org-less :Agent to its home graph's organization.
+
+    For each :Agent:__Platform__ whose ``org_id`` is null/absent, copy the
+    ``org_id`` from its home graph (``a.graph_id``) and MERGE
+    ``(:Organization)-[:HAS_AGENT]->(:Agent)``. Agents whose home graph still
+    lacks an ``org_id`` are skipped (run the graph backfill first).
+
+    Idempotent — the WHERE clause only selects agents that still need it, and
+    the HAS_AGENT edge is MERGE-d. Returns the count of agents touched.
+    """
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (a:Agent:__Platform__)
+            WHERE a.org_id IS NULL
+            MATCH (g:Graph:__Platform__ {graph_id: a.graph_id})
+            WHERE g.org_id IS NOT NULL
+            SET a.org_id = g.org_id
+            WITH a, g
+            MATCH (o:Organization:__Platform__ {org_id: g.org_id})
+            MERGE (o)-[:HAS_AGENT]->(a)
+            RETURN count(DISTINCT a) AS touched
+            """
+        )
+        record = await result.single()
+        return int(record["touched"]) if record else 0
+
+
 async def run_backfill() -> None:
     """Backfill default orgs across all users with org-less graphs."""
     engine = create_async_engine(settings.POSTGRES_URL, poolclass=NullPool, future=True)
@@ -119,16 +152,22 @@ async def run_backfill() -> None:
             total_graphs += touched
             print(f"  user {user_id}: org {org_id} -> {touched} graph(s)")
 
+        # TASK-203 Part 2 — bring pre-registry :Agent nodes up to the
+        # org-aware model. Runs after the graph backfill so every graph that
+        # can have an org_id already does.
+        agents_touched = await _backfill_agent_orgs(driver)
+
         print("\nBackfill complete.")
         print(f"  -> {len(user_ids)} user(s) processed.")
         print(f"  -> {total_graphs} graph(s) assigned an owning organization.")
+        print(f"  -> {agents_touched} agent(s) assigned an owning organization.")
     finally:
         await driver.close()
         await engine.dispose()
 
 
 def main() -> None:
-    print("TASK-202 — Default Organization Backfill")
+    print("TASK-202 / TASK-203 — Default Organization + Agent Backfill")
     print("=" * 50)
     asyncio.run(run_backfill())
 

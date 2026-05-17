@@ -41,9 +41,12 @@ def _row_to_dict(rec: dict) -> dict[str, Any]:
         hop_depth=props.get("retriever_hop_depth", 2),
         max_results=props.get("retriever_max_results", 20),
     )
+    # Legacy-safe: pre-TASK-203 :Agent nodes carry no org_id.
+    props.setdefault("org_id", None)
     return {
         "agent_id": props["agent_id"],
         "graph_id": props["graph_id"],
+        "org_id": props.get("org_id"),
         "name": props["name"],
         "description": props.get("description", ""),
         "system_prompt": props.get("system_prompt", ""),
@@ -66,11 +69,27 @@ class AgentService:
     async def create_agent(self, graph_id: str, user_id: str, data: AgentCreate) -> str:
         agent_id = str(uuid4())
         now = int(time.time())
+
+        # TASK-203 Part 2 — resolve the home graph's owning organization so
+        # the new :Agent carries an org_id and the org knows its agents.
+        # Legacy graphs that predate TASK-202 may still lack an org_id; in
+        # that case org_id stays null and no HAS_AGENT edge is wired (the
+        # backfill script picks the agent up later).
+        org_result = await self._driver.execute_query(
+            """
+            MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
+            RETURN g.org_id AS org_id
+            """,
+            {"graph_id": graph_id},
+        )
+        org_id = org_result.records[0]["org_id"] if org_result.records else None
+
         await self._driver.execute_query(
             """
             CREATE (a:Agent:__Platform__ {
                 agent_id:              $agent_id,
                 graph_id:              $graph_id,
+                org_id:                $org_id,
                 name:                  $name,
                 description:           $description,
                 system_prompt:         $system_prompt,
@@ -88,6 +107,7 @@ class AgentService:
             {
                 "agent_id": agent_id,
                 "graph_id": graph_id,
+                "org_id": org_id,
                 "name": data.name,
                 "description": data.description,
                 "system_prompt": data.system_prompt,
@@ -101,7 +121,22 @@ class AgentService:
                 "created_at": now,
             },
         )
-        logger.info("Created Agent %s for graph %s", agent_id, graph_id)
+
+        # Wire (:Organization)-[:HAS_AGENT]->(:Agent) so the org registry
+        # can enumerate its agents. Only when the home graph has an org.
+        if org_id is not None:
+            await self._driver.execute_query(
+                """
+                MATCH (o:Organization:__Platform__ {org_id: $org_id})
+                MATCH (a:Agent:__Platform__ {agent_id: $agent_id})
+                MERGE (o)-[:HAS_AGENT]->(a)
+                """,
+                {"org_id": org_id, "agent_id": agent_id},
+            )
+
+        logger.info(
+            "Created Agent %s for graph %s (org %s)", agent_id, graph_id, org_id
+        )
         return agent_id
 
     async def list_agents(self, graph_id: str) -> list[dict[str, Any]]:
