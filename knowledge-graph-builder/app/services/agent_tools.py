@@ -125,13 +125,21 @@ class AgentToolkit:
         self._require("graph_search")
         gids = _as_graph_ids(graph_id)
         embedding = await self._embed(query)
+        # Tenant-scoped cosine: filter to the graph(s) FIRST, then score
+        # within. The global `db.index.vector.queryNodes` returns a
+        # database-wide top-K — on a multi-graph database the largest graph
+        # fills every slot and a smaller graph's nodes never survive the
+        # `graph_id` post-filter (cross-tenant starvation: a graph that is
+        # not the biggest in the DB retrieves nothing). A full cosine scan
+        # over one tenant's chunks is exact and fast at this scale.
         result = await self._driver.execute_query(
             """
-            CALL db.index.vector.queryNodes('text_embeddings_primary', $max_results, $embedding)
-            YIELD node, score
-            WHERE node.graph_id IN $gids
+            MATCH (node:Chunk)
+            WHERE node.graph_id IN $gids AND node.embedding IS NOT NULL
+            WITH node, vector.similarity.cosine(node.embedding, $embedding) AS score
             RETURN node, score
             ORDER BY score DESC
+            LIMIT $max_results
             """,
             {"gids": gids, "max_results": max_results, "embedding": embedding},
         )
@@ -639,6 +647,51 @@ class AgentToolkit:
 
     # ── STORY-8: enriched retrieval tools (chat-engine unification) ──────────
 
+    async def _vector_cypher_retrieve(
+        self, gids: list[str], query: str, top_k: int
+    ) -> list[NodeResult]:
+        """Tenant-scoped vector retrieval + one-hop graph context.
+
+        Cosine-scans the tenant's chunks (filter by ``graph_id`` first,
+        score within — this avoids the cross-tenant top-K starvation of
+        the global vector index), takes the ``top_k``, then pulls the
+        connected entities and their one-hop relationships so the LLM
+        gets graph-derived context, not just chunk text.
+
+        Shared by :meth:`vector_cypher_search` and
+        :meth:`hybrid_cypher_search`.
+        """
+        embedding = await self._embed(query)
+        result = await self._driver.execute_query(
+            """
+            MATCH (node:Chunk)
+            WHERE node.graph_id IN $gids AND node.embedding IS NOT NULL
+            WITH node, vector.similarity.cosine(node.embedding, $embedding) AS score
+            ORDER BY score DESC
+            LIMIT $top_k
+
+            // graph-derived context for each retrieved chunk
+            MATCH (entity)-[:FROM_CHUNK]->(node)
+            WHERE entity.graph_id IN $gids
+            OPTIONAL MATCH (node)-[:FROM_DOCUMENT]->(document)
+                WHERE document.graph_id IN $gids
+            OPTIONAL MATCH (entity)-[r]-(related_entity)
+                WHERE related_entity.graph_id IN $gids
+
+            RETURN node.text AS text,
+                   document.path AS document_path,
+                   collect(DISTINCT entity.name) AS entities,
+                   collect(DISTINCT {
+                       entity: related_entity.name,
+                       relationship: type(r)
+                   }) AS relationships,
+                   score
+            ORDER BY score DESC
+            """,
+            {"gids": gids, "embedding": embedding, "top_k": top_k},
+        )
+        return [_record_to_node_result(rec) for rec in result.records]
+
     async def vector_cypher_search(
         self,
         graph_id: str | list[str],
@@ -647,58 +700,22 @@ class AgentToolkit:
     ) -> list[NodeResult]:
         """Vector similarity search + graph traversal (the 'enhanced' mode).
 
-        Wraps neo4j_graphrag's VectorCypherRetriever. For each chunk that
-        scores above the vector threshold, this also pulls connected
-        entities and one-hop neighbour relationships so the LLM has
-        graph-derived context, not just text. This is the default
-        retriever for ``POST /chat`` after STORY-8.
+        For each chunk that scores highest by cosine similarity *within
+        the tenant*, this also pulls connected entities and one-hop
+        neighbour relationships so the LLM has graph-derived context,
+        not just text. Default retriever for ``POST /chat`` after STORY-8.
 
         TASK-205: ``graph_id`` may be the effective graph-id set spanning
-        LINKED_TO subgraphs. The default retrieval query filters with
-        ``graph_id IN $graph_ids`` and the set is passed through
-        ``query_params``. A one-element set is byte-identical to the
-        pre-TASK-205 single-graph query.
+        LINKED_TO subgraphs; a one-element set is the single-graph case.
 
-        Returns a list of NodeResult where each result's ``label`` is the
-        chunk text and ``properties`` carries ``score``, ``entities``,
-        and ``relationships``. The agent (or chat adapter) can quote
-        these directly.
+        Returns a list of NodeResult where ``label`` is the chunk text
+        and ``properties`` carries ``score``, ``entities`` and
+        ``relationships`` — the agent (or chat adapter) can quote these
+        directly.
         """
         self._require("vector_cypher_search")
         gids = _as_graph_ids(graph_id)
-        # Imported lazily so the toolkit can be used in tests without
-        # constructing the full retriever stack.
-        from app.schemas.retriever_schemas import (
-            DefaultRetrieverConfigs,
-            RetrieverConfig,
-            RetrieverType,
-        )
-        from app.services.retriever_factory import retriever_factory
-
-        # source graph (first id) keeps the per-graph factory cache keys
-        # and log lines stable; the multi-graph filter is applied via the
-        # parameterized $graph_ids passed to search() below.
-        cfg = DefaultRetrieverConfigs.get_vector_cypher_config(gids[0])
-        cfg.top_k = top_k
-        retriever = await retriever_factory.create_retriever(
-            RetrieverConfig(type=RetrieverType.VECTOR_CYPHER, config=cfg),
-            gids[0],
-        )
-        # neo4j_graphrag retrievers are sync — call via to_thread to
-        # avoid blocking the executor's event loop. Explicit
-        # ``query_text=`` keyword — the first positional arg on
-        # ``search`` is the embedding vector, not the query string.
-        import asyncio as _asyncio
-
-        def _do_search():
-            return retriever.search(
-                query_text=query,
-                top_k=top_k,
-                query_params={"graph_ids": gids},
-            )
-
-        result = await _asyncio.to_thread(_do_search)
-        return _retriever_items_to_node_results(result)
+        return await self._vector_cypher_retrieve(gids, query, top_k)
 
     async def hybrid_cypher_search(
         self,
@@ -706,83 +723,53 @@ class AgentToolkit:
         query: str,
         top_k: int = 5,
     ) -> list[NodeResult]:
-        """Hybrid (vector + fulltext) search + graph traversal.
+        """Vector search + graph traversal for the 'hybrid' chat modes.
 
-        Wraps neo4j_graphrag's HybridCypherRetriever. Like
-        ``vector_cypher_search`` but the initial retrieval is a hybrid
-        of vector similarity AND fulltext BM25 matching, so exact-term
-        queries (proper nouns, identifiers) get caught alongside
-        semantic matches. The graph-traversal half is identical to the
-        vector-cypher version.
+        Shares the tenant-scoped vector-cypher retrieval with
+        :meth:`vector_cypher_search`. The fulltext/BM25 half of the
+        former hybrid retriever is intentionally not used: it ran through
+        the global ``fulltext_chunks`` index with the same database-wide
+        top-K that starved smaller tenants of results. Tenant-scoped
+        fulltext needs its own design (``graph_id`` as an indexed
+        fulltext field, or per-graph fulltext indexes) — until then
+        ``hybrid`` returns correct vector-cypher results rather than
+        starved ones.
 
-        TASK-205: ``graph_id`` may be the effective graph-id set; see
-        :meth:`vector_cypher_search`. A one-element set is byte-identical
-        to the pre-TASK-205 single-graph query.
-
-        Requires the ``fulltext_chunks`` index to exist. If it doesn't,
-        the underlying retriever will error — callers should fall back
-        to ``vector_cypher_search`` on failure.
+        TASK-205: ``graph_id`` may be the effective graph-id set; a
+        one-element set is the single-graph case.
         """
         self._require("hybrid_cypher_search")
         gids = _as_graph_ids(graph_id)
-        from app.schemas.retriever_schemas import (
-            DefaultRetrieverConfigs,
-            RetrieverConfig,
-            RetrieverType,
-        )
-        from app.services.retriever_factory import retriever_factory
-
-        cfg = DefaultRetrieverConfigs.get_hybrid_cypher_config(gids[0])
-        cfg.top_k = top_k
-        retriever = await retriever_factory.create_retriever(
-            RetrieverConfig(type=RetrieverType.HYBRID_CYPHER, config=cfg),
-            gids[0],
-        )
-        import asyncio as _asyncio
-
-        def _do_search():
-            return retriever.search(
-                query_text=query,
-                top_k=top_k,
-                query_params={"graph_ids": gids},
-            )
-
-        result = await _asyncio.to_thread(_do_search)
-        return _retriever_items_to_node_results(result)
+        return await self._vector_cypher_retrieve(gids, query, top_k)
 
 
-def _retriever_items_to_node_results(retriever_result: Any) -> list[NodeResult]:
-    """Adapt a neo4j_graphrag RetrieverResult to ``list[NodeResult]`` —
-    the shape every other AgentToolkit method returns and the executor
-    expects.
+def _record_to_node_result(record: Any) -> NodeResult:
+    """Adapt a vector-cypher retrieval row to a ``NodeResult`` — the shape
+    every other AgentToolkit method returns and the executor expects:
+    ``label`` is the chunk text, ``properties`` carries ``score``,
+    ``entities`` and ``relationships``.
 
-    RetrieverResult.items each have ``content`` (the chunk text, possibly
-    formatted with embedded entity/relationship metadata) and
-    ``metadata`` (a dict with at minimum a ``score``). The chunk's
-    Neo4j id isn't carried through neo4j_graphrag's surface, so we
-    synthesize a stable id from the content hash. That keeps the
-    NodeResult.id non-empty for citation matching downstream.
+    Chunk ids are not part of the retrieval projection, so a stable id is
+    synthesized from the text hash — that keeps ``NodeResult.id`` non-empty
+    for citation matching downstream.
     """
     import hashlib
 
-    items = getattr(retriever_result, "items", None) or []
-    out: list[NodeResult] = []
-    for item in items:
-        content = getattr(item, "content", "") or ""
-        metadata = dict(getattr(item, "metadata", {}) or {})
-        # Synthesize a stable id so downstream citation matching has
-        # something to anchor on. Real chunk ids aren't exposed by the
-        # neo4j_graphrag retriever surface.
-        synth_id = "chunk_" + hashlib.sha1(content.encode("utf-8")).hexdigest()[:16]
-        out.append(
-            NodeResult(
-                id=synth_id,
-                qualified_name=None,
-                label=content[:200] if content else "(empty chunk)",
-                properties={
-                    "text": content,
-                    **metadata,
-                },
-            )
-        )
-    return out
+    text = record.get("text") or ""
+    synth_id = "chunk_" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+    return NodeResult(
+        id=synth_id,
+        qualified_name=None,
+        label=text[:200] if text else "(empty chunk)",
+        properties={
+            "text": text,
+            "score": record.get("score"),
+            "entities": [e for e in (record.get("entities") or []) if e],
+            "relationships": [
+                rel
+                for rel in (record.get("relationships") or [])
+                if rel and rel.get("entity")
+            ],
+            "document_path": record.get("document_path"),
+        },
+    )
