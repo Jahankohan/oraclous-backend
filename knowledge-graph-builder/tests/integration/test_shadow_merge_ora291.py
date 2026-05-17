@@ -131,9 +131,9 @@ class TestScenario1BootstrapPath:
         _create_graph_node(driver, graph_id, user_id)
 
         shadow = _shadow_node(driver, graph_id)
-        assert (
-            shadow is None
-        ), f"Pre-condition failed: shadow node already exists for {graph_id}"
+        assert shadow is None, (
+            f"Pre-condition failed: shadow node already exists for {graph_id}"
+        )
 
     def test_update_federatable_creates_shadow_node(self, driver):
         """After PUT federatable=true, shadow node must exist in Neo4j."""
@@ -166,9 +166,9 @@ class TestScenario1BootstrapPath:
 
         shadow = _shadow_node(driver, graph_id)
         assert shadow is not None, "Shadow node missing"
-        assert (
-            shadow.get("federatable") is True
-        ), f"Expected shadow.federatable=True, got {shadow.get('federatable')}"
+        assert shadow.get("federatable") is True, (
+            f"Expected shadow.federatable=True, got {shadow.get('federatable')}"
+        )
 
     def test_shadow_node_namespace_is_system(self, driver):
         """Shadow node must carry namespace='__system__'."""
@@ -181,9 +181,9 @@ class TestScenario1BootstrapPath:
 
         shadow = _shadow_node(driver, graph_id)
         assert shadow is not None, "Shadow node missing"
-        assert (
-            shadow.get("namespace") == "__system__"
-        ), f"Expected namespace='__system__', got {shadow.get('namespace')}"
+        assert shadow.get("namespace") == "__system__", (
+            f"Expected namespace='__system__', got {shadow.get('namespace')}"
+        )
 
     def test_shadow_node_carries_graph_id(self, driver):
         """Shadow node must carry the correct graph_id."""
@@ -196,9 +196,9 @@ class TestScenario1BootstrapPath:
 
         shadow = _shadow_node(driver, graph_id)
         assert shadow is not None, "Shadow node missing"
-        assert (
-            shadow.get("graph_id") == graph_id
-        ), f"Expected graph_id={graph_id!r}, got {shadow.get('graph_id')!r}"
+        assert shadow.get("graph_id") == graph_id, (
+            f"Expected graph_id={graph_id!r}, got {shadow.get('graph_id')!r}"
+        )
 
 
 # ── Scenario 2: Update path (shadow exists) ───────────────────────────────
@@ -249,9 +249,9 @@ class TestScenario2UpdatePath:
 
         shadow = _shadow_node(driver, graph_id)
         assert shadow is not None, "Shadow node disappeared after update"
-        assert (
-            shadow.get("federatable") is True
-        ), f"Expected shadow.federatable=True after update, got {shadow.get('federatable')}"
+        assert shadow.get("federatable") is True, (
+            f"Expected shadow.federatable=True after update, got {shadow.get('federatable')}"
+        )
 
     def test_update_preserves_owner_user_id(self, driver):
         """MERGE must NOT overwrite owner_user_id on existing shadow node."""
@@ -384,12 +384,12 @@ class TestScenario3Regression:
 
         shadow = _shadow_node(driver, graph_id)
         assert shadow is not None, "Shadow node should still exist"
-        assert (
-            shadow.get("federatable") is False
-        ), "Shadow federatable changed even though federatable was not in update payload"
-        assert (
-            shadow.get("sentinel_prop") == "unchanged"
-        ), "Shadow sentinel_prop changed even though federatable was not in update payload"
+        assert shadow.get("federatable") is False, (
+            "Shadow federatable changed even though federatable was not in update payload"
+        )
+        assert shadow.get("sentinel_prop") == "unchanged", (
+            "Shadow sentinel_prop changed even though federatable was not in update payload"
+        )
 
     def test_graph_node_federatable_also_set_to_false(self, driver):
         """The primary Graph node's federatable must also reflect the disabled state."""
@@ -402,9 +402,9 @@ class TestScenario3Regression:
         result = svc.update_graph(graph_id, user_id, federatable=False)
 
         assert result is not None, "update_graph returned None"
-        assert (
-            result.get("federatable") is False
-        ), f"Expected graph.federatable=False, got {result.get('federatable')!r}"
+        assert result.get("federatable") is False, (
+            f"Expected graph.federatable=False, got {result.get('federatable')!r}"
+        )
 
     def test_shadow_merge_does_not_overwrite_on_disable(self, driver):
         """Disabling federation must not wipe other shadow properties."""

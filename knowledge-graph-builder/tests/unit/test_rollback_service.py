@@ -81,9 +81,9 @@ async def test_full_rollback_uses_invalidated_at():
     for call_args in mock_client.execute_query.call_args_list:
         query: str = call_args[0][0]
         params: dict = call_args[0][1]
-        assert (
-            "deleted_at" not in query
-        ), f"Query must use invalidated_at, not deleted_at: {query[:80]}"
+        assert "deleted_at" not in query, (
+            f"Query must use invalidated_at, not deleted_at: {query[:80]}"
+        )
         assert params.get("graph_id") == GRAPH_ID
 
 

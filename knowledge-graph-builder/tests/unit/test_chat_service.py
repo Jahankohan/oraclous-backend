@@ -14,7 +14,6 @@ import pytest
 
 from app.services.chat_service import (
     _INSUFFICIENT_PREFIX,
-    STRICT_GROUNDING_PROMPT,
     ChatService,
     GroundedSearchResult,
 )
