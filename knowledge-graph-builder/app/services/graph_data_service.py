@@ -24,6 +24,8 @@ from __future__ import annotations
 from typing import Any
 
 from neo4j import AsyncDriver
+from neo4j.spatial import Point
+from neo4j.time import Date, DateTime, Duration, Time
 
 # Marker labels that are NOT a node's display identity. Used both to recognise
 # a "real" entity node and to pick its human-readable label.
@@ -63,9 +65,31 @@ def _display_label(labels: list[str]) -> str:
     return "Entity"
 
 
+def _json_safe(value: Any) -> Any:
+    """Coerce Neo4j temporal/spatial values to JSON-serialisable forms.
+
+    The Neo4j driver returns date/time/duration properties as ``neo4j.time.*``
+    objects and points as ``neo4j.spatial.Point`` — none are JSON-serialisable,
+    so handing a raw ``properties(n)`` map to FastAPI 500s during response
+    serialisation. Bitemporal entities (``transaction_time``, ``valid_from``,
+    ``valid_to``, ...) always carry such values. Recurses into lists and maps.
+    """
+    if isinstance(value, DateTime | Date | Time | Duration):
+        return value.iso_format()
+    if isinstance(value, Point):
+        # Point subclasses tuple — its coordinates as a plain list.
+        return list(value)
+    if isinstance(value, list | tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    return value
+
+
 def _clean_properties(props: dict[str, Any]) -> dict[str, Any]:
-    """Drop embedding / graph_id / id from a node's stored properties."""
-    return {k: v for k, v in props.items() if k not in _DROPPED_PROPERTIES}
+    """Node properties minus embedding/graph_id/id, with every value coerced to
+    a JSON-safe form (Neo4j temporal/spatial types → ISO strings / numbers)."""
+    return {k: _json_safe(v) for k, v in props.items() if k not in _DROPPED_PROPERTIES}
 
 
 async def get_graph_data(

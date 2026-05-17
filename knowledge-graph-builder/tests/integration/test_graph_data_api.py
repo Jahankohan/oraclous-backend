@@ -172,11 +172,17 @@ async def _make_entity(
     if extra:
         props.update(extra)
     async with driver.session() as session:
-        # Real extracted entities also carry :__KGBuilder__ (the neo4j_graphrag
-        # marker). Include it so the suite exercises realistic nodes — the
-        # graph-data node filter must NOT exclude :__KGBuilder__.
+        # Real extracted entities carry :__KGBuilder__ (the neo4j_graphrag
+        # marker) AND bitemporal Neo4j temporal properties. Set both so the
+        # suite exercises realistic nodes: graph-data must not exclude
+        # :__KGBuilder__, and must coerce temporal values to JSON-safe forms
+        # (a raw Neo4j DateTime in `properties` 500s during serialisation).
         await session.run(
-            f"CREATE (e:{label}:__Entity__:__KGBuilder__ $props)",
+            f"""
+            CREATE (e:{label}:__Entity__:__KGBuilder__ $props)
+            SET e.transaction_time = datetime(),
+                e.valid_from = date()
+            """,
             {"props": props},
         )
 
@@ -442,6 +448,10 @@ async def test_properties_exclude_embedding(
         assert props["lat"] == 51.5
         assert props["lng"] == -0.12
         assert node["type"] == "City"
+        # Neo4j temporal properties are coerced to JSON-safe ISO strings —
+        # a raw Neo4j DateTime/Date here would 500 during serialisation.
+        assert isinstance(props["transaction_time"], str)
+        assert isinstance(props["valid_from"], str)
     finally:
         await _clean_neo4j(neo4j_test_driver, [gid])
 
