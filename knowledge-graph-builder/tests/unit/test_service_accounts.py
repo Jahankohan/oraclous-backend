@@ -352,21 +352,18 @@ async def test_federation_sa_accessible_graphs_intersection():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_sa_writer_level_maps_to_write_check():
-    """required_level='write' → permitted_levels = ['writer', 'reader'].
+    """A 'writer' requirement is satisfied by a 'writer' or 'admin' grant.
 
-    An admin check requires permitted_levels=['admin'] and would fail for writer SA.
+    `_LEVEL_HIERARCHY` maps a *required* level to the *granted* levels that
+    satisfy it. A 'reader' grant must NOT satisfy a 'writer' requirement.
     """
     from app.services.service_account_service import _LEVEL_HIERARCHY
 
     writer_levels = _LEVEL_HIERARCHY.get("writer", [])
-    admin_levels = _LEVEL_HIERARCHY.get("admin", [])
 
     assert "writer" in writer_levels
-    assert "reader" in writer_levels
-    assert "admin" not in writer_levels
-
-    # Admin level is exclusive
-    assert "admin" in admin_levels
+    assert "admin" in writer_levels
+    assert "reader" not in writer_levels
 
 
 # ── Test 13: SA with admin level can manage grants within own scope ───────
@@ -375,14 +372,19 @@ async def test_sa_writer_level_maps_to_write_check():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_sa_admin_level_hierarchy():
-    """admin level → permitted_levels = ['admin', 'writer', 'reader']."""
+    """An 'admin' requirement is satisfied ONLY by an 'admin' grant.
+
+    A lower grant (reader/writer) must never satisfy an admin requirement —
+    the previously inverted hierarchy let a reader grant pass an admin check
+    (privilege escalation, fixed in TASK-206).
+    """
     from app.services.service_account_service import _LEVEL_HIERARCHY
 
     admin_levels = _LEVEL_HIERARCHY.get("admin", [])
 
-    assert "admin" in admin_levels
-    assert "writer" in admin_levels
-    assert "reader" in admin_levels
+    assert admin_levels == ["admin"]
+    assert "writer" not in admin_levels
+    assert "reader" not in admin_levels
 
 
 # ── Test 14: Error responses never reveal graph existence ─────────────────

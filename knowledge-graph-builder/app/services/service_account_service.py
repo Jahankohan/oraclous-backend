@@ -23,11 +23,16 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Level hierarchy: each level implies all levels below it
+# Maps a *required* access level to the set of *granted* levels that satisfy it
+# — a higher grant satisfies a lower requirement (reader < writer < admin).
+# Used as `WHERE granted_level IN _LEVEL_HIERARCHY[required_level]`, so a
+# `reader` requirement is met by any grant, while an `admin` requirement is met
+# only by an `admin` grant. (Previously inverted — a reader grant passed an
+# admin check; privilege escalation, fixed in TASK-206.)
 _LEVEL_HIERARCHY: dict[str, list[str]] = {
-    "admin": ["admin", "writer", "reader"],
-    "writer": ["writer", "reader"],
-    "reader": ["reader"],
+    "reader": ["reader", "writer", "admin"],
+    "writer": ["writer", "admin"],
+    "admin": ["admin"],
 }
 
 # Explicit allowlist for update_service_account — property names MUST NOT be
