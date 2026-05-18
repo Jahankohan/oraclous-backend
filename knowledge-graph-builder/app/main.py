@@ -180,9 +180,13 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 
 # Add CORS middleware
+# allow_origins covers explicit dev origins (localhost); allow_origin_regex
+# covers production — oraclous.com and every company tenant subdomain
+# (company-name.oraclous.com), which a static list cannot enumerate.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origin_regex=r"https://([a-z0-9-]+\.)?oraclous\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
