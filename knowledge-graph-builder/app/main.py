@@ -235,6 +235,11 @@ from app.api.public.endpoints import public_agents as _public_agents
 
 app.include_router(_public_agents.router, prefix="/public", tags=["public"])
 
+# Public organization lookups (unauthenticated — subdomain tenant routing)
+from app.api.public.endpoints import public_organizations as _public_orgs
+
+app.include_router(_public_orgs.router, prefix="/public", tags=["public"])
+
 
 # Root endpoint
 @app.get("/")
