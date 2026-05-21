@@ -567,15 +567,15 @@ def test_cross_tenant_isolation(neo4j):
 
     # Graph B must have zero nodes
     count_b = _count_entities(driver, graph_id_b)
-    assert (
-        count_b == 0
-    ), f"Cross-tenant leak: graph_id_b has {count_b} nodes after syncing into graph_id_a"
+    assert count_b == 0, (
+        f"Cross-tenant leak: graph_id_b has {count_b} nodes after syncing into graph_id_a"
+    )
 
     # Graph A must have the expected nodes
     count_a = _count_entities(driver, graph_id_a)
-    assert (
-        count_a == 8
-    ), f"Expected 8 entity nodes in graph A (5 employees + 3 projects), got {count_a}"
+    assert count_a == 8, (
+        f"Expected 8 entity nodes in graph A (5 employees + 3 projects), got {count_a}"
+    )
 
 
 @pytest.mark.integration
@@ -624,9 +624,9 @@ def test_1000_row_sync_completes_in_under_30s(neo4j):
 
     # Verify counts
     total_entities = _count_entities(driver, graph_id)
-    assert (
-        total_entities == 1003
-    ), f"Expected 1003 entity nodes (1000 employees + 3 projects), got {total_entities}"
+    assert total_entities == 1003, (
+        f"Expected 1003 entity nodes (1000 employees + 3 projects), got {total_entities}"
+    )
 
 
 @pytest.mark.integration

@@ -21,6 +21,7 @@ ignore = [
     "B008",   # FastAPI Depends() in arg defaults is intentional
     "B904",   # HTTPException raises in except blocks intentionally hide internal exceptions
     "E402",   # Module-level imports not at top — intentional lazy imports to avoid circular deps
+    "UP038",  # Deprecated rule; X | Y in isinstance is slower than the tuple form
 ]
 
 [tool.ruff.lint.isort]

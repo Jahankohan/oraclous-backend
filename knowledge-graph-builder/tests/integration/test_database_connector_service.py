@@ -477,9 +477,9 @@ async def test_cdc_upsert_no_duplicates():
         "MATCH (e:__Entity__ {graph_id: $g, source_table: 'users'}) RETURN e",
         {"g": TEST_GRAPH_ID},
     )
-    assert (
-        len(entities) == 1
-    ), f"Expected 1 entity, got {len(entities)} (duplicate created)"
+    assert len(entities) == 1, (
+        f"Expected 1 entity, got {len(entities)} (duplicate created)"
+    )
 
 
 # ---------------------------------------------------------------------------

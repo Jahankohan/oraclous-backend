@@ -192,9 +192,9 @@ class TestGetCommunityContext:
             await svc.get_community_context(entities, TEST_GRAPH_ID)
 
         call_args = mock_client.execute_query.call_args
-        assert (
-            "graph_id" in call_args[0][1]
-        ), "graph_id must be in Cypher params (multi-tenant)"
+        assert "graph_id" in call_args[0][1], (
+            "graph_id must be in Cypher params (multi-tenant)"
+        )
 
 
 # ---------------------------------------------------------------------------

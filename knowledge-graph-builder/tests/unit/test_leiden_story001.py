@@ -45,9 +45,9 @@ class TestLeidenHierarchyStructure:
                 seed=42,
             )
             communities = set(partition.membership)
-            assert (
-                len(communities) > 0
-            ), f"Resolution {resolution}: expected at least one community"
+            assert len(communities) > 0, (
+                f"Resolution {resolution}: expected at least one community"
+            )
 
     @pytest.mark.unit
     def test_every_node_belongs_to_exactly_one_community_per_level(self):
@@ -68,13 +68,13 @@ class TestLeidenHierarchyStructure:
             )
             membership = partition.membership
             # Exactly 10 assignments (one per node)
-            assert (
-                len(membership) == 10
-            ), f"Resolution {resolution}: expected 10 memberships, got {len(membership)}"
+            assert len(membership) == 10, (
+                f"Resolution {resolution}: expected 10 memberships, got {len(membership)}"
+            )
             # Every membership is a non-negative integer
-            assert all(
-                isinstance(m, int) and m >= 0 for m in membership
-            ), f"Resolution {resolution}: non-integer membership found"
+            assert all(isinstance(m, int) and m >= 0 for m in membership), (
+                f"Resolution {resolution}: non-integer membership found"
+            )
 
     @pytest.mark.unit
     def test_fine_resolution_produces_at_least_as_many_communities_as_coarse(self):
@@ -148,9 +148,9 @@ class TestParentChildMapping:
         result = _build_hierarchy(communities_map, levels=[0, 1])
 
         # X: e0→A, e1→A, e2→A (3 votes), e3→B (1 vote) → majority = A
-        assert (
-            result[1]["X"]["parent_id"] == "A"
-        ), f"Expected X.parent_id='A', got {result[1]['X']['parent_id']!r}"
+        assert result[1]["X"]["parent_id"] == "A", (
+            f"Expected X.parent_id='A', got {result[1]['X']['parent_id']!r}"
+        )
 
     @pytest.mark.unit
     def test_coarse_community_y_parent_is_fine_community_b(self):
@@ -165,9 +165,9 @@ class TestParentChildMapping:
         result = _build_hierarchy(communities_map, levels=[0, 1])
 
         # Y: e4→B (1 vote), e5→B (1 vote), e6→unassigned (0 votes) → majority = B
-        assert (
-            result[1]["Y"]["parent_id"] == "B"
-        ), f"Expected Y.parent_id='B', got {result[1]['Y']['parent_id']!r}"
+        assert result[1]["Y"]["parent_id"] == "B", (
+            f"Expected Y.parent_id='B', got {result[1]['Y']['parent_id']!r}"
+        )
 
     @pytest.mark.unit
     def test_level_0_communities_have_no_parent(self):
@@ -306,12 +306,12 @@ class TestSummaryPromptContent:
 
         # Level-0 prompt should contain both entity names
         level0_prompt = captured_prompts[0] if captured_prompts else ""
-        assert (
-            "Alice" in level0_prompt
-        ), f"Level-0 prompt should contain 'Alice'; got: {level0_prompt!r}"
-        assert (
-            "Organization" in level0_prompt
-        ), f"Level-0 prompt should contain 'Organization'; got: {level0_prompt!r}"
+        assert "Alice" in level0_prompt, (
+            f"Level-0 prompt should contain 'Alice'; got: {level0_prompt!r}"
+        )
+        assert "Organization" in level0_prompt, (
+            f"Level-0 prompt should contain 'Organization'; got: {level0_prompt!r}"
+        )
 
     @pytest.mark.unit
     async def test_level1_prompt_contains_child_summaries_not_raw_entity_names(self):
@@ -358,14 +358,14 @@ class TestSummaryPromptContent:
         # Level-1 prompt (second call) should contain child summary text
         if len(captured_prompts) >= 2:
             level1_prompt = captured_prompts[1]
-            assert (
-                "Sub-group about finance and banking" in level1_prompt
-            ), f"Level-1 prompt should contain child summary; got: {level1_prompt!r}"
+            assert "Sub-group about finance and banking" in level1_prompt, (
+                f"Level-1 prompt should contain child summary; got: {level1_prompt!r}"
+            )
             # Must NOT contain the raw entity name (it comes from level-0 entities query,
             # which is only used at level 0)
-            assert (
-                "ShouldNotAppearInLevel1Prompt" not in level1_prompt
-            ), f"Level-1 prompt must not contain raw entity names; got: {level1_prompt!r}"
+            assert "ShouldNotAppearInLevel1Prompt" not in level1_prompt, (
+                f"Level-1 prompt must not contain raw entity names; got: {level1_prompt!r}"
+            )
 
     @pytest.mark.unit
     async def test_level2_prompt_contains_overarching_keyword(self):
@@ -452,12 +452,12 @@ class TestSummaryPromptContent:
             target_graph = "aaaabbbb-1234-5678-abcd-aaaabbbbcccc"
             await svc._generate_level_summaries(target_graph)
 
-        assert (
-            len(stale_clear_params) == 1
-        ), f"Expected exactly 1 stale-clear call; got {len(stale_clear_params)}"
-        assert (
-            stale_clear_params[0].get("graph_id") == target_graph
-        ), f"Stale-clear called with wrong graph_id: {stale_clear_params[0]}"
+        assert len(stale_clear_params) == 1, (
+            f"Expected exactly 1 stale-clear call; got {len(stale_clear_params)}"
+        )
+        assert stale_clear_params[0].get("graph_id") == target_graph, (
+            f"Stale-clear called with wrong graph_id: {stale_clear_params[0]}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -483,9 +483,9 @@ class TestGlobalQueryRouting:
             "what domains are covered?",
         ]
         for q in global_queries:
-            assert (
-                _is_global_query(q) is True
-            ), f"Expected _is_global_query to return True for: {q!r}"
+            assert _is_global_query(q) is True, (
+                f"Expected _is_global_query to return True for: {q!r}"
+            )
 
     @pytest.mark.unit
     def test_specific_entity_queries_are_not_global(self):
@@ -498,9 +498,9 @@ class TestGlobalQueryRouting:
             "list all CEOs",
         ]
         for q in specific_queries:
-            assert (
-                _is_global_query(q) is False
-            ), f"Expected _is_global_query to return False for: {q!r}"
+            assert _is_global_query(q) is False, (
+                f"Expected _is_global_query to return False for: {q!r}"
+            )
 
     @pytest.mark.unit
     def test_global_query_routes_to_community_summary(self):
@@ -517,9 +517,9 @@ class TestGlobalQueryRouting:
             result = ChatService.auto_select_retriever_type(
                 "what are the main themes across all documents?"
             )
-            assert (
-                result == RetrieverType.COMMUNITY_SUMMARY
-            ), f"Expected COMMUNITY_SUMMARY, got {result}"
+            assert result == RetrieverType.COMMUNITY_SUMMARY, (
+                f"Expected COMMUNITY_SUMMARY, got {result}"
+            )
 
     @pytest.mark.unit
     def test_specific_query_does_not_route_to_community_summary(self):
@@ -534,9 +534,9 @@ class TestGlobalQueryRouting:
             mock_settings.OPENAI_API_KEY = "test-key"
 
             result = ChatService.auto_select_retriever_type("who is John Smith?")
-            assert (
-                result != RetrieverType.COMMUNITY_SUMMARY
-            ), f"Specific entity query must NOT route to COMMUNITY_SUMMARY; got {result}"
+            assert result != RetrieverType.COMMUNITY_SUMMARY, (
+                f"Specific entity query must NOT route to COMMUNITY_SUMMARY; got {result}"
+            )
 
     @pytest.mark.unit
     def test_cypher_query_routes_to_text2cypher(self):
@@ -553,9 +553,9 @@ class TestGlobalQueryRouting:
             result = ChatService.auto_select_retriever_type(
                 "write a cypher query to find all paths between Alice and Bob"
             )
-            assert (
-                result == RetrieverType.TEXT2CYPHER
-            ), f"Expected TEXT2CYPHER for Cypher-pattern query; got {result}"
+            assert result == RetrieverType.TEXT2CYPHER, (
+                f"Expected TEXT2CYPHER for Cypher-pattern query; got {result}"
+            )
 
     @pytest.mark.unit
     def test_analytic_query_routes_to_hybrid(self):
@@ -570,9 +570,9 @@ class TestGlobalQueryRouting:
             mock_settings.OPENAI_API_KEY = "test-key"
 
             result = ChatService.auto_select_retriever_type("list all employees")
-            assert (
-                result == RetrieverType.HYBRID
-            ), f"Expected HYBRID for analytic query; got {result}"
+            assert result == RetrieverType.HYBRID, (
+                f"Expected HYBRID for analytic query; got {result}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -613,9 +613,9 @@ class TestEndToEndCommunityPipeline:
             assigned = []
             for members in result[level].values():
                 assigned.extend(members)
-            assert sorted(assigned) == sorted(
-                entity_ids
-            ), f"Level {level}: not all entities assigned exactly once"
+            assert sorted(assigned) == sorted(entity_ids), (
+                f"Level {level}: not all entities assigned exactly once"
+            )
 
     @pytest.mark.unit
     def test_hierarchy_links_fine_to_coarse_communities(self):
@@ -685,9 +685,9 @@ class TestEndToEndCommunityPipeline:
             retriever = CommunitySummaryRetriever(graph_id="g1")
             result = await retriever.search("broad overview")
 
-        assert (
-            result == []
-        ), f"Expected empty list when async driver is None; got: {result}"
+        assert result == [], (
+            f"Expected empty list when async driver is None; got: {result}"
+        )
 
     @pytest.mark.unit
     async def test_global_query_routes_to_community_summary_end_to_end(self):
@@ -745,9 +745,9 @@ class TestStalenessAfterReIngestion:
             execution_log.append("llm_call")
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
-            mock_response.choices[0].message.content = (
-                "Fresh summary after re-ingestion"
-            )
+            mock_response.choices[
+                0
+            ].message.content = "Fresh summary after re-ingestion"
             return mock_response
 
         mock_client = MagicMock()
@@ -774,9 +774,9 @@ class TestStalenessAfterReIngestion:
 
         stale_idx = execution_log.index("stale_clear")
         llm_idx = execution_log.index("llm_call")
-        assert (
-            stale_idx < llm_idx
-        ), f"stale_clear must happen before llm_call; order was: {execution_log}"
+        assert stale_idx < llm_idx, (
+            f"stale_clear must happen before llm_call; order was: {execution_log}"
+        )
 
     @pytest.mark.unit
     async def test_summary_written_back_after_llm_call(self):
@@ -820,9 +820,9 @@ class TestStalenessAfterReIngestion:
             await svc._generate_level_summaries("graph-write-test")
 
         assert len(written_summaries) >= 1, "Expected at least one summary written back"
-        assert any(
-            s == "Regenerated community summary" for s in written_summaries
-        ), f"Expected 'Regenerated community summary' in writes; got: {written_summaries}"
+        assert any(s == "Regenerated community summary" for s in written_summaries), (
+            f"Expected 'Regenerated community summary' in writes; got: {written_summaries}"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -306,9 +306,9 @@ class TestChatCrossTenantIsolation:
         assert response.status_code == 200
         data = response.json()
         # Tenant B's exclusive entity name must not appear in the answer
-        assert tenant_b_secret not in data.get(
-            "answer", ""
-        ), "Tenant B's data leaked into a chat response scoped to Tenant A's graph"
+        assert tenant_b_secret not in data.get("answer", ""), (
+            "Tenant B's data leaked into a chat response scoped to Tenant A's graph"
+        )
 
     @pytest.mark.integration
     @pytest.mark.security
@@ -373,9 +373,9 @@ class TestChatCrossTenantIsolation:
         # (exact kwarg name depends on retriever_factory API)
         # We do a soft check: GRAPH_B_ID must not appear anywhere
         for gid in all_graph_ids:
-            assert GRAPH_B_ID not in str(
-                gid
-            ), "Retriever was called with Graph B's ID — cross-tenant contamination risk"
+            assert GRAPH_B_ID not in str(gid), (
+                "Retriever was called with Graph B's ID — cross-tenant contamination risk"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -432,9 +432,9 @@ class TestSchemaCrossTenantIsolation:
 
         # Graph B entity types (e.g., "MedicalRecord") must not appear
         tenant_b_type = "MedicalRecord"
-        assert (
-            tenant_b_type not in data["nodes"]
-        ), f"Schema for Graph A unexpectedly contains Graph B entity type '{tenant_b_type}'"
+        assert tenant_b_type not in data["nodes"], (
+            f"Schema for Graph A unexpectedly contains Graph B entity type '{tenant_b_type}'"
+        )
         assert "Company" in data["nodes"]
 
         # Confirm schema_manager was called with the correct graph_id
@@ -446,9 +446,9 @@ class TestSchemaCrossTenantIsolation:
             if called_with.args
             else called_with.kwargs.get("graph_id")
         )
-        assert (
-            called_graph_id == GRAPH_A_ID
-        ), f"extract_schema called with wrong graph_id: {called_graph_id}"
+        assert called_graph_id == GRAPH_A_ID, (
+            f"extract_schema called with wrong graph_id: {called_graph_id}"
+        )
 
     @pytest.mark.integration
     @pytest.mark.security
@@ -540,9 +540,9 @@ class TestDeleteIsolation:
                     if call_args.args
                     else call_args.kwargs.get("graph_id")
                 )
-                assert (
-                    deleted_id == GRAPH_A_ID
-                ), f"delete_graph called with {deleted_id} instead of {GRAPH_A_ID}"
+                assert deleted_id == GRAPH_A_ID, (
+                    f"delete_graph called with {deleted_id} instead of {GRAPH_A_ID}"
+                )
                 assert deleted_id != GRAPH_B_ID
         else:
             # DELETE endpoint not yet implemented — document as known gap
