@@ -1,115 +1,139 @@
 # Unified Source → Structure → Entity Graph Model
 
-**Status:** v0.1 draft — TASK-221 (STORY-034). Pending Solution Architect review.
-**Implements:** ADR-022 D7. Resolves the inconsistencies in
-`wiki/5_research/data-graph-ingestion-survey.md` §3.3–§3.4.
+**Status:** v0.2 — TASK-221 (STORY-034). Revised after the SA review (2026-05-19).
+**Implements:** ADR-022 D7. Resolves `wiki/5_research/data-graph-ingestion-survey.md` §3.3.
 
 ---
 
 ## 1. Purpose
 
-Every data source — relational, structured, text, code — must project into one
-**consistent** graph model. Today it does not: files become `:Document` nodes,
-databases become `:Connector` nodes whose tables/keys are never modeled, and
-four ingestion paths stamp four different provenance vocabularies (survey §3.3).
-This document defines the single model recipes (TASK-220) project into.
+Every data source — a database, a spreadsheet, a folder of documents, a code
+repo — must turn into **one consistent kind of graph**. Today it does not:
+files become `:Document` nodes, databases become `:Connector` nodes whose tables
+are never modeled, and four ingestion paths each stamp their own provenance
+fields. This document defines the single model that recipes (TASK-220) build.
 
-## 2. Three layers
+**No backward compatibility.** The project is in development; the database is
+reset to a clean state. This model is *the* model — there is no legacy model to
+bridge or coexist with.
 
-```
-Source        — one node per ingested data source
-   ↑ PART_OF
-Structure     — the source's structural units (tables, columns, records, …)
-   ↑ DERIVED_FROM
-Entity        — the semantic entities a recipe projects
-```
+## 2. The core rule: one node per real thing
 
-- **Source** — `:Source:__KGBuilder__`. One per ingested source. Properties:
-  `source_id`, `source_type`, `name`, `shape_signature`, `recipe_id`,
-  `recipe_version`, `graph_id`, `ingestion_time`.
-- **Structure** — per-kind labels from a **governed, fixed set**, each also
-  carrying `:__KGBuilder__`: `:Table`, `:Column`, `:Sheet`, `:Record`,
-  `:Chunk`, `:Symbol`. Recipes never invent structure labels — the set is
-  platform-fixed, which is what prevents a recurrence of the `:Module` →
-  `:CodeModule` collision (ADR-015).
-- **Entity** — `:__Entity__` plus exactly **one recipe-supplied domain label**
-  (`:Employee`, `:Operator`, …), validated per recipe-spec §5.5. The domain
-  type is a real Neo4j label, never a property.
+This is the decision the SA review asked for. Stated plainly:
 
-## 3. The §3.3 inconsistencies — resolved
+> **A node is created for each real thing. Containers get their own node.
+> The data *inside* a container does not get a second "structure" node — if
+> it is a real thing, it becomes an entity node directly.**
 
-| # | Inconsistency today | Resolution |
+Worked examples:
+
+- **A database row** (an employee). The database is one `:Source` node. The
+  `employees` table is one `:Table` node. Each employee **is one node** —
+  `:Employee:__Entity__`. There is **no** separate "row node": the row *is* the
+  employee. The employee node points back to its `:Table` so you can trace
+  where it came from.
+- **A code function.** The repo is one `:Source`. Each code file is one
+  `:File`. Each function **is one node** — `:Function:__Entity__` — not a
+  "symbol node" plus an "entity node".
+- **A text document** — the one case where two nodes are right. The document is
+  one `:Source`. It is split into `:Chunk` nodes (a chunk is a paragraph-ish
+  unit — it is *not* itself a thing). The people, places, and systems *mentioned
+  in* a chunk become their own entity nodes, linked back to the chunk.
+
+So: **two nodes only when the container and its contents are genuinely
+different things** (a chunk vs. the entities named in it). For a database or
+code — where the row/function already *is* the thing — it is **one node**. This
+avoids doubling the node count for the commonest data shapes.
+
+## 3. Node families
+
+| Family | Labels | What it is |
 |---|---|---|
-| 1 | `__Entity__` used three ways; relational rows hide the type in a property | Every entity = `:__Entity__` + one real domain label. No label-as-property. |
-| 2 | Four incompatible ID schemes (`entity_id`, `qualified_name`, `{connector}:{table}:{pk}`, record-`id`) | One scheme — see §4. Identity is decoupled from storage primary keys. |
-| 3 | Four divergent provenance vocabularies | One uniform provenance property set — see §5. |
-| 4 | Temporal model is doc-only | Bitemporal properties on entity edges — see §6. |
-| 5 | No governed label namespace (the `:Module` collision) | Structure labels are a fixed reserved set; domain labels are recipe-supplied + validated. |
-| 6 | Confidence / audit exists only in `graphify`, not the backend | `provenance` + `confidence` on every node and edge — §5. |
+| **Source** | `:Source:__KGBuilder__` | One per ingested data source. |
+| **Container** | `:Table`, `:Sheet`, `:File`, `:Chunk` — each `:__KGBuilder__` | A grouping *inside* a source. A fixed, platform-owned set — recipes never invent these. |
+| **Entity** | `:__Entity__` + one recipe-supplied domain label (`:Employee`, `:Operator`, …) | A real thing. The domain type is a real Neo4j label, never a property. |
 
-## 4. Identity
+Domain labels are supplied by recipes and validated (safe-identifier +
+ADR-015 reserved namespace — recipe-spec §5.5). The container label set is
+fixed, so recipes cannot collide with it.
 
-Decoupled from storage primary keys (ADR-022 D7), so the same real-world entity
-converges across rows, columns, and sources.
+## 4. Identity — decoupled from storage primary keys
 
-- **Source** — `source_id` = deterministic hash of `(graph_id, source descriptor)`.
-- **Structure** — deterministic from the unit's path within its source:
-  `(graph_id, source_id, structural path)` (e.g. `source · table · column`).
-- **Entity** — `id` = deterministic hash of `(graph_id, label, normalized
-  identity key)`, where the normalized key comes from the recipe's `identity`
-  rule (recipe-spec §6). **Never the storage PK.**
+Per ADR-022 D7, an entity's identity does **not** come from its database primary
+key — so the same real person appearing in two tables, or two sources, becomes
+**one** node.
 
-Uniqueness constraints: `:Source` on `(graph_id, source_id)`; each structure
-label on `(graph_id, id)`; `:__Entity__` on `(graph_id, id)`.
+- **Source** — `source_id` = a deterministic hash of `(graph_id, source descriptor)`.
+- **Container** — deterministic from its path inside the source.
+- **Entity** — `id` = a deterministic hash of `(graph_id, domain label,
+  normalized identity key)`. The identity key comes from the recipe's `identity`
+  rule (recipe-spec §6).
+
+**Identity-rule floor (SA finding 4).** A recipe's `identity` rule may only
+normalize using the fixed set already enforced by the recipe JSON Schema —
+`casefold`, `trim`, `collapse_whitespace`. A recipe **cannot** define an
+arbitrary normalization, so it cannot over-aggressively collapse two distinct
+real entities into one node. Identity is bounded by construction.
 
 ## 5. Provenance — one uniform set
 
-Every node and every edge the ingestion pipeline writes carries:
+Every node and edge the pipeline writes carries:
 
-| Property | Meaning |
-|---|---|
-| `graph_id` | tenant scope — on everything, always |
-| `ingestion_source` | the `source_id` it came from |
-| `provenance` | `EXTRACTED` (explicit in the source) or `INFERRED` (recipe-spec §8) |
-| `confidence` | float; `1.0` for `EXTRACTED`, `<1.0` for `INFERRED` |
-| `recipe_id`, `recipe_version` | the recipe that produced it |
-| `ingestion_time` | when written |
+| Property | On | Meaning |
+|---|---|---|
+| `graph_id` | everything | tenant scope — always |
+| `ingestion_source` | everything | the `source_id` it came from |
+| `provenance` | everything | `EXTRACTED` (explicit in the source) or `INFERRED` |
+| `confidence` | **`INFERRED` only** | a float `< 1.0`. Omitted on `EXTRACTED` — it would always be `1.0`, so storing it is waste (SA finding 7). |
+| `recipe_id`, `recipe_version` | everything | the recipe that produced it |
+| `ingestion_time` | everything | when written |
 
-This replaces the four divergent vocabularies and gives the backend the
-`graphify` provenance-of-belief model it currently lacks.
+Provenance properties are **write-once**: the execution engine sets them when
+the node/edge is first created; recipe re-runs update data via `MERGE` but do
+not rewrite provenance. Full tamper-evidence against a malicious in-tenant actor
+is **not** in this model — it is the same gap as the open
+`AGENT-SCOPE-CONTAINMENT` concern and is out of scope here (SA finding 5).
 
 ## 6. Temporal model
 
-Entity **edges** carry bitemporal `event_time` and `transaction_time` where
-temporal correctness matters (ADR-005 / Commitment 6). `:Source` and structure
-nodes carry `ingestion_time` only — they are not bitemporal facts.
+Entity **edges** carry bitemporal `event_time` (when the fact was true) and
+`transaction_time` (when it was recorded) where temporal correctness matters —
+the bitemporal Commitment the platform already applies in `pipeline_service`.
+`:Source` and container nodes carry only `ingestion_time`; they are not
+bitemporal facts.
 
 ## 7. Relationships
 
-- `(:Structure)-[:PART_OF]->(:Source)` and `(:Structure)-[:PART_OF]->(:Structure)`
-  — containment (a column part-of a table, a chunk part-of a document).
-- `(:__Entity__)-[:DERIVED_FROM]->(:Structure)` — every entity links back to the
-  structural unit it was projected from (provenance-of-belief, ADR-022 D6/D8).
-- `(:__Entity__)-[<domain type> { …§5 provenance, §6 temporal }]->(:__Entity__)`
+- `(:Container)-[:PART_OF]->(:Source)` and `(:Container)-[:PART_OF]->(:Container)`
+  — a table belongs to a source; a chunk belongs to a source.
+- `(:__Entity__)-[:DERIVED_FROM]->(:Container | :Source)` — every entity links
+  back to where it came from (a row's employee → its `:Table`; a chunk's
+  extracted person → its `:Chunk`).
+- `(:__Entity__)-[<domain type> { §5 provenance, §6 temporal }]->(:__Entity__)`
   — the semantic edges a recipe creates.
 
-## 8. The migration (to be written + tested next)
+## 8. The migration
 
-A `.cypher` migration under `app/cypher/migrations/`, idempotent
-(`CREATE CONSTRAINT IF NOT EXISTS`), establishing: the uniqueness constraints of
-§4, a `graph_id` index per label, and an index on `provenance`. It establishes
-the *target* model; it does not migrate existing data. Per the by-dependency
-testing policy, it is tested against a fresh Neo4j in the **live Docker stack**.
+`app/cypher/migrations/2026-05-19_unified_graph_model.cypher` — idempotent
+(`CREATE CONSTRAINT IF NOT EXISTS`). It establishes:
 
-## 9. Open questions — for the `/sa` review
+- a uniqueness constraint per node family (`:Source` on `(graph_id, source_id)`;
+  `:__Entity__` and each container label on `(graph_id, id)`);
+- a `graph_id` index per label, for tenant-scoped scans;
+- an index on `:__Entity__(provenance)`.
 
-1. **Legacy coexistence.** Existing `:Document` / `:Connector` / `:CodeModule`
-   nodes are *not* migrated by this task (out of scope). So the unified model
-   coexists with the legacy model until a separate reconciliation. Is that
-   acceptable, or must TASK-221 also alias/bridge the legacy labels?
-2. **Structure granularity.** §2 lists six structure labels. Is that the right
-   fixed set, or should it be open-ended (risking the §3.3 #5 collision again)?
-3. **Cross-recipe identity** (carried from TASK-220 §12). Two recipes creating
-   `:Employee` nodes under different identity rules diverge. The §4 scheme makes
-   identity deterministic *per recipe*; a graph-level guarantee that two recipes
-   agree is not yet specified. Does the model need an identity registry?
+It establishes the model on a clean database. Per the by-dependency testing
+policy, it is applied and verified against a fresh Neo4j in the live Docker
+stack.
+
+## 9. Decisions taken (SA review, 2026-05-19)
+
+| SA finding | Resolution |
+|---|---|
+| 1 — structure labels collide with existing `:Document`/`:Chunk`/`:File` | Moot: no backward compatibility, clean database. The container set in §3 is defined fresh. |
+| 2 — separate Structure/Entity layers double the node count | Resolved by §2: one node per real thing. Fine-grain data (rows, functions) becomes an entity node directly — no paired structure node. |
+| 3 — "single model" claim vs. legacy coexistence | Moot: no legacy. This *is* the single model (§1). |
+| 4 — recipe identity rule could over-collapse entities | Resolved by §4: normalization is restricted to the recipe schema's fixed enum. |
+| 5 — provenance not tamper-evident | §5: provenance is write-once; hardening against a malicious in-tenant actor is the open `AGENT-SCOPE-CONTAINMENT` concern, out of scope here. |
+| 6 — cited the draft ADR-005 | §6 now cites the bitemporal Commitment / the existing `pipeline_service` behaviour, not ADR-005's status. |
+| 7 — `confidence` constant on `EXTRACTED` | §5: `confidence` is stored only on `INFERRED` elements. |
