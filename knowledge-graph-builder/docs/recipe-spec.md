@@ -85,6 +85,11 @@ structural unit emitted by a primitive (TASK-222) and declares how it
 `row`, `record`, `field`, `section`, `chunk`, `symbol`, …), a path/id, a type,
 and sample values.
 
+The set of `unit_kind` values and their attributes is the **structural-unit
+vocabulary** — a contract shared with the primitive interface (TASK-222).
+TASK-220 owns and publishes this vocabulary; TASK-222's primitives must emit
+units that conform to it. The vocabulary is finalized alongside the JSON Schema.
+
 ```jsonc
 {
   "match": { "unit_kind": "table", "name": "employees" },
@@ -143,6 +148,32 @@ explicit and recorded, so a reviewer sees what the recipe chose to ignore.
 { "match": { "unit_kind": "table", "name": "salary_history" },
   "project_to": "skip", "reason": "out of scope for an org-chart concern" }
 ```
+
+### 5.5 Identifier safety
+
+Node labels, relationship types, and property keys **cannot be parameterized**
+in Cypher — the execution engine must build them into the query string. Because
+a recipe is agent-authored data, every recipe-supplied label, relationship type,
+and property key must, before the engine uses it:
+
+1. **Pass safe-identifier validation** — a strict `[A-Za-z_][A-Za-z0-9_]*`
+   allowlist (the existing `structured_ingest_service` / `schema_mapper`
+   pattern). An identifier that fails is a *rejected recipe*, not a sanitised
+   one. This closes Cypher injection via a malicious identifier.
+2. **Be rejected if it intrudes on the ADR-015 reserved namespace**
+   (`__Platform__`, `__Entity__`, `__KGBuilder__`, `__Rebac__`, `__System__`)
+   or shadows a platform-managed label. A recipe declares *domain* labels only.
+
+A recipe failing either check is invalid — the engine refuses it, it does not
+coerce it.
+
+### 5.6 Rule precedence
+
+`mappings` is ordered. A structural unit's **projection** is decided by the
+first rule whose `match` matches it — first-match-wins. A unit may still be
+*referenced* by other rules (an edge rule's `from` / `to` / `resolve_by`
+pointing at a column); referencing is not a second projection and does not
+conflict with first-match-wins.
 
 ## 6. Identity
 
@@ -246,17 +277,20 @@ The same source under a *fraud* concern would be a **different recipe** —
 `salary_history` would not be skipped, and edges would follow money flow, not
 the org tree. Same data, same primitives, different recipe, zero code.
 
-## 12. Open questions for the `/sa` review
+## 12. Open questions
 
-1. **§9 — free-text extraction.** Positions A / B / C. B requires amending
-   ADR-022 D8. This is the load-bearing decision.
-2. **Identity collision across recipes.** If two recipes both create `Employee`
-   nodes with different identity schemes, they diverge in the same graph. Does
-   the unified model (TASK-221) need a graph-level identity registry, or is
-   identity recipe-local?
-3. **Rule matching precedence.** `mappings` is ordered; first-match-wins is
-   assumed. Confirm, and confirm whether a unit may be matched by more than one
-   rule (e.g. a column as both a property and an edge endpoint).
+The `/sa` review of this draft (2026-05-19) returned **hold** — five findings.
+Findings 2–5 are folded into this revision (§5, §5.5, §5.6). One remains open:
+
+1. **§9 — free-text extraction.** Positions A / B / C. Position B requires
+   amending ADR-022 D8. This is the load-bearing decision and the sole blocking
+   item — TASK-220 holds at `in-progress` until Reza picks A, B, or C.
+2. **Cross-recipe identity collision.** Two recipes creating `Employee` nodes
+   under different identity schemes diverge in one graph. This is resolved by
+   the unified model (TASK-221), a graph-level decision. The recipe *format* is
+   stable regardless of how TASK-221 resolves it — the format expresses
+   per-recipe identity (§6); TASK-221 decides global reconciliation — so
+   finalizing TASK-220 is not blocked on TASK-221.
 
 ## Deliverables remaining for TASK-220 (post-`/sa`)
 
