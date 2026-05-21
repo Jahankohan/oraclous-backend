@@ -1,6 +1,7 @@
 # Ingestion Recipe Specification
 
-**Status:** v0.1 draft — TASK-220 (STORY-034). Pending Solution Architect review.
+**Status:** v0.2 — TASK-220 (STORY-034). SA-reviewed 2026-05-19; free-text
+resolved (position B). Pending finalization (JSON Schema + examples + tests).
 **Implements:** ADR-022 (concern-driven data ingestion via agent-authored recipes).
 
 ---
@@ -216,39 +217,46 @@ Tags are produced by **recipe rules**, deterministically — not self-reported b
 a live model (ADR-022 D8). Genuinely ambiguous mappings are not written by a
 silent default; they are surfaced to the agent at authoring time.
 
-## 9. OPEN — free-text / non-deterministic extraction
+## 9. Free-text extraction — `project_to: "text_extraction"`
 
-**This is the unresolved design question for the `/sa` review.**
+**Resolved 2026-05-19 — position B.** Sections 5–8 cover *structured* projection
+(tables, columns, keys, records, fields); that path is deterministic and
+injection-immune. Free-text content — a `raw` evidence field, a prose column, a
+document section — does not reduce to a deterministic rule. A recipe extracts
+from it by invoking a named **text-extraction primitive**, which **may be
+LLM-backed**. ADR-022 D8 is amended accordingly (Amendment 2).
 
-Sections 5–8 fully cover *structured* projection — tables, columns, keys,
-records, fields. They are deterministic: a rule maps a unit, the engine applies
-it, the result is reproducible and injection-immune (ADR-022 D8).
+The recipe stays declarative — it *names and configures* the primitive, it does
+not reason:
 
-Free-text content — a `raw` evidence field, a prose column, a document section —
-does not reduce to a deterministic rule. Extracting entities from it needs
-either an LLM or a weaker pattern/gazetteer method. This collides with ADR-022
-D8 ("no LLM on the run-time path; run-time is injection-immune").
+```jsonc
+{
+  "match": { "unit_kind": "column", "name": "raw", "role": "free_text" },
+  "project_to": "text_extraction",
+  "primitive": "llm_ner",                       // a registered text-extraction primitive
+  "params": { "entity_types": ["Operator", "System", "Standard"] },
+  "link_to": { "node_rule": "<row rule>", "edge_type": "MENTIONS" },
+  "provenance": "INFERRED"                       // mandatory for this rule kind
+}
+```
 
-Three candidate positions, for the SA to weigh:
+Run-time behaviour and its boundary:
 
-- **A — deterministic-only.** A recipe may only apply deterministic text
-  extractors (declared pattern sets, gazetteers the agent built from samples).
-  Open-ended entity extraction is out of scope for recipes. Honest and safe;
-  weaker recall on messy prose.
-- **B — free-text is a named primitive.** The recipe *names* a text-extraction
-  primitive (including, if needed, an LLM-NER primitive) and its parameters. The
-  recipe stays declarative (it names + configures, it does not reason). If that
-  primitive is LLM-backed, ADR-022 D8 must be amended: an LLM *may* be on the
-  run-time path for that primitive, its output tagged `INFERRED` with a
-  confidence, and the data-borne-injection risk explicitly accepted/contained.
-- **C — split the path.** Recipes handle structured projection only; free-text
-  fields are routed to the existing `pipeline_service` LLM extraction as a
-  separate, already-existing path, and the recipe only decides *whether* to
-  route a field there.
+- The named primitive processes the cell text and **returns extracted entities
+  and relations as data**. It does **not** write to the graph itself.
+- The **deterministic engine** writes those results — under `graph_id` scope,
+  the §5.5 identifier-safety checks, and the recipe's rules — and links them to
+  the row's node via `link_to`.
+- Output is tagged `INFERRED` (never `EXTRACTED`), with a confidence.
+- **Trust boundary.** An LLM-backed primitive puts a model on the run-time path,
+  so this path is *not* injection-immune (ADR-022 D8 Amendment 2). A
+  prompt-injected primitive can yield wrong entities — but, because it only
+  *returns data* and the engine does the writing, it cannot escape the tenant
+  graph, emit arbitrary Cypher, or touch reserved labels. The blast radius is
+  bad `INFERRED` data in one tenant's graph, surfaced by its confidence and tag.
 
-The recipe **format** must accommodate whichever the SA picks: positions A and B
-add a `project_to: "text_extraction"` rule kind; position C adds a
-`project_to: "route_to_pipeline"` rule kind. The rest of this spec is unaffected.
+The structured rule kinds (§5.1–§5.6) remain fully deterministic and
+injection-immune.
 
 ## 10. Versioning
 
@@ -280,11 +288,12 @@ the org tree. Same data, same primitives, different recipe, zero code.
 ## 12. Open questions
 
 The `/sa` review of this draft (2026-05-19) returned **hold** — five findings.
-Findings 2–5 are folded into this revision (§5, §5.5, §5.6). One remains open:
+Findings 2–5 were folded into this revision (§5, §5.5, §5.6); finding 1 is now
+resolved. None remain blocking.
 
-1. **§9 — free-text extraction.** Positions A / B / C. Position B requires
-   amending ADR-022 D8. This is the load-bearing decision and the sole blocking
-   item — TASK-220 holds at `in-progress` until Reza picks A, B, or C.
+1. **§9 — free-text extraction — RESOLVED 2026-05-19.** Position B: a recipe may
+   invoke a named, possibly LLM-backed text-extraction primitive. ADR-022 D8 is
+   amended (Amendment 2). See §9.
 2. **Cross-recipe identity collision.** Two recipes creating `Employee` nodes
    under different identity schemes diverge in one graph. This is resolved by
    the unified model (TASK-221), a graph-level decision. The recipe *format* is
