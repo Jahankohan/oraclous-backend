@@ -11,10 +11,18 @@ The concrete adapters wrap the existing per-type extractors and conform to the
   * `RelationalPrimitive` — relational SchemaSnapshot (`source_type = "relational"`)
   * `CodePrimitive`       — parsed source files      (`source_type = "code"`)
   * `MarkdownPrimitive`   — Markdown documents       (`source_type = "text"`)
+  * `DocumentPrimitive`   — PDF / DOCX / plain text   (`source_type = "text"`)
+
+TODO(STORY-034 — vision): a vision/diagram primitive is deliberately NOT
+implemented. `vision_extractor.py` depends on an OCR/vision model, so it cannot
+meet the deterministic, no-LLM primitive contract. Diagram→graph stays its own
+path; revisit only if it must join the recipe pipeline. (Reza: not required for
+now — flagged here per request.)
 """
 
 from app.recipes.primitives.code_primitive import CodePrimitive
 from app.recipes.primitives.csv_primitive import CsvPrimitive
+from app.recipes.primitives.document_primitive import DocumentPrimitive
 from app.recipes.primitives.interface import (
     ExtractionMode,
     Primitive,
@@ -37,4 +45,5 @@ __all__ = [
     "RelationalPrimitive",
     "CodePrimitive",
     "MarkdownPrimitive",
+    "DocumentPrimitive",
 ]
