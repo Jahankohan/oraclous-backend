@@ -5,9 +5,11 @@ from app.recipes.engine import (
     RecipeExecutionEngine,
     RecipeValidationError,
 )
+from app.recipes.library import RecipeLibrary
 
 __all__ = [
     "ExecutionResult",
     "RecipeExecutionEngine",
+    "RecipeLibrary",
     "RecipeValidationError",
 ]
