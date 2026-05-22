@@ -129,19 +129,35 @@ async def _create_graph(mcp, name: str) -> str:
 
 @pytest.mark.asyncio
 async def test_server_projects_all_four_classes(mcp_env):
-    """The single server (ADR-024 D7-R) exposes the 7 representative tools, each
-    namespaced and each carrying a published input schema (ADR-023 D4)."""
+    """The single server (ADR-024 D7-R) exposes the curated tool set, each
+    namespaced and each carrying a published input schema (ADR-023 D4).
+
+    The four I/O classes covered end-to-end by this module's dispatch tests are
+    still present; the curated set (TASK-230) adds the rest of the families."""
     tools = await mcp_env.list_tools()
     names = {t.name for t in tools}
-    assert names == {
-        "graph.create",
+    # The four representative I/O-class tools still project.
+    assert {
+        "graph.create",  # PLAIN
         "graph.get",
         "graph.list",
-        "ingest.document",
-        "graph.ask",
-        "ingest.text",
-        "ingest.job_status",
-    }, names
+        "ingest.document",  # UPLOAD
+        "graph.ask",  # STREAMING
+        "ingest.text",  # ASYNC_JOB submit
+        "ingest.job_status",  # ASYNC_JOB poll
+    } <= names, names
+    # The curated set spans every family with REST endpoints (ADR-024 D8-R).
+    families = {n.split(".", 1)[0] for n in names}
+    assert families == {
+        "graph",
+        "schema",
+        "ingest",
+        "community",
+        "agent",
+        "memory",
+        "connector",
+        "federation",
+    }, families
     for tool in tools:
         assert "." in tool.name, f"tool {tool.name} is not namespaced"
         assert tool.description, f"tool {tool.name} has no description"
