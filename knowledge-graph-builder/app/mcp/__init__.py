@@ -16,6 +16,17 @@ re-validated by `auth_service.verify_token` via the dispatched REST request,
 which is also the session TTL (the token's own `exp`; TASK-231 / ADR-023 D5).
 """
 
+from app.mcp.exposure import (
+    DangerousCapabilityError,
+    assert_safe_registry,
+    is_dangerous,
+)
 from app.mcp.server import build_mcp_asgi_app, build_mcp_server
 
-__all__ = ["build_mcp_asgi_app", "build_mcp_server"]
+__all__ = [
+    "DangerousCapabilityError",
+    "assert_safe_registry",
+    "build_mcp_asgi_app",
+    "build_mcp_server",
+    "is_dangerous",
+]
