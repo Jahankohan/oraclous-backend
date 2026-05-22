@@ -9,9 +9,12 @@ class, not one hand-authored tool per endpoint:
   * STREAMING  — SSE               -> one tool (the stream is collected)
   * ASYNC_JOB  — enqueue + poll    -> a pair: a submit tool and a status tool
 
-Per-tool *typed* schemas (replacing the generic `body` object with the
-endpoint's Pydantic model) are TASK-230; the mechanism and the four class
-patterns are TASK-229.
+Per-tool *typed* schemas (TASK-230) annotate the `body` parameter with the
+endpoint's Pydantic request model, so FastMCP publishes a full nested JSON
+schema (`$defs` + per-field validation) instead of an untyped `body: dict`
+(ADR-023 D4 — no untyped tool schemas). FastMCP then passes `body` to the
+handler as a *model instance*, which the handlers convert back to JSON before
+dispatch.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from mcp.server.fastmcp.tools.base import Tool
+from pydantic import BaseModel
 
 from app.core.logging import get_logger
 from app.mcp.context import get_bearer_token
@@ -81,6 +85,29 @@ def _result(status: int, body: Any) -> dict[str, Any]:
     return body if isinstance(body, dict) else {"result": body}
 
 
+def _body_json(args: dict[str, Any], spec: CapabilitySpec) -> Any | None:
+    """The request body as a JSON-ready value, or None if the spec has no body.
+
+    With typed schemas (TASK-230) FastMCP validates the `body` argument against
+    the spec's Pydantic request model and passes a model *instance*; it is
+    dumped back to JSON here before dispatch. A spec with no `body_model` (none
+    in the current registry) still accepts a plain dict — handled by the
+    `else` branch."""
+    if not spec.has_body:
+        return None
+    body = args.get("body")
+    if isinstance(body, BaseModel):
+        return body.model_dump(mode="json")
+    return body
+
+
+def _typed_description(description: str, spec: CapabilitySpec) -> str:
+    """Append the endpoint's result type to a tool description (ADR-023 D4)."""
+    if spec.result_model is None:
+        return description
+    return f"{description} Returns a `{spec.result_model.__name__}`."
+
+
 def _make_tool(
     name: str,
     description: str,
@@ -92,8 +119,9 @@ def _make_tool(
     FastMCP derives both the published JSON schema and argument validation from
     the handler's signature, so the projection writes a real per-spec signature
     rather than an untyped `**kwargs` handler — ADR-023 D4 (no untyped tool
-    schemas). The body's *value* type is still a generic object here; TASK-230
-    replaces it with the endpoint's Pydantic model.
+    schemas). When a `body` parameter is annotated with the endpoint's Pydantic
+    request model (TASK-230), FastMCP expands it into a full nested JSON schema
+    and validates the argument against it before the handler runs.
     """
 
     async def handler(**kwargs: Any) -> dict[str, Any]:
@@ -114,11 +142,16 @@ def _make_tool(
 
 
 def _io_param_specs(spec: CapabilitySpec) -> list[ParamSpec]:
-    """Path params (required str), query params (optional str), body (object)."""
+    """Path params (required str), query params (optional str), typed body.
+
+    The `body` parameter is annotated with the spec's Pydantic request model
+    (`body_model`) so FastMCP publishes a fully typed nested schema (ADR-023
+    D4). It falls back to a plain `dict` only if a spec genuinely declares a
+    body with no model — none do in the curated registry."""
     specs: list[ParamSpec] = [(p, str, True) for p in spec.path_params]
     specs += [(q, str, False) for q in spec.query_params]
     if spec.has_body:
-        specs.append(("body", dict, True))
+        specs.append(("body", spec.body_model or dict, True))
     return specs
 
 
@@ -139,11 +172,18 @@ def _project_plain(spec: CapabilitySpec) -> list[Tool]:
             path,
             bearer_token=token,
             query=_collect_query(spec, args),
-            json_body=args.get("body") if spec.has_body else None,
+            json_body=_body_json(args, spec),
         )
         return _result(resp.status_code, _parse_body(resp))
 
-    return [_make_tool(spec.name, spec.description, _io_param_specs(spec), impl)]
+    return [
+        _make_tool(
+            spec.name,
+            _typed_description(spec.description, spec),
+            _io_param_specs(spec),
+            impl,
+        )
+    ]
 
 
 # --- UPLOAD -----------------------------------------------------------------
@@ -183,7 +223,14 @@ def _project_upload(spec: CapabilitySpec) -> list[Tool]:
         )
         return _result(resp.status_code, _parse_body(resp))
 
-    return [_make_tool(spec.name, spec.description, param_specs, impl)]
+    return [
+        _make_tool(
+            spec.name,
+            _typed_description(spec.description, spec),
+            param_specs,
+            impl,
+        )
+    ]
 
 
 # --- STREAMING --------------------------------------------------------------
@@ -215,7 +262,7 @@ def _project_streaming(spec: CapabilitySpec) -> list[Tool]:
             path,
             bearer_token=token,
             query=_collect_query(spec, args),
-            json_body=args.get("body") if spec.has_body else None,
+            json_body=_body_json(args, spec),
         )
         events = _parse_sse(lines)
         if status >= 400:
@@ -232,7 +279,14 @@ def _project_streaming(spec: CapabilitySpec) -> list[Tool]:
         )
         return {"events": events, "text": text, "final": final}
 
-    return [_make_tool(spec.name, spec.description, _io_param_specs(spec), impl)]
+    return [
+        _make_tool(
+            spec.name,
+            _typed_description(spec.description, spec),
+            _io_param_specs(spec),
+            impl,
+        )
+    ]
 
 
 # --- ASYNC_JOB --------------------------------------------------------------
@@ -247,7 +301,7 @@ def _project_async_job(spec: CapabilitySpec) -> list[Tool]:
             path,
             bearer_token=token,
             query=_collect_query(spec, args),
-            json_body=args.get("body") if spec.has_body else None,
+            json_body=_body_json(args, spec),
         )
         body = _parse_body(resp)
         if resp.status_code >= 400:
@@ -260,7 +314,12 @@ def _project_async_job(spec: CapabilitySpec) -> list[Tool]:
         }
 
     tools = [
-        _make_tool(spec.name, spec.description, _io_param_specs(spec), submit_impl)
+        _make_tool(
+            spec.name,
+            _typed_description(spec.description, spec),
+            _io_param_specs(spec),
+            submit_impl,
+        )
     ]
 
     if spec.status_name and spec.status_path:
@@ -273,10 +332,15 @@ def _project_async_job(spec: CapabilitySpec) -> list[Tool]:
             resp = await dispatch_json(spec.status_method, path, bearer_token=token)
             return _result(resp.status_code, _parse_body(resp))
 
+        status_desc = spec.status_description
+        if spec.status_result_model is not None:
+            status_desc = (
+                f"{status_desc} Returns a `{spec.status_result_model.__name__}`."
+            )
         tools.append(
             _make_tool(
                 spec.status_name,
-                spec.status_description,
+                status_desc,
                 [(p, str, True) for p in spec.status_path_params],
                 status_impl,
             )
