@@ -350,6 +350,8 @@ class RecipeExecutionEngine:
                     defaults,
                     node_rules,
                     node_index,
+                    representation,
+                    payload_cache,
                     result,
                 )
             elif kind == "text_extraction":
@@ -820,6 +822,101 @@ class RecipeExecutionEngine:
 
     # -- edge projection (recipe-spec §5.2) --------------------------------
 
+    def _resolve_fk_target_edges(
+        self,
+        rule: dict[str, Any],
+        unit: StructuralUnit,
+        from_rule_id: str,
+        to_rule_id: str,
+        node_index: dict[tuple[str, str], str],
+        representation: StructuralRepresentation,
+        payload_cache: dict[str, dict[str, Any]],
+        result: ExecutionResult,
+    ) -> list[dict[str, str]]:
+        """Resolve `resolve_by: "fk_target"` edges (recipe-spec §5.2).
+
+        *unit* is the foreign-key `column` unit the edge rule matched. It carries
+        on its `metadata` (set by the relational primitive):
+
+          * ``fk_target``        — the `unit_id` of the referenced `:Table` unit;
+          * ``fk_target_column`` — the referenced column's name (the target row's
+            key the FK value points at; defaults to ``id``).
+
+        For each `from` row entity (a `record` unit under the FK column's own
+        table), the FK column's value is read from that row and matched against
+        the `to` row entities (the `record` units under the target table) whose
+        referenced-column value equals it. unified-graph-model §2 — a row is the
+        entity, so an FK value resolves a row, not a table.
+        """
+        fk_target_table: str | None = unit.metadata.get("fk_target")
+        if not fk_target_table:
+            result.warnings.append(
+                f"edge rule {rule['id']!r}: matched unit {unit.unit_id!r} carries "
+                f"no `fk_target` metadata — the column is not a resolvable "
+                f"foreign key; edge skipped."
+            )
+            return []
+        if not unit.metadata.get("fk_target_present", True):
+            result.warnings.append(
+                f"edge rule {rule['id']!r}: FK target table for unit "
+                f"{unit.unit_id!r} is not present in the representation — "
+                f"edge skipped."
+            )
+            return []
+
+        fk_column_name: str | None = unit.name
+        if not fk_column_name:
+            result.warnings.append(
+                f"edge rule {rule['id']!r}: matched FK unit {unit.unit_id!r} has "
+                f"no column name to read the foreign-key value from — skipped."
+            )
+            return []
+        ref_column: str = unit.metadata.get("fk_target_column", "id")
+        source_table_id: str | None = unit.parent_id
+
+        # Index the target table's row entities by their referenced-column
+        # value. A `record` unit's parent_id is its `:Table` unit id.
+        unit_by_id = {u.unit_id: u for u in representation.units}
+        to_by_ref_value: dict[Any, str] = {}
+        for (rid, target_unit_id), entity_id in node_index.items():
+            if rid != to_rule_id:
+                continue
+            target_unit = unit_by_id.get(target_unit_id)
+            if target_unit is None or target_unit.parent_id != fk_target_table:
+                continue
+            ref_value = payload_cache.get(target_unit_id, {}).get(ref_column)
+            if ref_value is not None:
+                to_by_ref_value[ref_value] = entity_id
+
+        edges: list[dict[str, str]] = []
+        unmatched = 0
+        for (rid, source_unit_id), entity_id in node_index.items():
+            if rid != from_rule_id:
+                continue
+            source_unit = unit_by_id.get(source_unit_id)
+            # Only rows of the table that *owns* the FK column carry the FK
+            # value — guard against a `from` rule matching another table.
+            if source_unit is None or (
+                source_table_id is not None and source_unit.parent_id != source_table_id
+            ):
+                continue
+            fk_value = payload_cache.get(source_unit_id, {}).get(fk_column_name)
+            if fk_value is None:
+                continue  # NULL FK — no edge for this row, not an error.
+            target_entity = to_by_ref_value.get(fk_value)
+            if target_entity is None:
+                unmatched += 1
+                continue
+            edges.append({"from": entity_id, "to": target_entity})
+
+        if unmatched:
+            result.warnings.append(
+                f"edge rule {rule['id']!r}: {unmatched} foreign-key value(s) on "
+                f"{unit.unit_id!r} matched no target row — dangling reference(s) "
+                f"skipped."
+            )
+        return edges
+
     def _apply_edge(
         self,
         driver: Any,
@@ -830,6 +927,8 @@ class RecipeExecutionEngine:
         defaults: dict[str, Any],
         node_rules: dict[str, dict[str, Any]],
         node_index: dict[tuple[str, str], str],
+        representation: StructuralRepresentation,
+        payload_cache: dict[str, dict[str, Any]],
         result: ExecutionResult,
     ) -> None:
         """MERGE a typed relationship between two recipe-projected nodes.
@@ -843,11 +942,12 @@ class RecipeExecutionEngine:
           * ``identity``   — the target node identified by its own identity;
           * ``fk_target``  — the target row referenced by the foreign key.
 
-        TASK-223 wires the deterministic, in-representation cases. `fk_target`
-        resolution needs per-row foreign-key values, which the relational
-        primitive carries on the *column* unit's metadata only as a target
-        *table* pointer (not per-row); full per-row FK resolution is recorded
-        as a warning and deferred.
+        `fk_target` (TASK-235): with the relational primitive now emitting one
+        `record` unit per row, an FK column value on a `record` resolves to the
+        target table's row entity. The matched FK `column` unit carries the
+        target *table* unit id (`metadata.fk_target`) and the referenced
+        column (`metadata.fk_target_column`); each source row's FK value is
+        matched against the target rows' referenced-column values.
         """
         rel_type: str = rule["type"]
         from_rule_id: str = rule["from"]["node_rule"]
@@ -884,12 +984,16 @@ class RecipeExecutionEngine:
                 if target is not None:
                     edges.append({"from": entity_id, "to": target})
         else:  # fk_target
-            result.warnings.append(
-                f"edge rule {rule['id']!r}: resolve_by='fk_target' needs per-row "
-                f"foreign-key values, which the current primitive output does "
-                f"not carry — edge deferred (TODO: per-row FK resolution)."
+            edges = self._resolve_fk_target_edges(
+                rule,
+                unit,
+                from_rule_id,
+                to_rule_id,
+                node_index,
+                representation,
+                payload_cache,
+                result,
             )
-            return
 
         if not edges:
             return
