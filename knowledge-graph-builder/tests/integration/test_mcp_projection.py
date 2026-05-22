@@ -157,6 +157,7 @@ async def test_server_projects_all_four_classes(mcp_env):
         "memory",
         "connector",
         "federation",
+        "recipe",
     }, families
     for tool in tools:
         assert "." in tool.name, f"tool {tool.name} is not namespaced"
