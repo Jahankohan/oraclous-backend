@@ -226,6 +226,36 @@ class RecipeLibrary:
         row = await self._session.scalar(stmt)
         return row.recipe_json if row is not None else None
 
+    async def list(self, graph_id: str) -> list[dict[str, Any]]:
+        """List the latest version of every recipe authored by tenant *graph_id*.
+
+        Tenant-scoped by *graph_id*. One row per recipe `id` — the highest
+        `version` — so a multi-version recipe appears once. Returns the stored
+        recipe documents, ordered by `id`; an empty list when the tenant has
+        authored no recipes. Cross-tenant recipes are never returned.
+        """
+        # Highest version per id, scoped to the tenant.
+        latest = (
+            select(
+                Recipe.id.label("rid"),
+                func.max(Recipe.version).label("max_version"),
+            )
+            .where(Recipe.graph_id == graph_id)
+            .group_by(Recipe.id)
+            .subquery()
+        )
+        stmt = (
+            select(Recipe)
+            .join(
+                latest,
+                (Recipe.id == latest.c.rid) & (Recipe.version == latest.c.max_version),
+            )
+            .where(Recipe.graph_id == graph_id)
+            .order_by(Recipe.id)
+        )
+        rows = (await self._session.scalars(stmt)).all()
+        return [row.recipe_json for row in rows]
+
     async def lookup(
         self,
         source_type: str,
