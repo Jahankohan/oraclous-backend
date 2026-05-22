@@ -28,11 +28,12 @@ from __future__ import annotations
 import base64
 import json
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 
 from app.mcp import build_mcp_server
 from app.mcp.context import reset_bearer_token, set_bearer_token
@@ -57,23 +58,27 @@ _MINIMAL_PDF = (
 )
 
 
-# --- fixture ----------------------------------------------------------------
+# --- environment ------------------------------------------------------------
 
 
-@pytest_asyncio.fixture(scope="module")
-async def mcp_env():
-    """Initialise the app via its real lifespan and patch the external auth."""
+@asynccontextmanager
+async def mcp_env() -> AsyncIterator[Any]:
+    """Initialise the app via its real lifespan and patch the external auth.
+
+    A plain async context manager entered in each test body — not a
+    module/function-scoped fixture. `app.main`'s lifespan now runs the mounted
+    MCP server's streamable-HTTP session manager (TASK-232), an `anyio` task
+    group whose cancel scope must be entered and exited on the *same* task.
+    pytest-asyncio runs fixture setup and teardown on different tasks, which
+    breaks that rule; entering this CM inside the test keeps both on the test's
+    own task. (`test_mcp_auth.py` uses the same pattern for the same reason.)
+    """
     from app.main import app
 
-    auth_patch = patch("app.api.dependencies.auth_service")
-    mock_auth = auth_patch.start()
-    mock_auth.verify_token = AsyncMock(return_value=_TEST_PRINCIPAL)
-
-    try:
+    with patch("app.api.dependencies.auth_service") as mock_auth:
+        mock_auth.verify_token = AsyncMock(return_value=_TEST_PRINCIPAL)
         async with app.router.lifespan_context(app):
             yield build_mcp_server()
-    finally:
-        auth_patch.stop()
 
 
 # --- helpers ----------------------------------------------------------------
@@ -128,13 +133,14 @@ async def _create_graph(mcp, name: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_server_projects_all_four_classes(mcp_env):
+async def test_server_projects_all_four_classes():
     """The single server (ADR-024 D7-R) exposes the curated tool set, each
     namespaced and each carrying a published input schema (ADR-023 D4).
 
     The four I/O classes covered end-to-end by this module's dispatch tests are
     still present; the curated set (TASK-230) adds the rest of the families."""
-    tools = await mcp_env.list_tools()
+    async with mcp_env() as mcp:
+        tools = await mcp.list_tools()
     names = {t.name for t in tools}
     # The four representative I/O-class tools still project.
     assert {
@@ -168,18 +174,19 @@ async def test_server_projects_all_four_classes(mcp_env):
 
 
 @pytest.mark.asyncio
-async def test_plain_class_create_get_list(mcp_env):
+async def test_plain_class_create_get_list():
     """PLAIN — request/response projects to a tool that round-trips through the
     real REST stack: create, then read back, then list."""
     name = f"mcp-plain-{uuid.uuid4().hex[:8]}"
-    graph_id = await _create_graph(mcp_env, name)
+    async with mcp_env() as mcp:
+        graph_id = await _create_graph(mcp, name)
 
-    got = await _call(mcp_env, "graph.get", {"graph_id": graph_id})
-    assert not got.get("error"), f"graph.get failed: {got}"
-    assert str(got.get("id")) == graph_id
-    assert got.get("name") == name
+        got = await _call(mcp, "graph.get", {"graph_id": graph_id})
+        assert not got.get("error"), f"graph.get failed: {got}"
+        assert str(got.get("id")) == graph_id
+        assert got.get("name") == name
 
-    listed = await _call(mcp_env, "graph.list", {})
+        listed = await _call(mcp, "graph.list", {})
     rows = listed if isinstance(listed, list) else listed.get("result", [])
     assert any(str(g.get("id")) == graph_id for g in rows), (
         f"created graph {graph_id} not in graph.list"
@@ -187,21 +194,22 @@ async def test_plain_class_create_get_list(mcp_env):
 
 
 @pytest.mark.asyncio
-async def test_upload_class_ingests_document(mcp_env):
+async def test_upload_class_ingests_document():
     """UPLOAD — base64 content in, multipart/form-data out; the endpoint accepts
     the file and returns an ingestion-job response."""
-    graph_id = await _create_graph(mcp_env, f"mcp-upload-{uuid.uuid4().hex[:8]}")
+    async with mcp_env() as mcp:
+        graph_id = await _create_graph(mcp, f"mcp-upload-{uuid.uuid4().hex[:8]}")
 
-    res = await _call(
-        mcp_env,
-        "ingest.document",
-        {
-            "graph_id": graph_id,
-            "filename": "mcp-projection-test.pdf",
-            "content_base64": base64.b64encode(_MINIMAL_PDF).decode("ascii"),
-            "content_type": "application/pdf",
-        },
-    )
+        res = await _call(
+            mcp,
+            "ingest.document",
+            {
+                "graph_id": graph_id,
+                "filename": "mcp-projection-test.pdf",
+                "content_base64": base64.b64encode(_MINIMAL_PDF).decode("ascii"),
+                "content_type": "application/pdf",
+            },
+        )
     assert not res.get("error"), f"ingest.document failed: {res}"
     # MultiModalJobResponse — a job was created for the uploaded file.
     assert res.get("job_id") or res.get("id"), f"no job id in upload result: {res}"
@@ -209,18 +217,19 @@ async def test_upload_class_ingests_document(mcp_env):
 
 
 @pytest.mark.asyncio
-async def test_streaming_class_collects_sse(mcp_env):
+async def test_streaming_class_collects_sse():
     """STREAMING — an SSE endpoint projects to a tool that collects the whole
     stream into one result. The collection mechanism is what is under test, so
     the assertion holds whether the answer succeeds or the stream carries an
     error event."""
-    graph_id = await _create_graph(mcp_env, f"mcp-stream-{uuid.uuid4().hex[:8]}")
+    async with mcp_env() as mcp:
+        graph_id = await _create_graph(mcp, f"mcp-stream-{uuid.uuid4().hex[:8]}")
 
-    res = await _call(
-        mcp_env,
-        "graph.ask",
-        {"body": {"graph_id": graph_id, "query": "What is in this graph?"}},
-    )
+        res = await _call(
+            mcp,
+            "graph.ask",
+            {"body": {"graph_id": graph_id, "query": "What is in this graph?"}},
+        )
     # The streaming wrapper always returns a collected `events` list — never a
     # raw stream — regardless of whether the underlying answer succeeded.
     assert "events" in res, f"streaming result has no collected events: {res}"
@@ -228,47 +237,49 @@ async def test_streaming_class_collects_sse(mcp_env):
 
 
 @pytest.mark.asyncio
-async def test_async_job_class_submit_and_status(mcp_env):
+async def test_async_job_class_submit_and_status():
     """ASYNC_JOB — one capability projects to a submit tool and a status tool;
     submit returns a job id, the status tool polls it."""
-    graph_id = await _create_graph(mcp_env, f"mcp-async-{uuid.uuid4().hex[:8]}")
+    async with mcp_env() as mcp:
+        graph_id = await _create_graph(mcp, f"mcp-async-{uuid.uuid4().hex[:8]}")
 
-    submitted = await _call(
-        mcp_env,
-        "ingest.text",
-        {
-            "graph_id": graph_id,
-            "body": {
-                "content": (
-                    "Ada Lovelace worked with Charles Babbage on the "
-                    "Analytical Engine. This is enough text to ingest."
-                ),
-                "source_type": "text",
+        submitted = await _call(
+            mcp,
+            "ingest.text",
+            {
+                "graph_id": graph_id,
+                "body": {
+                    "content": (
+                        "Ada Lovelace worked with Charles Babbage on the "
+                        "Analytical Engine. This is enough text to ingest."
+                    ),
+                    "source_type": "text",
+                },
             },
-        },
-    )
-    assert not submitted.get("error"), f"ingest.text submit failed: {submitted}"
-    job_id = submitted.get("job_id")
-    assert job_id, f"submit returned no job id: {submitted}"
+        )
+        assert not submitted.get("error"), f"ingest.text submit failed: {submitted}"
+        job_id = submitted.get("job_id")
+        assert job_id, f"submit returned no job id: {submitted}"
 
-    status = await _call(
-        mcp_env,
-        "ingest.job_status",
-        {"graph_id": graph_id, "job_id": str(job_id)},
-    )
+        status = await _call(
+            mcp,
+            "ingest.job_status",
+            {"graph_id": graph_id, "job_id": str(job_id)},
+        )
     assert not status.get("error"), f"ingest.job_status failed: {status}"
     assert "status" in status, f"job status record has no status field: {status}"
 
 
 @pytest.mark.asyncio
-async def test_missing_principal_fails_closed(mcp_env):
+async def test_missing_principal_fails_closed():
     """A tool call with no bound principal is refused — the projection fails
     closed (ADR-023 D5; the platform's deny-by-default rule)."""
-    token = set_bearer_token(None)
-    try:
-        with pytest.raises(Exception) as exc_info:
-            await mcp_env.call_tool("graph.list", {})
-        assert "principal" in str(exc_info.value).lower()
-    finally:
-        reset_bearer_token(token)
-        set_bearer_token(_BEARER)
+    async with mcp_env() as mcp:
+        token = set_bearer_token(None)
+        try:
+            with pytest.raises(Exception) as exc_info:
+                await mcp.call_tool("graph.list", {})
+            assert "principal" in str(exc_info.value).lower()
+        finally:
+            reset_bearer_token(token)
+            set_bearer_token(_BEARER)

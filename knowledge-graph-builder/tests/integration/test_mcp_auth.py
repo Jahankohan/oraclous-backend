@@ -78,7 +78,12 @@ _REVOKED_TOKEN = "mcp-auth-revoked-token"  # noqa: S105 - test fixture
 # hosts; the ASGITransport never opens a socket, so this host is cosmetic but
 # must satisfy that allowlist.
 _BASE_URL = "http://localhost:9000"
-_MCP_PATH = "/mcp"
+# `build_mcp_asgi_app()` is tested here as a *standalone* ASGI app — not the
+# `/mcp` mount in `app.main`. FastMCP serves its streamable-HTTP route at the
+# server root (`streamable_http_path="/"`, set in `server.py` so the `/mcp`
+# mount has no doubled prefix — ADR-023 D4), so the standalone app's route is
+# `/`. The mounted surface is `/mcp`; that is exercised by test_mcp_exposure.py.
+_MCP_PATH = "/"
 _MCP_HEADERS = {
     "Accept": "application/json, text/event-stream",
     "Content-Type": "application/json",

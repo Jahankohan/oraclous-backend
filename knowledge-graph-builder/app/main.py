@@ -20,10 +20,19 @@ from app.core.telemetry import (
     setup_telemetry,
     shutdown_telemetry,
 )
+from app.mcp.server import MCPMount
 
 # Setup logging
 setup_logging()
 logger = get_logger(__name__)
+
+# The single Oraclous MCP server's mount point (ADR-024 D7-R) — one server, one
+# process, one docker service (D7-R + the D4 process-scope rule). `MCPMount` is
+# mounted at `/mcp` below; its `run()` (driven from the `lifespan`) builds the
+# FastMCP server and runs its streamable-HTTP session manager for the life of
+# the app process. Building the server runs the ADR-023 D6 exposure guard, so a
+# dangerous capability in the registry fails the process at startup.
+mcp_mount = MCPMount()
 
 
 @asynccontextmanager
@@ -98,7 +107,18 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize services: {e}")
         raise
 
-    yield
+    # Run the mounted MCP server's session manager (ADR-024 D7-R, TASK-232).
+    #
+    # FastMCP's `streamable_http_app()` carries its own lifespan — a
+    # session-manager `anyio` task group. A mounted ASGI sub-app's lifespan
+    # does NOT run automatically, and the task group's cancel scope must be
+    # entered and exited in the *same* task. `MCPMount.run()` builds the
+    # FastMCP server and runs its session manager here in this `lifespan`
+    # generator: it starts on entry, stays open for `yield`, and is torn down
+    # on the same task when the app process stops. Without this the `/mcp`
+    # mount would answer 503 ("MCP server is not running").
+    async with mcp_mount.run():
+        yield
 
     # Shutdown
     logger.info("Shutting down application")
@@ -239,6 +259,15 @@ app.include_router(_public_agents.router, prefix="/public", tags=["public"])
 from app.api.public.endpoints import public_organizations as _public_orgs
 
 app.include_router(_public_orgs.router, prefix="/public", tags=["public"])
+
+# Mount the single Oraclous MCP server at /mcp (ADR-024 D7-R, TASK-232).
+# `MCPMount` forwards to the FastMCP streamable-HTTP ASGI app (wrapped in the
+# per-request bearer-token middleware, TASK-231) that its `run()` builds and
+# binds from the `lifespan` above. One server, one process, one docker service
+# (the existing `knowledge-graph-builder`; no new service is added). FastMCP's
+# streamable route is served at the server root, so this single `/mcp` mount is
+# the whole MCP URL — no doubled `/mcp/mcp` prefix (ADR-023 D4).
+app.mount("/mcp", mcp_mount)
 
 
 # Root endpoint

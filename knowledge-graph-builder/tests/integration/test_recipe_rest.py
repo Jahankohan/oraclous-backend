@@ -33,11 +33,12 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from app.mcp import build_mcp_server
@@ -98,24 +99,28 @@ _RECORDS = [
 ]
 
 
-# --- fixtures ---------------------------------------------------------------
+# --- environment ------------------------------------------------------------
 
 
-@pytest_asyncio.fixture(scope="module")
-async def env():
+@asynccontextmanager
+async def env() -> AsyncIterator[tuple[AsyncClient, Any]]:
     """Initialise the app via its real lifespan and patch the external auth.
 
     Yields a `(rest_client, mcp_server)` pair sharing the one running app, so
     the REST surface and the projected MCP tools are tested against the same
     process and the same live Neo4j/Postgres.
+
+    A plain async context manager entered in each test body — not a
+    module-scoped fixture. `app.main`'s lifespan now runs the mounted MCP
+    server's streamable-HTTP session manager (TASK-232), an `anyio` task group
+    whose cancel scope must be entered and exited on the *same* task; a
+    pytest fixture runs setup and teardown on different tasks. Entering this CM
+    inside the test keeps both on the test's own task.
     """
     from app.main import app
 
-    auth_patch = patch("app.api.dependencies.auth_service")
-    mock_auth = auth_patch.start()
-    mock_auth.verify_token = AsyncMock(return_value=_TEST_PRINCIPAL)
-
-    try:
+    with patch("app.api.dependencies.auth_service") as mock_auth:
+        mock_auth.verify_token = AsyncMock(return_value=_TEST_PRINCIPAL)
         async with app.router.lifespan_context(app):
             transport = ASGITransport(app=app)
             async with AsyncClient(
@@ -124,8 +129,6 @@ async def env():
                 headers={"Authorization": f"Bearer {_BEARER}"},
             ) as client:
                 yield client, build_mcp_server()
-    finally:
-        auth_patch.stop()
 
 
 # --- MCP helpers ------------------------------------------------------------
@@ -172,117 +175,121 @@ async def _create_graph(client: AsyncClient, name: str) -> str:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_rest_store_get_list_recipe(env):
+async def test_rest_store_get_list_recipe():
     """POST /recipes stores a draft; GET round-trips it; GET /recipes lists it."""
-    client, _ = env
-    graph_id = await _create_graph(client, f"recipe-rest-{uuid.uuid4().hex[:8]}")
-    recipe_id = f"rcp_rest-{uuid.uuid4().hex[:12]}"
+    async with env() as (client, _):
+        graph_id = await _create_graph(client, f"recipe-rest-{uuid.uuid4().hex[:8]}")
+        recipe_id = f"rcp_rest-{uuid.uuid4().hex[:12]}"
 
-    # store
-    stored = await client.post(
-        "/api/v1/recipes",
-        json={"graph_id": graph_id, "recipe": _make_recipe(recipe_id)},
-    )
-    assert stored.status_code == 201, f"store failed: {stored.text}"
-    stored_doc = stored.json()["recipe"]
-    assert stored_doc["id"] == recipe_id
-    assert stored_doc["version"] == 1
-    assert stored_doc["status"] == "draft"  # ADR-022 — never auto-promoted
+        # store
+        stored = await client.post(
+            "/api/v1/recipes",
+            json={"graph_id": graph_id, "recipe": _make_recipe(recipe_id)},
+        )
+        assert stored.status_code == 201, f"store failed: {stored.text}"
+        stored_doc = stored.json()["recipe"]
+        assert stored_doc["id"] == recipe_id
+        assert stored_doc["version"] == 1
+        assert stored_doc["status"] == "draft"  # ADR-022 — never auto-promoted
 
-    # get
-    got = await client.get(
-        f"/api/v1/recipes/{recipe_id}", params={"graph_id": graph_id}
-    )
-    assert got.status_code == 200, f"get failed: {got.text}"
-    assert got.json()["recipe"]["id"] == recipe_id
+        # get
+        got = await client.get(
+            f"/api/v1/recipes/{recipe_id}", params={"graph_id": graph_id}
+        )
+        assert got.status_code == 200, f"get failed: {got.text}"
+        assert got.json()["recipe"]["id"] == recipe_id
 
-    # list
-    listed = await client.get("/api/v1/recipes", params={"graph_id": graph_id})
-    assert listed.status_code == 200, f"list failed: {listed.text}"
-    body = listed.json()
-    assert body["count"] >= 1
-    assert any(r["id"] == recipe_id for r in body["recipes"])
+        # list
+        listed = await client.get("/api/v1/recipes", params={"graph_id": graph_id})
+        assert listed.status_code == 200, f"list failed: {listed.text}"
+        body = listed.json()
+        assert body["count"] >= 1
+        assert any(r["id"] == recipe_id for r in body["recipes"])
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_rest_store_rejects_invalid_recipe(env):
+async def test_rest_store_rejects_invalid_recipe():
     """POST /recipes refuses a schema-invalid recipe with 400 — never coerces."""
-    client, _ = env
-    graph_id = await _create_graph(client, f"recipe-bad-{uuid.uuid4().hex[:8]}")
+    async with env() as (client, _):
+        graph_id = await _create_graph(client, f"recipe-bad-{uuid.uuid4().hex[:8]}")
 
-    bad = _make_recipe(f"rcp_bad-{uuid.uuid4().hex[:8]}")
-    del bad["mappings"]  # `mappings` is required by recipe.schema.json
+        bad = _make_recipe(f"rcp_bad-{uuid.uuid4().hex[:8]}")
+        del bad["mappings"]  # `mappings` is required by recipe.schema.json
 
-    resp = await client.post(
-        "/api/v1/recipes", json={"graph_id": graph_id, "recipe": bad}
-    )
-    assert resp.status_code == 400, f"expected 400, got {resp.status_code}: {resp.text}"
+        resp = await client.post(
+            "/api/v1/recipes", json={"graph_id": graph_id, "recipe": bad}
+        )
+        assert resp.status_code == 400, (
+            f"expected 400, got {resp.status_code}: {resp.text}"
+        )
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_rest_get_unknown_recipe_is_404(env):
+async def test_rest_get_unknown_recipe_is_404():
     """GET an unknown recipe id is 404 — and a tenant cannot probe other tenants."""
-    client, _ = env
-    graph_id = await _create_graph(client, f"recipe-404-{uuid.uuid4().hex[:8]}")
-    resp = await client.get(
-        f"/api/v1/recipes/rcp_does-not-exist-{uuid.uuid4().hex[:8]}",
-        params={"graph_id": graph_id},
-    )
-    assert resp.status_code == 404, f"expected 404, got {resp.status_code}"
+    async with env() as (client, _):
+        graph_id = await _create_graph(client, f"recipe-404-{uuid.uuid4().hex[:8]}")
+        resp = await client.get(
+            f"/api/v1/recipes/rcp_does-not-exist-{uuid.uuid4().hex[:8]}",
+            params={"graph_id": graph_id},
+        )
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}"
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_rest_run_recipe_enqueues_a_run(env):
+async def test_rest_run_recipe_enqueues_a_run():
     """POST .../recipes/{id}/run decomposes the inline source and enqueues a run.
 
     The run executes asynchronously in the Celery worker; the endpoint returns
     202 with a `run_id` (the Celery task id) — a recipe run is queueable
     end-to-end (the TASK-227 gap is closed by the Celery `include=` change).
     """
-    client, _ = env
-    graph_id = await _create_graph(client, f"recipe-run-{uuid.uuid4().hex[:8]}")
-    recipe_id = f"rcp_run-{uuid.uuid4().hex[:12]}"
+    async with env() as (client, _):
+        graph_id = await _create_graph(client, f"recipe-run-{uuid.uuid4().hex[:8]}")
+        recipe_id = f"rcp_run-{uuid.uuid4().hex[:12]}"
 
-    stored = await client.post(
-        "/api/v1/recipes",
-        json={"graph_id": graph_id, "recipe": _make_recipe(recipe_id)},
-    )
-    assert stored.status_code == 201, stored.text
+        stored = await client.post(
+            "/api/v1/recipes",
+            json={"graph_id": graph_id, "recipe": _make_recipe(recipe_id)},
+        )
+        assert stored.status_code == 201, stored.text
 
-    run = await client.post(
-        f"/api/v1/graphs/{graph_id}/recipes/{recipe_id}/run",
-        json={"source_type": "csv", "records": _RECORDS},
-    )
-    assert run.status_code == 202, f"run failed: {run.text}"
-    body = run.json()
-    assert body["run_id"], f"run returned no run_id: {body}"
-    assert body["recipe_id"] == recipe_id
-    assert body["recipe_version"] == 1
-    assert body["graph_id"] == graph_id
-    assert body["status"] == "queued"
+        run = await client.post(
+            f"/api/v1/graphs/{graph_id}/recipes/{recipe_id}/run",
+            json={"source_type": "csv", "records": _RECORDS},
+        )
+        assert run.status_code == 202, f"run failed: {run.text}"
+        body = run.json()
+        assert body["run_id"], f"run returned no run_id: {body}"
+        assert body["recipe_id"] == recipe_id
+        assert body["recipe_version"] == 1
+        assert body["graph_id"] == graph_id
+        assert body["status"] == "queued"
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_rest_run_unknown_source_type_is_400(env):
+async def test_rest_run_unknown_source_type_is_400():
     """A run with a source_type no inline primitive supports is refused with 400."""
-    client, _ = env
-    graph_id = await _create_graph(client, f"recipe-srctype-{uuid.uuid4().hex[:8]}")
-    recipe_id = f"rcp_srctype-{uuid.uuid4().hex[:12]}"
-    stored = await client.post(
-        "/api/v1/recipes",
-        json={"graph_id": graph_id, "recipe": _make_recipe(recipe_id)},
-    )
-    assert stored.status_code == 201, stored.text
+    async with env() as (client, _):
+        graph_id = await _create_graph(client, f"recipe-srctype-{uuid.uuid4().hex[:8]}")
+        recipe_id = f"rcp_srctype-{uuid.uuid4().hex[:12]}"
+        stored = await client.post(
+            "/api/v1/recipes",
+            json={"graph_id": graph_id, "recipe": _make_recipe(recipe_id)},
+        )
+        assert stored.status_code == 201, stored.text
 
-    resp = await client.post(
-        f"/api/v1/graphs/{graph_id}/recipes/{recipe_id}/run",
-        json={"source_type": "relational", "records": _RECORDS},
-    )
-    assert resp.status_code == 400, f"expected 400, got {resp.status_code}: {resp.text}"
+        resp = await client.post(
+            f"/api/v1/graphs/{graph_id}/recipes/{recipe_id}/run",
+            json={"source_type": "relational", "records": _RECORDS},
+        )
+        assert resp.status_code == 400, (
+            f"expected 400, got {resp.status_code}: {resp.text}"
+        )
 
 
 # --- MCP tests --------------------------------------------------------------
@@ -290,10 +297,10 @@ async def test_rest_run_unknown_source_type_is_400(env):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_mcp_recipe_tools_project(env):
+async def test_mcp_recipe_tools_project():
     """The `recipe.*` / `ingest.recipe` tools project, namespaced and typed."""
-    _, mcp = env
-    tools = await mcp.list_tools()
+    async with env() as (_, mcp):
+        tools = await mcp.list_tools()
     by_name = {t.name: t for t in tools}
     for name in ("recipe.list", "recipe.get", "recipe.store", "ingest.recipe"):
         assert name in by_name, f"{name} not projected: {sorted(by_name)}"
@@ -305,57 +312,57 @@ async def test_mcp_recipe_tools_project(env):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_mcp_recipe_store_get_list_dispatch(env):
+async def test_mcp_recipe_store_get_list_dispatch():
     """The `recipe.store` / `recipe.get` / `recipe.list` tools dispatch through
     the real REST surface — store, read back, then list."""
-    client, mcp = env
-    graph_id = await _create_graph(client, f"recipe-mcp-{uuid.uuid4().hex[:8]}")
-    recipe_id = f"rcp_mcp-{uuid.uuid4().hex[:12]}"
+    async with env() as (client, mcp):
+        graph_id = await _create_graph(client, f"recipe-mcp-{uuid.uuid4().hex[:8]}")
+        recipe_id = f"rcp_mcp-{uuid.uuid4().hex[:12]}"
 
-    stored = await _mcp_call(
-        mcp,
-        "recipe.store",
-        {"body": {"graph_id": graph_id, "recipe": _make_recipe(recipe_id)}},
-    )
-    assert not stored.get("error"), f"recipe.store failed: {stored}"
-    assert stored["recipe"]["id"] == recipe_id
+        stored = await _mcp_call(
+            mcp,
+            "recipe.store",
+            {"body": {"graph_id": graph_id, "recipe": _make_recipe(recipe_id)}},
+        )
+        assert not stored.get("error"), f"recipe.store failed: {stored}"
+        assert stored["recipe"]["id"] == recipe_id
 
-    got = await _mcp_call(
-        mcp, "recipe.get", {"recipe_id": recipe_id, "graph_id": graph_id}
-    )
-    assert not got.get("error"), f"recipe.get failed: {got}"
-    assert got["recipe"]["id"] == recipe_id
+        got = await _mcp_call(
+            mcp, "recipe.get", {"recipe_id": recipe_id, "graph_id": graph_id}
+        )
+        assert not got.get("error"), f"recipe.get failed: {got}"
+        assert got["recipe"]["id"] == recipe_id
 
-    listed = await _mcp_call(mcp, "recipe.list", {"graph_id": graph_id})
-    assert not listed.get("error"), f"recipe.list failed: {listed}"
-    assert any(r["id"] == recipe_id for r in listed["recipes"])
+        listed = await _mcp_call(mcp, "recipe.list", {"graph_id": graph_id})
+        assert not listed.get("error"), f"recipe.list failed: {listed}"
+        assert any(r["id"] == recipe_id for r in listed["recipes"])
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_mcp_ingest_recipe_dispatch(env):
+async def test_mcp_ingest_recipe_dispatch():
     """The `ingest.recipe` tool dispatches a recipe run through the REST surface."""
-    client, mcp = env
-    graph_id = await _create_graph(client, f"recipe-mcprun-{uuid.uuid4().hex[:8]}")
-    recipe_id = f"rcp_mcprun-{uuid.uuid4().hex[:12]}"
+    async with env() as (client, mcp):
+        graph_id = await _create_graph(client, f"recipe-mcprun-{uuid.uuid4().hex[:8]}")
+        recipe_id = f"rcp_mcprun-{uuid.uuid4().hex[:12]}"
 
-    stored = await _mcp_call(
-        mcp,
-        "recipe.store",
-        {"body": {"graph_id": graph_id, "recipe": _make_recipe(recipe_id)}},
-    )
-    assert not stored.get("error"), f"recipe.store failed: {stored}"
+        stored = await _mcp_call(
+            mcp,
+            "recipe.store",
+            {"body": {"graph_id": graph_id, "recipe": _make_recipe(recipe_id)}},
+        )
+        assert not stored.get("error"), f"recipe.store failed: {stored}"
 
-    run = await _mcp_call(
-        mcp,
-        "ingest.recipe",
-        {
-            "graph_id": graph_id,
-            "recipe_id": recipe_id,
-            "body": {"source_type": "csv", "records": _RECORDS},
-        },
-    )
-    assert not run.get("error"), f"ingest.recipe failed: {run}"
-    assert run["run_id"], f"ingest.recipe returned no run_id: {run}"
-    assert run["recipe_id"] == recipe_id
-    assert run["status"] == "queued"
+        run = await _mcp_call(
+            mcp,
+            "ingest.recipe",
+            {
+                "graph_id": graph_id,
+                "recipe_id": recipe_id,
+                "body": {"source_type": "csv", "records": _RECORDS},
+            },
+        )
+        assert not run.get("error"), f"ingest.recipe failed: {run}"
+        assert run["run_id"], f"ingest.recipe returned no run_id: {run}"
+        assert run["recipe_id"] == recipe_id
+        assert run["status"] == "queued"
