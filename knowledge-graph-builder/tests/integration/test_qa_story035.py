@@ -287,6 +287,8 @@ async def test_composition_proof_end_to_end_workflow():
         assert stored["recipe"]["status"] == "draft"  # ADR-022 — never auto-promoted
 
         # --- 4. ingest.recipe — run the composed recipe ----------------------
+        # TASK-237: `ingest.recipe` is an ASYNC_JOB — the submit leg surfaces
+        # the run handle as `job_id` (the recipe-run ingestion_jobs row id).
         run = await _call_tool(
             client,
             "ingest.recipe",
@@ -297,9 +299,9 @@ async def test_composition_proof_end_to_end_workflow():
             },
         )
         assert not run.get("error"), f"ingest.recipe failed: {run}"
-        assert run["run_id"], f"ingest.recipe returned no run_id: {run}"
-        assert run["recipe_id"] == recipe_id
-        assert run["status"] == "queued"
+        assert run["job_id"], f"ingest.recipe returned no job_id: {run}"
+        assert run["raw"]["recipe_id"] == recipe_id
+        assert run["status"] == "pending"
 
         # --- 5. recipe.get — read the stored recipe back ---------------------
         got_recipe = await _call_tool(

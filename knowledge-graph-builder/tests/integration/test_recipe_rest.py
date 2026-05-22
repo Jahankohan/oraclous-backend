@@ -244,8 +244,9 @@ async def test_rest_run_recipe_enqueues_a_run():
     """POST .../recipes/{id}/run decomposes the inline source and enqueues a run.
 
     The run executes asynchronously in the Celery worker; the endpoint returns
-    202 with a `run_id` (the Celery task id) — a recipe run is queueable
-    end-to-end (the TASK-227 gap is closed by the Celery `include=` change).
+    202 with a `run_id`. Since TASK-237 the `run_id` is a first-class
+    `ingestion_jobs` row id (`source_type="recipe"`, `status="pending"`), not a
+    raw Celery task id — see `test_rest_run_recipe_is_pollable_job`.
     """
     async with env() as (client, _):
         graph_id = await _create_graph(client, f"recipe-run-{uuid.uuid4().hex[:8]}")
@@ -264,10 +265,87 @@ async def test_rest_run_recipe_enqueues_a_run():
         assert run.status_code == 202, f"run failed: {run.text}"
         body = run.json()
         assert body["run_id"], f"run returned no run_id: {body}"
+        # The run id is a UUID (the ingestion_jobs row id), not a Celery id.
+        uuid.UUID(body["run_id"])
         assert body["recipe_id"] == recipe_id
         assert body["recipe_version"] == 1
         assert body["graph_id"] == graph_id
-        assert body["status"] == "queued"
+        assert body["status"] == "pending"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rest_run_recipe_is_pollable_job():
+    """A recipe run is a first-class ingestion job — pollable, graph_id-scoped.
+
+    TASK-237 (closes TASK-233 INFO-2): the run endpoint creates an
+    `IngestionJob` row (`source_type="recipe"`) and returns its id as `run_id`.
+    That row is then visible through the standard tenant-scoped jobs endpoint
+    `GET /api/v1/graphs/{graph_id}/jobs/{job_id}` — no bespoke status route.
+    """
+    async with env() as (client, _):
+        graph_id = await _create_graph(client, f"recipe-poll-{uuid.uuid4().hex[:8]}")
+        recipe_id = f"rcp_poll-{uuid.uuid4().hex[:12]}"
+
+        stored = await client.post(
+            "/api/v1/recipes",
+            json={"graph_id": graph_id, "recipe": _make_recipe(recipe_id)},
+        )
+        assert stored.status_code == 201, stored.text
+
+        run = await client.post(
+            f"/api/v1/graphs/{graph_id}/recipes/{recipe_id}/run",
+            json={"source_type": "csv", "records": _RECORDS},
+        )
+        assert run.status_code == 202, f"run failed: {run.text}"
+        run_id = run.json()["run_id"]
+
+        # The run is pollable through the standard graph_id-scoped jobs route.
+        polled = await client.get(f"/api/v1/graphs/{graph_id}/jobs/{run_id}")
+        assert polled.status_code == 200, f"poll failed: {polled.text}"
+        job = polled.json()
+        assert job["id"] == run_id
+        assert str(job["graph_id"]) == graph_id
+        assert job["source_type"] == "recipe"
+        # The run is in a job lifecycle state — pending on enqueue, or a later
+        # state if the worker has already picked it up.
+        assert job["status"] in ("pending", "processing", "completed", "failed")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rest_run_recipe_cross_tenant_poll_denied():
+    """A recipe-run job cannot be polled from another tenant's graph.
+
+    The run handle lives inside the `graph_id` / ReBAC boundary (TASK-237):
+    polling a recipe-run id under a graph the principal owns but which is not
+    the run's graph returns 404 (the jobs query is `graph_id`-scoped) — the
+    latent cross-tenant smell of a raw Celery id (TASK-233 INFO-2) is closed.
+    """
+    async with env() as (client, _):
+        graph_a = await _create_graph(client, f"recipe-xtA-{uuid.uuid4().hex[:8]}")
+        graph_b = await _create_graph(client, f"recipe-xtB-{uuid.uuid4().hex[:8]}")
+        recipe_id = f"rcp_xt-{uuid.uuid4().hex[:12]}"
+
+        stored = await client.post(
+            "/api/v1/recipes",
+            json={"graph_id": graph_a, "recipe": _make_recipe(recipe_id)},
+        )
+        assert stored.status_code == 201, stored.text
+
+        run = await client.post(
+            f"/api/v1/graphs/{graph_a}/recipes/{recipe_id}/run",
+            json={"source_type": "csv", "records": _RECORDS},
+        )
+        assert run.status_code == 202, f"run failed: {run.text}"
+        run_id = run.json()["run_id"]
+
+        # Polling the run id under graph_b — a graph the principal owns but
+        # which is NOT the run's graph — must not return the row.
+        wrong = await client.get(f"/api/v1/graphs/{graph_b}/jobs/{run_id}")
+        assert wrong.status_code == 404, (
+            f"cross-tenant poll should be 404, got {wrong.status_code}: {wrong.text}"
+        )
 
 
 @pytest.mark.integration
@@ -298,16 +376,32 @@ async def test_rest_run_unknown_source_type_is_400():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_mcp_recipe_tools_project():
-    """The `recipe.*` / `ingest.recipe` tools project, namespaced and typed."""
+    """The `recipe.*` / `ingest.recipe` tools project, namespaced and typed.
+
+    Since TASK-237 `ingest.recipe` is an ASYNC_JOB, so it projects a *pair* —
+    the submit tool `ingest.recipe` and a distinct status tool
+    `ingest.recipe_status` (NOT `ingest.job_status`, which `ingest.text`
+    already owns — two specs cannot project the same tool name).
+    """
     async with env() as (_, mcp):
         tools = await mcp.list_tools()
     by_name = {t.name: t for t in tools}
-    for name in ("recipe.list", "recipe.get", "recipe.store", "ingest.recipe"):
+    for name in (
+        "recipe.list",
+        "recipe.get",
+        "recipe.store",
+        "ingest.recipe",
+        "ingest.recipe_status",
+    ):
         assert name in by_name, f"{name} not projected: {sorted(by_name)}"
         tool = by_name[name]
         assert tool.description, f"{name} has no description"
         assert tool.inputSchema.get("type") == "object", name
         assert "properties" in tool.inputSchema, name
+
+    # The recipe status tool must not collide with the text-ingest one.
+    assert "ingest.job_status" in by_name, "ingest.text status tool missing"
+    assert by_name["ingest.recipe_status"].name != by_name["ingest.job_status"].name
 
 
 @pytest.mark.integration
@@ -341,7 +435,13 @@ async def test_mcp_recipe_store_get_list_dispatch():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_mcp_ingest_recipe_dispatch():
-    """The `ingest.recipe` tool dispatches a recipe run through the REST surface."""
+    """The `ingest.recipe` ASYNC_JOB pair dispatches submit + status (TASK-237).
+
+    The submit tool runs the recipe and surfaces the run handle as `job_id`
+    (lifted from `RecipeRunResponse.run_id` via `job_id_field`). The paired
+    `ingest.recipe_status` tool then polls that handle through the standard
+    `/graphs/{graph_id}/jobs/{job_id}` route and returns the job row.
+    """
     async with env() as (client, mcp):
         graph_id = await _create_graph(client, f"recipe-mcprun-{uuid.uuid4().hex[:8]}")
         recipe_id = f"rcp_mcprun-{uuid.uuid4().hex[:12]}"
@@ -353,6 +453,7 @@ async def test_mcp_ingest_recipe_dispatch():
         )
         assert not stored.get("error"), f"recipe.store failed: {stored}"
 
+        # Submit leg — returns {job_id, status, raw}.
         run = await _mcp_call(
             mcp,
             "ingest.recipe",
@@ -363,6 +464,19 @@ async def test_mcp_ingest_recipe_dispatch():
             },
         )
         assert not run.get("error"), f"ingest.recipe failed: {run}"
-        assert run["run_id"], f"ingest.recipe returned no run_id: {run}"
-        assert run["recipe_id"] == recipe_id
-        assert run["status"] == "queued"
+        job_id = run["job_id"]
+        assert job_id, f"ingest.recipe returned no job_id: {run}"
+        uuid.UUID(job_id)
+        assert run["status"] == "pending"
+        assert run["raw"]["recipe_id"] == recipe_id
+
+        # Status leg — polls the job, graph_id-scoped.
+        polled = await _mcp_call(
+            mcp,
+            "ingest.recipe_status",
+            {"graph_id": graph_id, "job_id": job_id},
+        )
+        assert not polled.get("error"), f"ingest.recipe_status failed: {polled}"
+        assert polled["id"] == job_id
+        assert polled["source_type"] == "recipe"
+        assert polled["status"] in ("pending", "processing", "completed", "failed")

@@ -516,19 +516,33 @@ REGISTRY: tuple[CapabilitySpec, ...] = (
         body_model=RecipeStoreRequest,
         result_model=RecipeResponse,
     ),
+    # TASK-237: a recipe run is a first-class `ingestion_jobs` row, so
+    # `ingest.recipe` projects as an ASYNC_JOB — a submit tool plus a status
+    # tool — exactly like `ingest.text`. The status leg polls the same
+    # `/graphs/{graph_id}/jobs/{job_id}` route, but it MUST carry a distinct
+    # `status_name` (`ingest.recipe_status`): two specs cannot both project a
+    # tool named `ingest.job_status`. `job_id_field="run_id"` makes the submit
+    # tool lift the run handle from `RecipeRunResponse.run_id`.
     CapabilitySpec(
         name="ingest.recipe",
-        io_class=IOClass.PLAIN,
+        io_class=IOClass.ASYNC_JOB,
         method="POST",
         path="/api/v1/graphs/{graph_id}/recipes/{recipe_id}/run",
         description=(
             "Run a stored ingestion recipe over an inline source (records) "
-            "into a graph. The run executes asynchronously; the result "
-            "carries the run id."
+            "into a graph. The run executes asynchronously as a graph-scoped "
+            "ingestion job; the result carries the run id."
         ),
         path_params=("graph_id", "recipe_id"),
         has_body=True,
         body_model=RecipeRunRequest,
         result_model=RecipeRunResponse,
+        status_name="ingest.recipe_status",
+        status_method="GET",
+        status_path="/api/v1/graphs/{graph_id}/jobs/{job_id}",
+        status_path_params=("graph_id", "job_id"),
+        status_description="Poll the status of a recipe-run ingestion job.",
+        status_result_model=IngestionJobResponse,
+        job_id_field="run_id",
     ),
 )
