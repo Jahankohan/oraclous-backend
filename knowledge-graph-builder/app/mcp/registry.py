@@ -14,10 +14,10 @@ Curation rules applied here:
 
   * Only families with an existing REST endpoint are projected — the projection
     dispatches into existing routes only, it never adds a REST capability.
-  * `recipe.*` is intentionally absent: the STORY-034 recipe pipeline has **no
-    REST surface** (it was never exposed over REST), so it cannot be projected
-    in TASK-230. Exposing the recipe pipeline over REST is a separate gap and
-    is out of scope for STORY-035's non-goals.
+  * `recipe.*` / `ingest.recipe` are projected (TASK-236): the STORY-034 recipe
+    pipeline gained a minimal REST surface (`app/api/v1/endpoints/recipes.py`),
+    so the concern-driven ingestion recipe — list / get / store / run — is now
+    an existing REST capability the projection can expose.
   * Dangerous operations (ADR-023 D6 — `permissions`, `service-accounts`) and
     bespoke/workflow-shaped endpoints (chat-session CRUD, evaluation runs, org
     dashboards) are excluded.
@@ -80,6 +80,13 @@ from app.schemas.memory import (
     MemoryUpdateResponse,
 )
 from app.schemas.multimodal import MultiModalJobResponse
+from app.schemas.recipe_schemas import (
+    RecipeListResponse,
+    RecipeResponse,
+    RecipeRunRequest,
+    RecipeRunResponse,
+    RecipeStoreRequest,
+)
 
 
 class IOClass(str, Enum):
@@ -470,5 +477,58 @@ REGISTRY: tuple[CapabilitySpec, ...] = (
         has_body=True,
         body_model=FederatedVectorSearchRequest,
         result_model=FederatedVectorSearchResponse,
+    ),
+    # === recipe.* / ingest.recipe — concern-driven ingestion recipes ========
+    # TASK-236: the STORY-034 recipe pipeline gained a REST surface, so the
+    # recipe library (list/get/store) and the recipe execution engine (run)
+    # are now projectable. `recipe.run` is folded into the `ingest.*` family as
+    # `ingest.recipe` — it is the recipe-driven ingestion path (ADR-022).
+    CapabilitySpec(
+        name="recipe.list",
+        io_class=IOClass.PLAIN,
+        method="GET",
+        path="/api/v1/recipes",
+        description="List a tenant graph's ingestion recipes.",
+        query_params=("graph_id",),
+        result_model=RecipeListResponse,
+    ),
+    CapabilitySpec(
+        name="recipe.get",
+        io_class=IOClass.PLAIN,
+        method="GET",
+        path="/api/v1/recipes/{recipe_id}",
+        description="Get one ingestion recipe document by id.",
+        path_params=("recipe_id",),
+        query_params=("graph_id",),
+        result_model=RecipeResponse,
+    ),
+    CapabilitySpec(
+        name="recipe.store",
+        io_class=IOClass.PLAIN,
+        method="POST",
+        path="/api/v1/recipes",
+        description=(
+            "Store an ingestion recipe document as a new draft version. This "
+            "is the recipe-authoring primitive — the client composes the "
+            "recipe JSON, the endpoint validates and stores it."
+        ),
+        has_body=True,
+        body_model=RecipeStoreRequest,
+        result_model=RecipeResponse,
+    ),
+    CapabilitySpec(
+        name="ingest.recipe",
+        io_class=IOClass.PLAIN,
+        method="POST",
+        path="/api/v1/graphs/{graph_id}/recipes/{recipe_id}/run",
+        description=(
+            "Run a stored ingestion recipe over an inline source (records) "
+            "into a graph. The run executes asynchronously; the result "
+            "carries the run id."
+        ),
+        path_params=("graph_id", "recipe_id"),
+        has_body=True,
+        body_model=RecipeRunRequest,
+        result_model=RecipeRunResponse,
     ),
 )
