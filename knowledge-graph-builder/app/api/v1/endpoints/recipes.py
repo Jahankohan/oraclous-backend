@@ -34,6 +34,7 @@ import io
 import json
 import tempfile
 from pathlib import Path
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +46,7 @@ from app.api.dependencies import (
     verify_graph_write_access,
 )
 from app.core.logging import get_logger
+from app.models.graph import IngestionJob
 from app.recipes.authoring import PRIMITIVE_REGISTRY
 from app.recipes.engine import RecipeValidationError
 from app.recipes.library import RecipeLibrary
@@ -208,9 +210,15 @@ async def run_recipe(
     `write` access to `graph_id` is verified first. The recipe is looked up
     `graph_id`-scoped (a recipe of another tenant is masked 404). The inline
     `records` are decomposed by the matching primitive in FULL mode into a
-    `StructuralRepresentation`, which is enqueued — with the recipe — onto the
-    `execute_recipe_task` Celery task. The response carries the Celery task id
-    as `run_id`; the run completes in the worker.
+    `StructuralRepresentation`.
+
+    A recipe run is a first-class `ingestion_jobs` row (TASK-237, closes
+    TASK-233 INFO-2): the endpoint creates an `IngestionJob`
+    (`source_type="recipe"`, `status="pending"`, `graph_id`-scoped) before
+    enqueuing, and returns **that row's id** as `run_id` — not the Celery task
+    id. The run is then pollable through the standard `graph_id`-scoped
+    `GET /api/v1/graphs/{graph_id}/jobs/{job_id}` endpoint, so it has
+    tenant-scoped status and run history like every other async job.
     """
     if request.source_type not in _INLINE_PRIMITIVE_KINDS:
         raise HTTPException(
@@ -238,23 +246,44 @@ async def run_recipe(
     finally:
         Path(source_path).unlink(missing_ok=True)
 
-    # Enqueue the recipe-execution Celery task — the run completes async.
+    # Create the recipe-run as a first-class ingestion_jobs row before
+    # enqueuing — the row id, not the Celery task id, is the run handle
+    # (TASK-237, closes TASK-233 INFO-2). It is graph_id-scoped, so the run is
+    # pollable through the standard tenant-scoped jobs endpoint.
+    job_id = uuid4()
+    job = IngestionJob(
+        id=job_id,
+        graph_id=UUID(graph_id),
+        source_type="recipe",
+        status="pending",
+        effective_instructions={
+            "recipe_id": recipe_id,
+            "recipe_version": int(recipe.get("version", 0)),
+        },
+    )
+    db.add(job)
+    await db.commit()
+
+    # Enqueue the recipe-execution Celery task — the run completes async and
+    # the worker updates this job row to running → completed/failed.
     task = execute_recipe_task.delay(
         recipe=recipe,
         representation=representation.model_dump(mode="json"),
         graph_id=graph_id,
+        job_id=str(job_id),
     )
     logger.info(
-        "run_recipe: enqueued recipe %s v%s on graph %s — run %s",
+        "run_recipe: enqueued recipe %s v%s on graph %s — job %s, task %s",
         recipe_id,
         recipe.get("version"),
         graph_id,
+        job_id,
         task.id,
     )
     return RecipeRunResponse(
-        run_id=task.id,
+        run_id=str(job_id),
         recipe_id=recipe_id,
         recipe_version=int(recipe.get("version", 0)),
         graph_id=graph_id,
-        status="queued",
+        status="pending",
     )

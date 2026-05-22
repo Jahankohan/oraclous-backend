@@ -113,16 +113,24 @@ class RecipeRunRequest(BaseModel):
 class RecipeRunResponse(BaseModel):
     """Response of the recipe-run endpoint — an enqueued async job.
 
-    The run executes asynchronously in the Celery worker; `run_id` is the
-    Celery task id, which a caller can poll through the standard Celery
-    result backend.
+    The run executes asynchronously in the Celery worker. A recipe run is a
+    first-class `ingestion_jobs` row (TASK-237): `run_id` is that row's id,
+    `graph_id`-scoped, and is pollable through the standard
+    `GET /api/v1/graphs/{graph_id}/jobs/{job_id}` endpoint — not a raw Celery
+    task id.
     """
 
-    run_id: str = Field(..., description="The async run (Celery task) id.")
+    run_id: str = Field(
+        ...,
+        description=(
+            "The recipe-run ingestion-job id. Poll "
+            "`GET /api/v1/graphs/{graph_id}/jobs/{run_id}` for status."
+        ),
+    )
     recipe_id: str = Field(..., description="The recipe being run.")
     recipe_version: int = Field(..., description="The recipe version being run.")
     graph_id: str = Field(..., description="The target tenant graph.")
     status: str = Field(
-        default="queued",
-        description="Run lifecycle status — `queued` on enqueue.",
+        default="pending",
+        description="Run lifecycle status — `pending` on enqueue.",
     )
