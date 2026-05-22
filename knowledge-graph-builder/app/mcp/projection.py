@@ -56,12 +56,17 @@ def project(spec: CapabilitySpec) -> list[Tool]:
 
 
 def _require_token() -> str:
-    """The bearer token for the in-flight call. Fail closed if none is bound."""
+    """The bearer token for the in-flight call. Fail closed if none is bound.
+
+    The token is bound per-request by `BearerTokenASGIMiddleware` (TASK-231)
+    from the inbound MCP request's `Authorization` header. An unauthenticated
+    request leaves the contextvar unbound and this raises — deny by default.
+    """
     token = get_bearer_token()
     if not token:
         raise MCPProjectionError(
-            "no MCP principal on the call — a bearer token is required "
-            "(per-call auth wiring lands in TASK-231)"
+            "no MCP principal on the call — a valid Authorization bearer "
+            "token is required"
         )
     return token
 
