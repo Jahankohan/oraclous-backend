@@ -105,6 +105,11 @@ async def init_database_schema() -> None:
     """
     import asyncio
 
+    # Import every ORM model so Base.metadata is complete before create_all
+    # bootstraps a fresh database. A model module the app never imports
+    # otherwise (e.g. an orphaned one) is invisible to create_all — its table
+    # silently goes missing on a fresh install.
+    import app.models  # noqa: F401
     from alembic import command
 
     cfg = _alembic_config()
