@@ -199,7 +199,14 @@ def test_webhook_endpoint_has_rate_limit_decorator():
 @pytest.mark.unit
 def test_main_app_has_limiter_attached():
     """The production FastAPI app has limiter attached to app.state."""
-    # We patch all heavy startup side-effects so we can import the app module cleanly.
+    import sys
+
+    # Clear any cached (potentially stub-contaminated) app.main so that the
+    # import below always runs main.py's module-level code fresh, ensuring
+    # app.state.limiter is the real Limiter and not a leftover MagicMock from
+    # another test (e.g. test_lifespan_sync_driver stubs app.core.rate_limiter).
+    sys.modules.pop("app.main", None)
+
     with (
         patch("app.core.neo4j_client.neo4j_client.connect", new=AsyncMock()),
         patch("app.core.database.init_database_schema", new=AsyncMock()),

@@ -120,7 +120,9 @@ def _serialize(org: Organization, org_role: str | None = None) -> OrganizationRe
     return OrganizationResponse(
         id=str(org.id),
         name=org.name,
+        slug=org.slug,
         description=org.description or "",
+        logo_url=org.logo_url,
         owner_user_id=str(org.owner_user_id),
         settings=org.settings or {},
         status=org.status,
@@ -141,15 +143,26 @@ async def create_organization(
     db: AsyncSession = Depends(get_database),
     driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ) -> OrganizationResponse:
-    """Create an organization. The current user becomes its owner."""
-    org = await organization_service.create_organization(
-        db,
-        driver,
-        name=body.name,
-        description=body.description,
-        settings=body.settings,
-        owner_user_id=user_id,
-    )
+    """Create an organization. The current user becomes its owner.
+
+    A subdomain ``slug`` is auto-generated from the name when not supplied; an
+    explicit slug that is reserved or already taken yields 409.
+    """
+    try:
+        org = await organization_service.create_organization(
+            db,
+            driver,
+            name=body.name,
+            description=body.description,
+            settings=body.settings,
+            owner_user_id=user_id,
+            slug=body.slug,
+            logo_url=body.logo_url,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     return _serialize(org, org_role="owner")
 
 
@@ -221,6 +234,7 @@ async def update_organization(
         name=body.name,
         description=body.description,
         settings=body.settings,
+        logo_url=body.logo_url,
     )
     if updated is None:
         raise HTTPException(

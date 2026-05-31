@@ -1,0 +1,76 @@
+{
+  "recipe_format_version": "0.2",
+  "id": "rcp_org-chart-relational-v1",
+  "version": 2,
+  "status": "draft",
+  "concern": "Understand the reporting structure and team composition.",
+  "applies_to": {
+    "source_type": "relational",
+    "shape_signature": "relational(departments[id:integerP,name:text];employees[department_id:integerF,id:integerP,manager_id:integerF,name:text,title:text];salary_history[amount:numeric,effective_date:date,employee_id:integerF,id:integerP])"
+  },
+  "defaults": { "provenance": "EXTRACTED", "materialize_fine_grain": true },
+  "authoring": {
+    "authored_by": "data-specialist",
+    "created": "2026-05-22",
+    "sample_basis": "full schema + first 5 rows of each table",
+    "design_notes_ref": "TASK-235"
+  },
+  "mappings": [
+    {
+      "id": "employees",
+      "match": { "unit_kind": "record", "name": "employees" },
+      "project_to": "node",
+      "label": "Employee",
+      "identity": {
+        "scheme": "deterministic",
+        "from": ["column:name"],
+        "normalize": ["casefold", "trim", "collapse_whitespace"]
+      },
+      "materialize": true,
+      "properties": [ { "name": "name", "value_from": "column:name" } ]
+    },
+    {
+      "id": "employee_title",
+      "match": { "unit_kind": "column", "name": "title" },
+      "project_to": "property",
+      "on": "employees",
+      "name": "title",
+      "value_from": "column:title"
+    },
+    {
+      "id": "reports_to",
+      "match": { "unit_kind": "column", "name": "manager_id", "role": "foreign_key" },
+      "project_to": "edge",
+      "type": "REPORTS_TO",
+      "from": { "node_rule": "employees" },
+      "to": { "node_rule": "employees", "resolve_by": "fk_target" }
+    },
+    {
+      "id": "departments",
+      "match": { "unit_kind": "record", "name": "departments" },
+      "project_to": "node",
+      "label": "Department",
+      "identity": {
+        "scheme": "deterministic",
+        "from": ["column:name"],
+        "normalize": ["casefold", "trim", "collapse_whitespace"]
+      },
+      "materialize": true,
+      "properties": [ { "name": "name", "value_from": "column:name" } ]
+    },
+    {
+      "id": "member_of",
+      "match": { "unit_kind": "column", "name": "department_id", "role": "foreign_key" },
+      "project_to": "edge",
+      "type": "MEMBER_OF",
+      "from": { "node_rule": "employees" },
+      "to": { "node_rule": "departments", "resolve_by": "fk_target" }
+    },
+    {
+      "id": "skip_salary_history",
+      "match": { "unit_kind": "record", "name": "salary_history" },
+      "project_to": "skip",
+      "reason": "Out of scope for an org-chart concern; a fraud concern would keep it."
+    }
+  ]
+}
