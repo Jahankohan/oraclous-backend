@@ -17,6 +17,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.core.neo4j_client import neo4j_client
+from app.services.graph_node_service import SHARED_TEMPORAL_INDEX_STATEMENTS
 
 logger = get_logger(__name__)
 
@@ -36,18 +37,12 @@ class SnapshotService:
     async def ensure_indexes(self) -> None:
         """Create Neo4j indexes required for versioning queries (idempotent)."""
         index_queries = [
-            "CREATE INDEX entity_transaction_time_idx IF NOT EXISTS FOR (e:__Entity__) ON (e.graph_id, e.transaction_time)",
+            *SHARED_TEMPORAL_INDEX_STATEMENTS,
             "CREATE INDEX entity_invalidated_at_idx IF NOT EXISTS FOR (e:__Entity__) ON (e.graph_id, e.invalidated_at)",
             "CREATE INDEX version_graph_idx IF NOT EXISTS FOR (v:GraphVersion) ON (v.graph_id, v.captured_at)",
             "CREATE INDEX version_number_idx IF NOT EXISTS FOR (v:GraphVersion) ON (v.graph_id, v.version_number)",
             # Composite index on relationships — (graph_id, transaction_time, invalidated_at)
             "CREATE INDEX rel_version_composite_idx IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id, r.transaction_time, r.invalidated_at)",
-            # ORA-138: Relationship temporal (valid-time) indexes — composite for
-            # queries that filter by r.graph_id + temporal props, and standalone
-            # for traversal queries where graph_id is only on the node side.
-            "CREATE INDEX rel_temporal_idx IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id, r.valid_from, r.valid_to)",
-            "CREATE INDEX rel_valid_from_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_from)",
-            "CREATE INDEX rel_valid_to_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_to)",
         ]
         for q in index_queries:
             try:
