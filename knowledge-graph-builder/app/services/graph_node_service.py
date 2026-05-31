@@ -27,6 +27,22 @@ from typing import Any
 from neo4j import Driver
 from neo4j.exceptions import Neo4jError
 
+# Indexes required by both GraphNodeService and SnapshotService.
+# Neo4j 5.x wildcard syntax for relationship property indexes.
+SHARED_TEMPORAL_INDEX_STATEMENTS: tuple[str, ...] = (
+    # Composite index for transaction-time lookups
+    "CREATE INDEX entity_transaction_time_idx IF NOT EXISTS FOR (e:__Entity__) ON (e.graph_id, e.transaction_time)",
+    # Relationship temporal index (Neo4j 5.x wildcard syntax)
+    "CREATE INDEX rel_temporal_idx IF NOT EXISTS FOR ()-[r]-() ON (r.graph_id, r.valid_from, r.valid_to)",
+    # Standalone relationship indexes for traversal queries that filter by
+    # valid_from / valid_to without r.graph_id in the WHERE clause
+    # (e.g. multihop enrichment in chat_service). The composite rel_temporal_idx
+    # requires graph_id as the leading key and is not used by the planner in
+    # those traversal patterns.
+    "CREATE INDEX rel_valid_from_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_from)",
+    "CREATE INDEX rel_valid_to_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_to)",
+)
+
 
 class GraphNodeService:
     """Service for managing Graph nodes in Neo4j"""
@@ -46,19 +62,7 @@ class GraphNodeService:
         # Composite index for point-in-time entity queries
         "CREATE INDEX entity_temporal_idx IF NOT EXISTS "
         "FOR (e:__Entity__) ON (e.graph_id, e.valid_from, e.valid_to)",
-        # Composite index for transaction-time lookups
-        "CREATE INDEX entity_transaction_time_idx IF NOT EXISTS "
-        "FOR (e:__Entity__) ON (e.graph_id, e.transaction_time)",
-        # Relationship temporal index (Neo4j 5.x wildcard syntax)
-        "CREATE INDEX rel_temporal_idx IF NOT EXISTS "
-        "FOR ()-[r]-() ON (r.graph_id, r.valid_from, r.valid_to)",
-        # Standalone relationship indexes for traversal queries that filter by
-        # valid_from / valid_to without r.graph_id in the WHERE clause
-        # (e.g. multihop enrichment in chat_service). The composite rel_temporal_idx
-        # requires graph_id as the leading key and is not used by the planner in
-        # those traversal patterns.
-        "CREATE INDEX rel_valid_from_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_from)",
-        "CREATE INDEX rel_valid_to_idx IF NOT EXISTS FOR ()-[r]-() ON (r.valid_to)",
+        *SHARED_TEMPORAL_INDEX_STATEMENTS,
         # __Contradiction__ label added at schema init (not ad hoc per CTO review)
         "CREATE INDEX contradiction_graph_idx IF NOT EXISTS "
         "FOR (c:__Contradiction__) ON (c.graph_id, c.detected_at)",

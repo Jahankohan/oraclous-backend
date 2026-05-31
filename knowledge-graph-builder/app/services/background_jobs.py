@@ -219,6 +219,7 @@ celery_app = Celery(
         "app.tasks.community_tasks",
         "app.tasks.federation_tasks",
         "app.tasks.ontology_tasks",
+        "app.tasks.recipe_tasks",
         "app.tasks.webhook_tasks",
     ],
 )
