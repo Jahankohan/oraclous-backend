@@ -429,26 +429,38 @@ def _import_ontology_tasks_module():
     """
     Import app.tasks.ontology_tasks with background_jobs stubbed out.
 
-    app/models/graph.py has a pre-existing bug (ConnectorSyncLog.metadata is a
-    reserved SQLAlchemy attribute name) that prevents the full background_jobs
-    import chain from loading in the unit-test environment.  We stub only the
-    Celery glue so the business logic in ontology_tasks.py can be tested.
+    We always evict the cached module and force our passthrough stub onto
+    background_jobs before re-importing.  Without this, a prior test that
+    imported the real Celery app (e.g. test_background_jobs) leaves the real
+    celery_app in sys.modules; the real bind=True decorator then injects `self`
+    automatically, shifting every positional argument and breaking the calls
+    below with "takes 4 arguments but 5 were given".
+
+    The stub is applied only for the duration of the import; the real
+    background_jobs module (if any) is restored in the finally block so later
+    tests are not affected.
     """
     import sys
     import types
 
-    if "app.tasks.ontology_tasks" in sys.modules:
-        return sys.modules["app.tasks.ontology_tasks"]
+    # Evict cached module so we always get a fresh import with the stub.
+    sys.modules.pop("app.tasks.ontology_tasks", None)
 
-    if "app.services.background_jobs" not in sys.modules:
-        stub = types.ModuleType("app.services.background_jobs")
-        mock_celery = MagicMock()
-        # Passthrough: @celery_app.task(bind=True) → function unchanged
-        mock_celery.task.side_effect = lambda bind=False, **kw: (lambda fn: fn)
-        stub.celery_app = mock_celery
-        sys.modules["app.services.background_jobs"] = stub
+    saved_bg = sys.modules.get("app.services.background_jobs")
+    stub = types.ModuleType("app.services.background_jobs")
+    mock_celery = MagicMock()
+    # Passthrough: @celery_app.task(bind=True) → function unchanged
+    mock_celery.task.side_effect = lambda bind=False, **kw: (lambda fn: fn)
+    stub.celery_app = mock_celery
+    sys.modules["app.services.background_jobs"] = stub
 
-    import app.tasks.ontology_tasks as m  # noqa: E402
+    try:
+        import app.tasks.ontology_tasks as m  # noqa: E402
+    finally:
+        if saved_bg is not None:
+            sys.modules["app.services.background_jobs"] = saved_bg
+        else:
+            sys.modules.pop("app.services.background_jobs", None)
 
     return m
 
