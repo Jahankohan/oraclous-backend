@@ -219,9 +219,9 @@ class TestPermissionCheckPhaseB:
 
         for call in session.run.call_args_list:
             query = call[0][0]
-            assert (
-                injection not in query
-            ), "Injection string must never appear in query text"
+            assert injection not in query, (
+                "Injection string must never appear in query text"
+            )
             assert "$user_id" in query or "$acceptable" in query or "graph_id" in query
 
     @pytest.mark.asyncio

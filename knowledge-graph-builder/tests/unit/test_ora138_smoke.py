@@ -54,9 +54,9 @@ class TestSnapshotServiceTemporalIndex:
     def test_rel_temporal_idx_present(self):
         """The composite temporal index for relationships must exist."""
         src = _read("services/snapshot_service.py")
-        assert (
-            "rel_temporal_idx" in src
-        ), "Missing rel_temporal_idx — ORA-138 fix not applied or index renamed"
+        assert "rel_temporal_idx" in src, (
+            "Missing rel_temporal_idx — ORA-138 fix not applied or index renamed"
+        )
 
     def test_rel_temporal_idx_covers_valid_from(self):
         """Composite index must include r.valid_from."""
@@ -64,9 +64,9 @@ class TestSnapshotServiceTemporalIndex:
         # Find the line containing rel_temporal_idx
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert (
-                    "valid_from" in line
-                ), f"rel_temporal_idx does not cover valid_from: {line!r}"
+                assert "valid_from" in line, (
+                    f"rel_temporal_idx does not cover valid_from: {line!r}"
+                )
                 return
         pytest.fail("rel_temporal_idx CREATE INDEX statement not found")
 
@@ -75,9 +75,9 @@ class TestSnapshotServiceTemporalIndex:
         src = _read("services/snapshot_service.py")
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert (
-                    "valid_to" in line
-                ), f"rel_temporal_idx does not cover valid_to: {line!r}"
+                assert "valid_to" in line, (
+                    f"rel_temporal_idx does not cover valid_to: {line!r}"
+                )
                 return
         pytest.fail("rel_temporal_idx CREATE INDEX statement not found")
 
@@ -86,9 +86,9 @@ class TestSnapshotServiceTemporalIndex:
         src = _read("services/snapshot_service.py")
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert (
-                    "graph_id" in line
-                ), f"rel_temporal_idx missing graph_id — multi-tenant scan risk: {line!r}"
+                assert "graph_id" in line, (
+                    f"rel_temporal_idx missing graph_id — multi-tenant scan risk: {line!r}"
+                )
                 # graph_id should appear before valid_from in the index definition
                 gi = line.index("graph_id")
                 vf = line.index("valid_from")
@@ -104,9 +104,9 @@ class TestSnapshotServiceTemporalIndex:
         src = _read("services/snapshot_service.py")
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert (
-                    "()-[r]-()" in line or "FOR ()-[" in line
-                ), f"rel_temporal_idx must be a relationship property index: {line!r}"
+                assert "()-[r]-()" in line or "FOR ()-[" in line, (
+                    f"rel_temporal_idx must be a relationship property index: {line!r}"
+                )
                 return
         pytest.fail("rel_temporal_idx CREATE INDEX statement not found")
 
@@ -115,9 +115,9 @@ class TestSnapshotServiceTemporalIndex:
         src = _read("services/snapshot_service.py")
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
-                assert (
-                    "IF NOT EXISTS" in line
-                ), f"Missing IF NOT EXISTS — index creation not idempotent: {line!r}"
+                assert "IF NOT EXISTS" in line, (
+                    f"Missing IF NOT EXISTS — index creation not idempotent: {line!r}"
+                )
                 return
         pytest.fail("rel_temporal_idx CREATE INDEX statement not found")
 
@@ -132,9 +132,9 @@ class TestSnapshotServiceTemporalIndex:
             "rel_version_composite_idx",
         ]
         for idx in required:
-            assert (
-                idx in src
-            ), f"Pre-existing index {idx!r} was removed — regression in ORA-138 fix"
+            assert idx in src, (
+                f"Pre-existing index {idx!r} was removed — regression in ORA-138 fix"
+            )
 
     def test_ensure_indexes_is_async(self):
         """ensure_indexes must be an async method (called with await in lifespan)."""
@@ -142,9 +142,9 @@ class TestSnapshotServiceTemporalIndex:
         # Find the method definition
         m = re.search(r"(async\s+def|def)\s+ensure_indexes", src)
         assert m is not None, "ensure_indexes method not found"
-        assert m.group(0).startswith(
-            "async"
-        ), "ensure_indexes must be async — it's awaited in main.py lifespan"
+        assert m.group(0).startswith("async"), (
+            "ensure_indexes must be async — it's awaited in main.py lifespan"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -232,9 +232,9 @@ class TestCompileTemporalFilterLogic:
     def test_current_only_returns_valid_to_null_check(self):
         """current_only filter must return 'r.valid_to IS NULL'."""
         src = self._get_method_source()
-        assert (
-            "r.valid_to IS NULL" in src
-        ), 'current_only branch must return "r.valid_to IS NULL"'
+        assert "r.valid_to IS NULL" in src, (
+            'current_only branch must return "r.valid_to IS NULL"'
+        )
 
     @pytest.mark.xfail(
         reason="ORA-138 temporal filter not yet implemented in compile_temporal_filter"
@@ -242,9 +242,9 @@ class TestCompileTemporalFilterLogic:
     def test_point_in_time_filters_on_valid_from(self):
         """point_in_time filter must include r.valid_from clause."""
         src = self._get_method_source()
-        assert (
-            "r.valid_from" in src and "point_in_time" in src
-        ), "compile_temporal_filter must filter on r.valid_from for point_in_time"
+        assert "r.valid_from" in src and "point_in_time" in src, (
+            "compile_temporal_filter must filter on r.valid_from for point_in_time"
+        )
 
     @pytest.mark.xfail(
         reason="ORA-138 temporal filter not yet implemented in compile_temporal_filter"
@@ -252,9 +252,9 @@ class TestCompileTemporalFilterLogic:
     def test_point_in_time_filters_on_valid_to(self):
         """point_in_time filter must include r.valid_to clause."""
         src = self._get_method_source()
-        assert (
-            "r.valid_to" in src and "point_in_time" in src
-        ), "compile_temporal_filter must filter on r.valid_to for point_in_time"
+        assert "r.valid_to" in src and "point_in_time" in src, (
+            "compile_temporal_filter must filter on r.valid_to for point_in_time"
+        )
 
     @pytest.mark.xfail(
         reason="ORA-138 temporal filter not yet implemented in compile_temporal_filter"
@@ -273,9 +273,9 @@ class TestCompileTemporalFilterLogic:
     def test_valid_from_gte_filter_present(self):
         """valid_from_gte range filter must be supported."""
         src = self._get_method_source()
-        assert (
-            "valid_from_gte" in src
-        ), "valid_from_gte range filter not implemented in compile_temporal_filter"
+        assert "valid_from_gte" in src, (
+            "valid_from_gte range filter not implemented in compile_temporal_filter"
+        )
 
     @pytest.mark.xfail(
         reason="ORA-138 temporal filter not yet implemented in compile_temporal_filter"
@@ -283,9 +283,9 @@ class TestCompileTemporalFilterLogic:
     def test_valid_to_lte_filter_present(self):
         """valid_to_lte range filter must be supported."""
         src = self._get_method_source()
-        assert (
-            "valid_to_lte" in src
-        ), "valid_to_lte range filter not implemented in compile_temporal_filter"
+        assert "valid_to_lte" in src, (
+            "valid_to_lte range filter not implemented in compile_temporal_filter"
+        )
 
     @pytest.mark.xfail(
         reason="ORA-138 temporal filter not yet implemented in compile_temporal_filter"

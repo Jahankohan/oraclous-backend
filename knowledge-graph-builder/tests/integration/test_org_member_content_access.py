@@ -340,9 +340,10 @@ async def test_member_agents_scoped_to_rebac_access(
         resp = await member_client.get(f"/api/v1/organizations/{org_id}/agents")
         assert resp.status_code == 200, resp.text
         member_agents = {a["agent_id"] for a in resp.json()}
-        assert member_agents == {agent_a, agent_c}, (
-            f"expected {{agent_a, agent_c}}, got {member_agents}"
-        )
+        assert member_agents == {
+            agent_a,
+            agent_c,
+        }, f"expected {{agent_a, agent_c}}, got {member_agents}"
 
         # Owner sees all three.
         resp = await owner_client.get(f"/api/v1/organizations/{org_id}/agents")

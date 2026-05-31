@@ -15,7 +15,9 @@ Security: every endpoint verifies the caller's tenant matches the SA's tenant.
 Error responses never reveal existence of inaccessible graphs (always 403, not 404).
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 
 from app.api.dependencies import (
@@ -26,8 +28,10 @@ from app.api.dependencies import (
 from app.core.neo4j_client import neo4j_client
 from app.schemas.service_account_schemas import (
     AddGraphGrantRequest,
+    AuditLogListResponse,
     CreateServiceAccountRequest,
     GraphGrantResponse,
+    SecurityAuditLogEntry,
     ServiceAccountCreatedResponse,
     ServiceAccountResponse,
     ServiceAccountRotatedResponse,
@@ -228,7 +232,7 @@ async def revoke_service_account(
     await verify_graph_access(sa["home_graph_id"], "admin", user_id)
 
     revoked = await service_account_service.revoke_service_account(
-        driver, accountId, tenant_id
+        driver, accountId, tenant_id, actor_user_id=user_id
     )
     if not revoked:
         raise HTTPException(
@@ -389,3 +393,104 @@ async def delete_graph_grant(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
         )
+
+
+# ── Audit log ──────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/service-accounts/{accountId}/audit-log",
+    response_model=AuditLogListResponse,
+)
+async def get_sa_audit_log(
+    accountId: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    before: str | None = Query(default=None),
+    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Return the security audit log for a service account (reverse-chronological).
+
+    Auth rules (all failures → 403, never 404):
+    1. service_account principals are denied unconditionally.
+    2. tenant_id from JWT must match the SA's tenant_id.
+    3. Caller must have admin on the SA's home_graph_id.
+
+    Query params:
+      limit — 1-100, default 50 (422 if >100 sent via non-Query path, Query enforces it)
+      before — ISO-8601 cursor; only entries with timestamp < before are returned (422 if
+               unparseable)
+    """
+    # Rule 1: service_account principals may not call this endpoint
+    if current_user.get("principal_type") == "service_account":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
+
+    driver = _require_neo4j()
+    tenant_id = await _resolve_tenant_id(current_user, driver)
+
+    # Fetch SA (tenant-isolated) — 403 if not found
+    sa = await service_account_service.get_service_account(driver, accountId, tenant_id)
+    if not sa:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
+
+    # Rule 2: JWT tenant must match SA tenant (already enforced by tenant-isolated lookup,
+    # but explicitly re-check for clarity)
+    if sa.get("tenant_id") != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
+
+    # Rule 3: caller must have admin on the SA's home graph
+    await verify_graph_access(sa["home_graph_id"], "admin", user_id)
+
+    # Parse optional before cursor (validate format; raw string passed to Cypher datetime())
+    if before is not None:
+        try:
+            datetime.fromisoformat(before)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="before must be a valid ISO-8601 datetime string",
+            )
+
+    # Fetch limit+1 to determine has_more
+    fetch_limit = limit + 1
+
+    async with driver.session() as session:
+        result = await session.run(
+            """
+            MATCH (a:SecurityAuditLog {sa_id: $sa_id, tenant_id: $tenant_id})
+            WHERE $before IS NULL OR a.timestamp < datetime($before)
+            WITH a
+            ORDER BY a.timestamp DESC
+            LIMIT $fetch_limit
+            RETURN a.audit_log_id   AS audit_log_id,
+                   a.event_type     AS event_type,
+                   a.sa_id          AS sa_id,
+                   a.actor_user_id  AS actor_user_id,
+                   a.home_graph_id  AS home_graph_id,
+                   a.tenant_id      AS tenant_id,
+                   a.key_prefix     AS key_prefix,
+                   toString(a.timestamp) AS timestamp
+            """,
+            {
+                "sa_id": accountId,
+                "tenant_id": tenant_id,
+                "before": before,
+                "fetch_limit": fetch_limit,
+            },
+        )
+        rows = await result.data()
+
+    has_more = len(rows) > limit
+    items = rows[:limit]
+
+    return AuditLogListResponse(
+        items=[SecurityAuditLogEntry(**r) for r in items],
+        total_count=len(items),
+        has_more=has_more,
+    )

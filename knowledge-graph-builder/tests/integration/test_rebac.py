@@ -419,10 +419,12 @@ class TestReBACIntegration:
         # Seed: user-a owns graph-a (admin); user-b has no access
         now = "2020-01-01T00:00:00Z"
         future = "2099-12-31T00:00:00Z"
-        await self._run("""
+        await self._run(
+            """
             // Clean any leftover test nodes
             MATCH (n {_test_rebac: true}) DETACH DELETE n
-        """)
+        """
+        )
         await self._run(
             """
             MERGE (ua:User {user_id: 'rebac-user-a', graph_id: '__system__'})

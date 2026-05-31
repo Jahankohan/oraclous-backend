@@ -20,6 +20,7 @@ from neo4j import AsyncDriver
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.services.audit_service import log_sa_security_event
 
 logger = get_logger(__name__)
 
@@ -71,6 +72,15 @@ class ServiceAccountService:
             "FOR (sa:AgentServiceAccount) ON (sa.tenant_id)",
             "CREATE INDEX agent_sa_status IF NOT EXISTS "
             "FOR (sa:AgentServiceAccount) ON (sa.status)",
+            # SecurityAuditLog constraints and indexes (ORA-316)
+            "CREATE CONSTRAINT sa_audit_log_id_unique IF NOT EXISTS "
+            "FOR (a:SecurityAuditLog) REQUIRE a.audit_log_id IS UNIQUE",
+            "CREATE INDEX sa_audit_log_sa IF NOT EXISTS "
+            "FOR (a:SecurityAuditLog) ON (a.sa_id)",
+            "CREATE INDEX sa_audit_log_tenant IF NOT EXISTS "
+            "FOR (a:SecurityAuditLog) ON (a.tenant_id)",
+            "CREATE INDEX sa_audit_log_timestamp IF NOT EXISTS "
+            "FOR (a:SecurityAuditLog) ON (a.timestamp)",
         ]
         async with driver.session() as session:
             for q in queries:
@@ -147,19 +157,24 @@ class ServiceAccountService:
             expires_at=expires_at,
         )
 
-        # 3. Store key_prefix on the Neo4j node
+        # 3. Store key_prefix + audit log (atomic)
         async with driver.session() as session:
-            await session.run(
-                """
-                MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
-                SET sa.key_prefix = $key_prefix
-                """,
-                {
-                    "sa_id": sa_id,
-                    "tenant_id": tenant_id,
-                    "key_prefix": key_data["key_prefix"],
-                },
-            )
+            async with session.begin_transaction() as tx:
+                await tx.run(
+                    """
+                    MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
+                    SET sa.key_prefix = $key_prefix
+                    """,
+                    {
+                        "sa_id": sa_id,
+                        "tenant_id": tenant_id,
+                        "key_prefix": key_data["key_prefix"],
+                    },
+                )
+                await log_sa_security_event(
+                    tx, "sa_created", sa_id, tenant_id, created_by_user_id
+                )
+                await tx.commit()
 
         return {
             "service_account_id": sa_id,
@@ -266,25 +281,33 @@ class ServiceAccountService:
         return dict(record) if record else None
 
     async def revoke_service_account(
-        self, driver: AsyncDriver, sa_id: str, tenant_id: str
+        self,
+        driver: AsyncDriver,
+        sa_id: str,
+        tenant_id: str,
+        actor_user_id: str = "",
     ) -> bool:
-        """Soft-revoke SA: set status=revoked in Neo4j + revoke all auth keys."""
+        """Soft-revoke SA: set status=revoked in Neo4j + write audit + revoke auth keys."""
         async with driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
-                WHERE sa.status = 'active'
-                SET sa.status = 'revoked', sa.revoked_at = datetime()
-                RETURN sa.service_account_id AS sa_id
-                """,
-                {"sa_id": sa_id, "tenant_id": tenant_id},
-            )
-            record = await result.single()
+            async with session.begin_transaction() as tx:
+                result = await tx.run(
+                    """
+                    MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
+                    WHERE sa.status = 'active'
+                    SET sa.status = 'revoked', sa.revoked_at = datetime()
+                    RETURN sa.service_account_id AS sa_id
+                    """,
+                    {"sa_id": sa_id, "tenant_id": tenant_id},
+                )
+                record = await result.single()
+                if not record:
+                    await tx.rollback()
+                    return False
+                await log_sa_security_event(
+                    tx, "sa_revoked", sa_id, tenant_id, actor_user_id or sa_id
+                )
+                await tx.commit()
 
-        if not record:
-            return False
-
-        # Revoke all API keys in auth-service
         await self._revoke_auth_keys(sa_id)
         return True
 
@@ -314,19 +337,24 @@ class ServiceAccountService:
             created_by_user_id=created_by_user_id,
         )
 
-        # Update key_prefix in Neo4j
+        # Update key_prefix + audit log (atomic)
         async with driver.session() as session:
-            await session.run(
-                """
-                MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
-                SET sa.key_prefix = $key_prefix
-                """,
-                {
-                    "sa_id": sa_id,
-                    "tenant_id": tenant_id,
-                    "key_prefix": key_data["key_prefix"],
-                },
-            )
+            async with session.begin_transaction() as tx:
+                await tx.run(
+                    """
+                    MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
+                    SET sa.key_prefix = $key_prefix
+                    """,
+                    {
+                        "sa_id": sa_id,
+                        "tenant_id": tenant_id,
+                        "key_prefix": key_data["key_prefix"],
+                    },
+                )
+                await log_sa_security_event(
+                    tx, "key_rotated", sa_id, tenant_id, created_by_user_id
+                )
+                await tx.commit()
 
         return {
             "service_account_id": sa_id,

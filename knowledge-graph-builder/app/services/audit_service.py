@@ -1,4 +1,4 @@
-"""Audit event logging for public agent calls (STORY-022)."""
+"""Audit event logging for public agent calls (STORY-022) and SA security events (ORA-316)."""
 
 import hashlib
 import time
@@ -53,3 +53,36 @@ async def log_public_call(
     except Exception as exc:
         # Audit failure must not propagate to the caller
         logger.error("Failed to write AuditEvent: %s", exc)
+
+
+async def log_sa_security_event(
+    tx,
+    event_type: str,
+    sa_id: str,
+    tenant_id: str,
+    actor_id: str,
+) -> None:
+    """Write one :SecurityAuditEvent node in the caller's open transaction.
+
+    NO try/except — exceptions must propagate so the caller's tx rolls back.
+    """
+    await tx.run(
+        """
+        CREATE (:SecurityAuditEvent {
+            event_id:   $event_id,
+            event_type: $event_type,
+            sa_id:      $sa_id,
+            tenant_id:  $tenant_id,
+            actor_id:   $actor_id,
+            timestamp:  $timestamp
+        })
+        """,
+        {
+            "event_id": str(uuid.uuid4()),
+            "event_type": event_type,
+            "sa_id": sa_id,
+            "tenant_id": tenant_id,
+            "actor_id": actor_id,
+            "timestamp": int(time.time()),
+        },
+    )

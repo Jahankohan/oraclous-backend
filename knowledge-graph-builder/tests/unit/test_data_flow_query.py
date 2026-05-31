@@ -129,9 +129,9 @@ def test_data_flow_missing_source_symbol_raises_query_param_error():
         with pytest.raises(_QueryParamError) as exc_info:
             _run(run())
 
-    assert (
-        "source_symbol" in str(exc_info.value).lower()
-    ), f"Error message must mention 'source_symbol', got: {exc_info.value}"
+    assert "source_symbol" in str(exc_info.value).lower(), (
+        f"Error message must mention 'source_symbol', got: {exc_info.value}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,18 +178,18 @@ def test_data_flow_cypher_uses_graph_id_parameter():
         params_dict = None
 
     if params_dict is not None:
-        assert (
-            "graph_id" in params_dict
-        ), f"execute_query params must contain 'graph_id', got keys: {list(params_dict.keys())}"
+        assert "graph_id" in params_dict, (
+            f"execute_query params must contain 'graph_id', got keys: {list(params_dict.keys())}"
+        )
         assert params_dict["graph_id"] == GRAPH_A, (
             f"graph_id in params must equal the requested graph_id, "
             f"got: {params_dict['graph_id']}"
         )
     else:
         call_str = str(call_args)
-        assert (
-            "graph_id" in call_str
-        ), f"execute_query call must reference graph_id: {call_str}"
+        assert "graph_id" in call_str, (
+            f"execute_query call must reference graph_id: {call_str}"
+        )
 
 
 @pytest.mark.unit
@@ -268,12 +268,12 @@ def test_data_flow_forward_returns_path_records():
 
     assert len(result) == 1
     record = result[0]
-    assert (
-        "path_nodes" in record
-    ), f"Expected 'path_nodes' in result, got: {record.keys()}"
-    assert (
-        "path_labels" in record
-    ), f"Expected 'path_labels' in result, got: {record.keys()}"
+    assert "path_nodes" in record, (
+        f"Expected 'path_nodes' in result, got: {record.keys()}"
+    )
+    assert "path_labels" in record, (
+        f"Expected 'path_labels' in result, got: {record.keys()}"
+    )
     assert "depth" in record, f"Expected 'depth' in result, got: {record.keys()}"
     assert record["depth"] == 2
 
@@ -311,9 +311,9 @@ def test_data_flow_backward_direction_uses_graph_id():
     assert mock_driver.execute_query.called
     call_args = mock_driver.execute_query.call_args
     cypher = call_args.args[0] if call_args.args else ""
-    assert (
-        "$graph_id" in cypher
-    ), "Backward direction Cypher must include $graph_id parameter"
+    assert "$graph_id" in cypher, (
+        "Backward direction Cypher must include $graph_id parameter"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -348,9 +348,9 @@ def test_data_flow_both_direction_uses_graph_id():
     assert mock_driver.execute_query.called
     call_args = mock_driver.execute_query.call_args
     cypher = call_args.args[0] if call_args.args else ""
-    assert (
-        "$graph_id" in cypher
-    ), "Both-direction Cypher must include $graph_id parameter"
+    assert "$graph_id" in cypher, (
+        "Both-direction Cypher must include $graph_id parameter"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -496,13 +496,13 @@ def test_code_query_data_flow_endpoint_missing_source_symbol_returns_400():
                 },
             )
 
-    assert (
-        resp.status_code == 400
-    ), f"Expected 400 for missing source_symbol, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 400, (
+        f"Expected 400 for missing source_symbol, got {resp.status_code}: {resp.text}"
+    )
     detail = resp.json().get("detail", "")
-    assert (
-        "source_symbol" in detail.lower()
-    ), f"Error detail must mention 'source_symbol', got: {detail}"
+    assert "source_symbol" in detail.lower(), (
+        f"Error detail must mention 'source_symbol', got: {detail}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -541,13 +541,13 @@ def test_data_flow_graph_id_never_hardcoded_in_cypher_string():
     cypher = call_args.args[0] if call_args.args else ""
 
     # The literal UUID must NOT appear inside the Cypher string
-    assert (
-        test_graph_id not in cypher
-    ), f"Graph ID '{test_graph_id}' must not be hardcoded in Cypher: {cypher[:300]}"
+    assert test_graph_id not in cypher, (
+        f"Graph ID '{test_graph_id}' must not be hardcoded in Cypher: {cypher[:300]}"
+    )
 
     # But it must appear in the parameters dict
     if len(call_args.args) > 1:
         params_dict = call_args.args[1]
-        assert (
-            params_dict.get("graph_id") == test_graph_id
-        ), f"graph_id must be passed as parameter, got: {params_dict}"
+        assert params_dict.get("graph_id") == test_graph_id, (
+            f"graph_id must be passed as parameter, got: {params_dict}"
+        )
