@@ -56,44 +56,33 @@ async def log_public_call(
 
 
 async def log_sa_security_event(
-    session,
+    tx,
     event_type: str,
     sa_id: str,
-    actor_user_id: str,
-    home_graph_id: str,
     tenant_id: str,
-    key_prefix: str | None = None,
+    actor_id: str,
 ) -> None:
-    """Write one :SecurityAuditLog node + [:FOR_SA]->(:AgentServiceAccount) edge.
+    """Write one :SecurityAuditEvent node in the caller's open transaction.
 
-    Caller provides the session — no try/except here so exceptions propagate and
-    the caller's transaction rolls back atomically.  Raw API key and bcrypt hash
-    MUST NOT be passed as key_prefix.
+    NO try/except — exceptions must propagate so the caller's tx rolls back.
     """
-    audit_log_id = str(uuid.uuid4())
-    await session.run(
+    await tx.run(
         """
-        CREATE (a:SecurityAuditLog {
-            audit_log_id:   $audit_log_id,
-            event_type:     $event_type,
-            sa_id:          $sa_id,
-            actor_user_id:  $actor_user_id,
-            home_graph_id:  $home_graph_id,
-            tenant_id:      $tenant_id,
-            key_prefix:     $key_prefix,
-            timestamp:      datetime()
+        CREATE (:SecurityAuditEvent {
+            event_id:   $event_id,
+            event_type: $event_type,
+            sa_id:      $sa_id,
+            tenant_id:  $tenant_id,
+            actor_id:   $actor_id,
+            timestamp:  $timestamp
         })
-        WITH a
-        MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
-        CREATE (a)-[:FOR_SA]->(sa)
         """,
         {
-            "audit_log_id": audit_log_id,
+            "event_id": str(uuid.uuid4()),
             "event_type": event_type,
             "sa_id": sa_id,
-            "actor_user_id": actor_user_id,
-            "home_graph_id": home_graph_id,
             "tenant_id": tenant_id,
-            "key_prefix": key_prefix,
+            "actor_id": actor_id,
+            "timestamp": int(time.time()),
         },
     )
