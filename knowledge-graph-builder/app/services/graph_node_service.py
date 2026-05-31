@@ -24,19 +24,19 @@ graph as the ReBAC permission anchor. All user-facing queries filter by
 
 from typing import Any
 
-from neo4j import Driver
+from neo4j import AsyncDriver
 from neo4j.exceptions import Neo4jError
 
 
 class GraphNodeService:
     """Service for managing Graph nodes in Neo4j"""
 
-    def __init__(self, driver: Driver):
+    def __init__(self, driver: AsyncDriver):
         """
-        Initialize GraphNodeService with Neo4j driver
+        Initialize GraphNodeService with Neo4j async driver
 
         Args:
-            driver: Neo4j driver instance
+            driver: Neo4j async driver instance
         """
         self.driver = driver
 
@@ -72,7 +72,7 @@ class GraphNodeService:
         "FOR (e:__Entity__) ON (e.name, e.type)",
     ]
 
-    def create_graph(
+    async def create_graph(
         self,
         graph_id: str,
         name: str,
@@ -111,8 +111,8 @@ class GraphNodeService:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
 
-            with self.driver.session() as session:
-                result = session.run(
+            async with self.driver.session() as session:
+                result = await session.run(
                     query,
                     {
                         "graph_id": graph_id,
@@ -123,7 +123,7 @@ class GraphNodeService:
                     },
                 )
 
-                record = result.single()
+                record = await result.single()
                 if not record:
                     raise ValueError("Failed to create Graph node")
 
@@ -131,7 +131,7 @@ class GraphNodeService:
 
                 # TASK-202: wire ownership edges when an org owns the graph.
                 if org_id:
-                    session.run(
+                    await session.run(
                         """
                         MATCH (o:Organization {org_id: $org_id})
                         MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
@@ -139,7 +139,7 @@ class GraphNodeService:
                         """,
                         {"org_id": org_id, "graph_id": graph_id},
                     )
-                    session.run(
+                    await session.run(
                         """
                         MERGE (u:User:__Platform__ {
                             user_id: $user_id, graph_id: "__system__"
@@ -152,7 +152,7 @@ class GraphNodeService:
                     )
 
             # Ensure temporal indexes exist (idempotent — IF NOT EXISTS)
-            self._ensure_temporal_indexes()
+            await self._ensure_temporal_indexes()
 
             return {
                 "graph_id": graph_data["graph_id"],
@@ -174,17 +174,17 @@ class GraphNodeService:
         except Exception as e:
             raise Exception(f"Unexpected error creating graph: {str(e)}") from None
 
-    def _ensure_temporal_indexes(self) -> None:
+    async def _ensure_temporal_indexes(self) -> None:
         """Create temporal indexes if they don't exist. Idempotent."""
-        with self.driver.session() as session:
+        async with self.driver.session() as session:
             for stmt in self._TEMPORAL_INDEX_STATEMENTS:
                 try:
-                    session.run(stmt)
+                    await session.run(stmt)
                 except Exception:
                     # Index creation errors are non-fatal; the graph node was already created
                     pass
 
-    def get_graph(self, graph_id: str) -> dict[str, Any] | None:
+    async def get_graph(self, graph_id: str) -> dict[str, Any] | None:
         """
         Retrieve a Graph node by graph_id.
 
@@ -216,9 +216,9 @@ class GraphNodeService:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
 
-            with self.driver.session() as session:
-                result = session.run(query, {"graph_id": graph_id})
-                record = result.single()
+            async with self.driver.session() as session:
+                result = await session.run(query, {"graph_id": graph_id})
+                record = await result.single()
 
                 if record:
                     data = dict(record["graph"])
@@ -231,7 +231,7 @@ class GraphNodeService:
         except Neo4jError as e:
             raise Exception(f"Failed to retrieve Graph node {graph_id}: {e}") from None
 
-    def list_user_graphs(self, user_id: str) -> list[dict[str, Any]]:
+    async def list_user_graphs(self, user_id: str) -> list[dict[str, Any]]:
         """
         List all Graph nodes for a specific user.
 
@@ -267,11 +267,11 @@ class GraphNodeService:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
 
-            with self.driver.session() as session:
-                result = session.run(query, {"user_id": user_id})
+            async with self.driver.session() as session:
+                result = await session.run(query, {"user_id": user_id})
 
                 graphs: list[dict[str, Any]] = []
-                for record in result:
+                async for record in result:
                     data = dict(record["graph"])
                     data.setdefault("federatable", False)
                     data.setdefault("federation_group", None)
@@ -283,7 +283,7 @@ class GraphNodeService:
         except Neo4jError as e:
             raise Exception(f"Failed to list user graphs: {e}") from None
 
-    def update_graph(
+    async def update_graph(
         self,
         graph_id: str,
         user_id: str,
@@ -370,9 +370,9 @@ class GraphNodeService:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
 
-            with self.driver.session() as session:
-                result = session.run(query, params)
-                record = result.single()
+            async with self.driver.session() as session:
+                result = await session.run(query, params)
+                record = await result.single()
 
                 if record:
                     data = dict(record["graph"])
@@ -385,7 +385,7 @@ class GraphNodeService:
         except Neo4jError as e:
             raise Exception(f"Failed to update graph: {e}") from None
 
-    def list_federatable_graphs(
+    async def list_federatable_graphs(
         self, user_id: str, graph_ids: list[str] | None = None
     ) -> list[dict[str, Any]]:
         """Return graphs owned by user_id that have federatable=true.
@@ -424,14 +424,14 @@ class GraphNodeService:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
 
-            with self.driver.session() as session:
-                result = session.run(query, params)
-                return [dict(record["graph"]) for record in result]
+            async with self.driver.session() as session:
+                result = await session.run(query, params)
+                return [dict(record["graph"]) async for record in result]
 
         except Neo4jError as e:
             raise Exception(f"Failed to list federatable graphs: {e}") from None
 
-    def delete_graph(self, graph_id: str, user_id: str) -> bool:
+    async def delete_graph(self, graph_id: str, user_id: str) -> bool:
         """
         Delete a Graph node and all its relationships.
 
@@ -452,10 +452,12 @@ class GraphNodeService:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
 
-            with self.driver.session() as session:
-                result = session.run(query, {"graph_id": graph_id, "user_id": user_id})
+            async with self.driver.session() as session:
+                result = await session.run(
+                    query, {"graph_id": graph_id, "user_id": user_id}
+                )
 
-                record = result.single()
+                record = await result.single()
                 if record:
                     return record["deleted_count"] > 0
                 return False
@@ -463,7 +465,7 @@ class GraphNodeService:
         except Neo4jError as e:
             raise Exception(f"Failed to delete graph: {e}") from None
 
-    def soft_delete_graph(self, graph_id: str) -> bool:
+    async def soft_delete_graph(self, graph_id: str) -> bool:
         """
         Soft-delete a Graph node by setting status='deactivated' and
         recording a deactivated_at timestamp.
@@ -495,9 +497,9 @@ class GraphNodeService:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
 
-            with self.driver.session() as session:
-                result = session.run(query, {"graph_id": graph_id})
-                record = result.single()
+            async with self.driver.session() as session:
+                result = await session.run(query, {"graph_id": graph_id})
+                record = await result.single()
                 if record:
                     return record["deactivated_count"] > 0
                 return False
@@ -505,7 +507,7 @@ class GraphNodeService:
         except Neo4jError as e:
             raise Exception(f"Failed to soft-delete graph: {e}") from None
 
-    def migrate_relationship_properties(self, graph_id: str) -> dict[str, Any]:
+    async def migrate_relationship_properties(self, graph_id: str) -> dict[str, Any]:
         """
         Run 3-phase migration to move contextual properties from entity nodes
         to their corresponding relationships, per the ORA-4 spec.
@@ -568,24 +570,32 @@ class GraphNodeService:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
 
-            with self.driver.session() as session:
+            async with self.driver.session() as session:
                 # Phase 1a: transfer job_title to WORKS_FOR.position
-                r1a = session.run(phase1_job_title, {"graph_id": graph_id}).single()
+                r1a = await (
+                    await session.run(phase1_job_title, {"graph_id": graph_id})
+                ).single()
                 transferred_job_title = r1a["transferred"] if r1a else 0
 
                 # Phase 1b: transfer proficiency to HAS_SKILL.proficiency
-                r1b = session.run(phase1_proficiency, {"graph_id": graph_id}).single()
+                r1b = await (
+                    await session.run(phase1_proficiency, {"graph_id": graph_id})
+                ).single()
                 transferred_proficiency = r1b["transferred"] if r1b else 0
 
                 # Phase 2: detect orphans
-                orphan_records = session.run(phase2_orphans, {"graph_id": graph_id})
+                orphan_result = await session.run(
+                    phase2_orphans, {"graph_id": graph_id}
+                )
                 orphans = [
                     {"entity_id": r["entity_id"], "name": r["name"], "type": r["type"]}
-                    for r in orphan_records
+                    async for r in orphan_result
                 ]
 
                 # Phase 3: cleanup all banned props
-                r3 = session.run(phase3_cleanup, {"graph_id": graph_id}).single()
+                r3 = await (
+                    await session.run(phase3_cleanup, {"graph_id": graph_id})
+                ).single()
                 cleaned = r3["cleaned"] if r3 else 0
 
             return {
@@ -601,7 +611,7 @@ class GraphNodeService:
         except Neo4jError as e:
             raise Exception(f"Migration failed for graph {graph_id}: {e}") from None
 
-    def graph_exists(self, graph_id: str, user_id: str) -> bool:
+    async def graph_exists(self, graph_id: str, user_id: str) -> bool:
         """
         Check if a Graph node exists for the given user.
 
@@ -621,10 +631,12 @@ class GraphNodeService:
             if not self.driver:
                 raise ValueError("Neo4j driver not initialized")
 
-            with self.driver.session() as session:
-                result = session.run(query, {"graph_id": graph_id, "user_id": user_id})
+            async with self.driver.session() as session:
+                result = await session.run(
+                    query, {"graph_id": graph_id, "user_id": user_id}
+                )
 
-                record = result.single()
+                record = await result.single()
                 if record:
                     return record["exists"]
                 return False
