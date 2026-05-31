@@ -133,13 +133,18 @@ def _mock_neo4j_graph(graph_id: str = TEST_GRAPH_ID, user_id: str = TEST_USER_ID
 
 
 def _mock_job_queued():
-    """Return a mock background_job_service where queueing always succeeds."""
+    """Return a mock background_job_service where queueing always succeeds.
+
+    `start_ingestion_job` / `start_image_ingestion_job` are async — the
+    multimodal endpoints `await` them, so the mocks must be `AsyncMock`.
+    """
     svc = MagicMock()
-    svc.start_ingestion_job.return_value = {"status": "queued", "job_id": str(uuid4())}
-    svc.start_image_ingestion_job.return_value = {
-        "status": "queued",
-        "job_id": str(uuid4()),
-    }
+    svc.start_ingestion_job = AsyncMock(
+        return_value={"status": "queued", "job_id": str(uuid4())}
+    )
+    svc.start_image_ingestion_job = AsyncMock(
+        return_value={"status": "queued", "job_id": str(uuid4())}
+    )
     return svc
 
 

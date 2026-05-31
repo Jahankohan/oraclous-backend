@@ -95,6 +95,8 @@ services:
         condition: service_healthy
     volumes:
       - ./knowledge-graph-builder/app:/app/app
+      - ./knowledge-graph-builder/tests:/app/tests
+      - ./knowledge-graph-builder/alembic:/app/alembic
       - ./knowledge-graph-builder/logs:/app/logs
     networks:
       - app-network
@@ -128,6 +130,8 @@ services:
         condition: service_started
     volumes:
       - ./knowledge-graph-builder/app:/app/app
+      - ./knowledge-graph-builder/tests:/app/tests
+      - ./knowledge-graph-builder/alembic:/app/alembic
       - ./knowledge-graph-builder/logs:/app/logs
     networks:
       - app-network
