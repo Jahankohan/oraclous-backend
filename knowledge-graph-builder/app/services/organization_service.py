@@ -17,17 +17,19 @@ import uuid
 
 from neo4j import AsyncDriver
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.organization import Organization
+from app.utils.slug import generate_unique_slug, is_reserved
 
 logger = get_logger(__name__)
 
 # Explicit allowlist for update_organization — the single source of truth for
 # which SQL columns may be patched. Any key outside this set is rejected.
 _ALLOWED_ORG_UPDATE_FIELDS: frozenset[str] = frozenset(
-    {"name", "description", "settings"}
+    {"name", "description", "settings", "logo_url"}
 )
 
 
@@ -39,27 +41,65 @@ async def create_organization(
     description: str,
     settings: dict,
     owner_user_id: str,
+    slug: str | None = None,
+    logo_url: str | None = None,
 ) -> Organization:
     """Create an organization in PostgreSQL, then mirror it into Neo4j.
 
+    The subdomain ``slug`` is auto-generated from ``name`` when not supplied.
+    An explicitly supplied slug is rejected (``ValueError``) when reserved or
+    already taken. The DB unique constraint is the authoritative guarantee — a
+    concurrent-create collision (``IntegrityError``) is retried with a fresh
+    auto-generated slug.
+
     Best-effort two-store consistency: if the Neo4j write fails, the SQL row
-    inserted in step 1 is deleted before the error is re-raised.
+    inserted in step 2 is deleted before the error is re-raised.
     """
-    # 1. Insert the SQL row (source of truth) and commit.
-    organization = Organization(
-        name=name,
-        description=description,
-        owner_user_id=owner_user_id,
-        settings=settings or {},
-        status="active",
-    )
-    db.add(organization)
-    await db.commit()
+    # 1. Resolve the slug. The DB unique index is authoritative; this set is
+    #    just a best-effort first pick.
+    taken: set[str] = set((await db.execute(select(Organization.slug))).scalars().all())
+    if slug:
+        slug = slug.lower()
+        if is_reserved(slug):
+            raise ValueError(f"Slug '{slug}' is reserved")
+        if slug in taken:
+            raise ValueError(f"Slug '{slug}' is already taken")
+        resolved_slug = slug
+    else:
+        resolved_slug = generate_unique_slug(name, taken.__contains__)
+
+    # 2. Insert the SQL row (source of truth), retrying on a concurrent slug
+    #    collision (another create committing the same slug between our SELECT
+    #    and INSERT).
+    organization: Organization | None = None
+    for _attempt in range(5):
+        organization = Organization(
+            name=name,
+            slug=resolved_slug,
+            description=description,
+            logo_url=logo_url,
+            owner_user_id=owner_user_id,
+            settings=settings or {},
+            status="active",
+        )
+        db.add(organization)
+        try:
+            await db.commit()
+            break
+        except IntegrityError:
+            await db.rollback()
+            if slug is not None:
+                # An explicitly requested slug lost the race — clean error.
+                raise ValueError(f"Slug '{slug}' is already taken") from None
+            taken.add(resolved_slug)
+            resolved_slug = generate_unique_slug(name, taken.__contains__)
+    else:
+        raise ValueError("Could not allocate a unique organization slug")
     await db.refresh(organization)
 
     org_id = str(organization.id)
 
-    # 2. Mirror into Neo4j: :Organization node + owner :User + BELONGS_TO edge.
+    # 3. Mirror into Neo4j: :Organization node + owner :User + BELONGS_TO edge.
     try:
         async with driver.session() as session:
             await session.run(
@@ -109,6 +149,17 @@ async def get_organization(db: AsyncSession, org_id: str) -> Organization | None
     except (ValueError, TypeError):
         return None
     result = await db.execute(select(Organization).where(Organization.id == org_uuid))
+    return result.scalar_one_or_none()
+
+
+async def get_organization_by_slug(db: AsyncSession, slug: str) -> Organization | None:
+    """Fetch an organization by its subdomain slug (case-insensitive).
+
+    Returns None if no organization has that slug.
+    """
+    result = await db.execute(
+        select(Organization).where(Organization.slug == slug.lower())
+    )
     return result.scalar_one_or_none()
 
 
@@ -329,6 +380,7 @@ async def update_organization(
     name: str | None = None,
     description: str | None = None,
     settings: dict | None = None,
+    logo_url: str | None = None,
 ) -> Organization | None:
     """Patch an organization's SQL row and mirror name/description onto Neo4j.
 
@@ -345,6 +397,8 @@ async def update_organization(
         updates["description"] = description
     if settings is not None:
         updates["settings"] = settings
+    if logo_url is not None:
+        updates["logo_url"] = logo_url
 
     # Structural guard against accidental column writes.
     unknown = set(updates) - _ALLOWED_ORG_UPDATE_FIELDS
