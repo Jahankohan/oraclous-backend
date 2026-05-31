@@ -173,7 +173,7 @@ async def ingest_document(
     await db.refresh(job)
 
     # ── Queue Celery task (reuses existing text pipeline after extraction) ────
-    job_result = background_job_service.start_ingestion_job(str(job.id), user_id)
+    job_result = await background_job_service.start_ingestion_job(str(job.id), user_id)
     if job_result["status"] == "failed":
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -281,7 +281,9 @@ async def ingest_image(
     await db.refresh(job)
 
     # Image jobs use a dedicated Celery task (vision → text → pipeline)
-    job_result = background_job_service.start_image_ingestion_job(str(job.id), user_id)
+    job_result = await background_job_service.start_image_ingestion_job(
+        str(job.id), user_id
+    )
     if job_result["status"] == "failed":
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

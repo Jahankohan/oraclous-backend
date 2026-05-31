@@ -1,0 +1,38 @@
+{
+  "recipe_format_version": "0.2",
+  "id": "rcp_eurail-evidence-freetext-v1",
+  "version": 1,
+  "status": "draft",
+  "concern": "Map which rail operators, systems, and standards the evidence discusses, and which finding mentions each.",
+  "applies_to": {
+    "source_type": "json",
+    "shape_signature": "findings[]{finding_id,source_id,raw}"
+  },
+  "defaults": { "provenance": "EXTRACTED", "materialize_fine_grain": true },
+  "authoring": {
+    "authored_by": "data-specialist",
+    "created": "2026-05-19",
+    "sample_basis": "first 5 records of findings",
+    "design_notes_ref": "TASK-220"
+  },
+  "mappings": [
+    {
+      "id": "finding",
+      "match": { "unit_kind": "record" },
+      "project_to": "node",
+      "label": "Finding",
+      "identity": { "scheme": "deterministic", "from": ["field:finding_id"] },
+      "materialize": true,
+      "properties": [ { "name": "sourceId", "value_from": "field:source_id" } ]
+    },
+    {
+      "id": "mentions",
+      "match": { "unit_kind": "field", "name": "raw", "role": "free_text" },
+      "project_to": "text_extraction",
+      "primitive": "llm_ner",
+      "params": { "entity_types": ["Operator", "System", "Standard"] },
+      "link_to": { "node_rule": "finding", "edge_type": "MENTIONS" },
+      "provenance": "INFERRED"
+    }
+  ]
+}

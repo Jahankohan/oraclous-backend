@@ -21,6 +21,10 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
+    # allow_origin_regex covers production — oraclous.com and every company
+    # tenant subdomain (company-name.oraclous.com), which a static list cannot
+    # enumerate. allow_origins still covers explicit dev origins (localhost).
+    allow_origin_regex=r"https://([a-z0-9-]+\.)?oraclous\.com",
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],

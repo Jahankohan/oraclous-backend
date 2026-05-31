@@ -25,7 +25,14 @@ class Organization(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
+    # URL-safe subdomain label — ``<slug>.oraclous.com``. Unique (the DB
+    # constraint is the authoritative guarantee); generated from ``name`` at
+    # creation time, see ``app/utils/slug.py``.
+    slug = Column(String(63), nullable=False, unique=True, index=True)
     description = Column(Text, nullable=True)
+    # Organization logo (a URL). Rendered on org-scoped login / invitation
+    # screens. Null until a logo is set.
+    logo_url = Column(String(512), nullable=True)
     owner_user_id = Column(UUID(as_uuid=True), nullable=False)
     settings = Column(JSON, nullable=False, default=dict)
     status = Column(String(50), default="active")

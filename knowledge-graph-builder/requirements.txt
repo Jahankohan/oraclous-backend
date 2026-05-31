@@ -44,8 +44,10 @@ redis==5.2.1
 ragas==0.2.15
 datasets==3.6.0
 
-# MCP Server
-mcp[cli]>=1.0.0
+# MCP Server — projects the REST surface onto a single MCP server (ADR-024).
+# Plain `mcp`, not `mcp[cli]`: the server uses `mcp.server.fastmcp`; the `[cli]`
+# extra (the `mcp` dev CLI) is unused. Pinned to the installed 1.27.x line.
+mcp>=1.27.0
 
 # Community Detection
 leidenalg>=0.10
