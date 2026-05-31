@@ -73,6 +73,7 @@ from app.schemas.graph_schemas import (
 )
 from app.schemas.memory import (
     ConsolidateResponse,
+    MemoryContext,
     MemoryCreate,
     MemoryCreateResponse,
     MemorySearchResponse,
@@ -393,6 +394,41 @@ REGISTRY: tuple[CapabilitySpec, ...] = (
         description="Consolidate a graph's memory store (merge and prune).",
         path_params=("graph_id",),
         result_model=ConsolidateResponse,
+    ),
+    CapabilitySpec(
+        name="memory.context",
+        io_class=IOClass.PLAIN,
+        method="GET",
+        path="/api/v1/graphs/{graph_id}/memories/context",
+        description=(
+            "Assemble an agent context window from a graph's memory store. "
+            "Returns a context_block string ready to inject into an LLM prompt, "
+            "with memory provenance and a token estimate. Call this at the start "
+            "of each conversation turn when prior knowledge may be relevant."
+        ),
+        path_params=("graph_id",),
+        query_params=(
+            "query",
+            "agent_id",
+            "session_id",
+            "scope",
+            "max_tokens",
+            "include_types",
+        ),
+        result_model=MemoryContext,
+    ),
+    CapabilitySpec(
+        name="memory.forget",
+        io_class=IOClass.PLAIN,
+        method="DELETE",
+        path="/api/v1/graphs/{graph_id}/memories/{memory_id}",
+        description=(
+            "Forget (delete) a stored memory. Soft delete by default "
+            "(sets valid_to=now, preserving history); pass hard=true to "
+            "permanently remove the node from the graph."
+        ),
+        path_params=("graph_id", "memory_id"),
+        query_params=("hard",),
     ),
     # === connector.* — data-source connections ==============================
     CapabilitySpec(
