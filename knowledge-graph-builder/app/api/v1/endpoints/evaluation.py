@@ -12,10 +12,11 @@ Scores a question/answer pair against a knowledge graph using RAGAS metrics:
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
+from neo4j import Driver
 
 from app.api.dependencies import security
+from app.core.dependencies import get_neo4j_driver
 from app.core.logging import get_logger
-from app.core.neo4j_client import neo4j_client
 from app.schemas.evaluation_schemas import EvaluationRequest, EvaluationResponse
 from app.services.auth_service import auth_service
 from app.services.evaluation_service import EvaluationService
@@ -40,6 +41,7 @@ async def evaluate_graph_response(
     graph_id: str,
     request: EvaluationRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    driver: Driver = Depends(get_neo4j_driver),
 ) -> EvaluationResponse:
     """
     Score a question/answer pair against the specified knowledge graph.
@@ -61,7 +63,7 @@ async def evaluate_graph_response(
     user = await auth_service.verify_token(credentials.credentials)
     user_id = str(user["id"])
 
-    graph_service = GraphNodeService(neo4j_client.sync_driver)
+    graph_service = GraphNodeService(driver)
     graph = graph_service.get_graph(graph_id)
     if not graph or graph["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
