@@ -447,11 +447,10 @@ async def get_sa_audit_log(
     # Rule 3: caller must have admin on the SA's home graph
     await verify_graph_access(sa["home_graph_id"], "admin", user_id)
 
-    # Parse optional before cursor
-    before_dt: datetime | None = None
+    # Parse optional before cursor (validate format; raw string passed to Cypher datetime())
     if before is not None:
         try:
-            before_dt = datetime.fromisoformat(before)
+            datetime.fromisoformat(before)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
