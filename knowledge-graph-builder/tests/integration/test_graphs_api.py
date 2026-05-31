@@ -21,6 +21,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.api.dependencies import get_database
+from app.core.dependencies import get_neo4j_async_driver
+from app.main import app as _app
+from app.services.graph_node_service import GraphNodeService as _GraphNodeServiceCls
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -67,6 +72,17 @@ def _patch_auth(user: dict):
 
 def _auth_headers() -> dict:
     return {"Authorization": "Bearer fake-token"}
+
+
+def _raise_503():
+    """DI override that simulates Neo4j unavailable."""
+    from fastapi import HTTPException
+    from fastapi import status as fastapi_status
+
+    raise HTTPException(
+        status_code=fastapi_status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Neo4j unavailable",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +178,25 @@ class TestGraphsCRUD:
         """POST /graphs → 201 with graph data persisted to Neo4j."""
         graph_record = _neo4j_graph(GRAPH_A_ID, USER_A_ID, name="My New Graph")
 
+        # Override the async driver DI so get_neo4j_async_driver never tries
+        # to connect to a live Neo4j instance.
+        _app.dependency_overrides[get_neo4j_async_driver] = lambda: AsyncMock()
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.organization_service"
+                ) as mock_org_svc,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_neo4j.async_driver = MagicMock()
+                mock_org_svc.get_or_create_default_org = AsyncMock(
+                    return_value="test-org-id"
+                )
                 service_instance = MockService.return_value
                 service_instance.create_graph.return_value = graph_record
 
@@ -179,6 +207,7 @@ class TestGraphsCRUD:
                 )
         finally:
             auth_patch.stop()
+            _app.dependency_overrides.pop(get_neo4j_async_driver, None)
 
         assert response.status_code == 201
         data = response.json()
@@ -190,6 +219,9 @@ class TestGraphsCRUD:
     @pytest.mark.api
     async def test_create_graph_missing_name_returns_422(self, async_client):
         """POST /graphs without required 'name' field → 422."""
+        # FastAPI resolves DI before Pydantic validates the body, so the async
+        # driver must be overridden even for validation-only tests.
+        _app.dependency_overrides[get_neo4j_async_driver] = lambda: AsyncMock()
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             response = await async_client.post(
@@ -199,6 +231,7 @@ class TestGraphsCRUD:
             )
         finally:
             auth_patch.stop()
+            _app.dependency_overrides.pop(get_neo4j_async_driver, None)
 
         assert response.status_code == 422
 
@@ -215,19 +248,19 @@ class TestGraphsCRUD:
     @pytest.mark.integration
     @pytest.mark.api
     async def test_create_graph_neo4j_unavailable_returns_503(self, async_client):
-        """POST /graphs when Neo4j driver is None → 503."""
+        """POST /graphs when Neo4j driver is unavailable → 503."""
+        # DI override raises 503 before the endpoint body runs.
+        _app.dependency_overrides[get_neo4j_async_driver] = _raise_503
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j:
-                mock_neo4j.sync_driver = None
-
-                response = await async_client.post(
-                    "/api/v1/graphs",
-                    json={"name": "Graph Neo4j Down"},
-                    headers=_auth_headers(),
-                )
+            response = await async_client.post(
+                "/api/v1/graphs",
+                json={"name": "Graph Neo4j Down"},
+                headers=_auth_headers(),
+            )
         finally:
             auth_patch.stop()
+            _app.dependency_overrides.pop(get_neo4j_async_driver, None)
 
         assert response.status_code == 503
 
@@ -246,9 +279,12 @@ class TestGraphsCRUD:
         try:
             with (
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.list_user_graphs.return_value = user_graphs
 
                 response = await async_client.get(
@@ -272,9 +308,12 @@ class TestGraphsCRUD:
         try:
             with (
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.list_user_graphs.return_value = []
 
                 response = await async_client.get(
@@ -297,10 +336,18 @@ class TestGraphsCRUD:
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_vga.return_value = GRAPH_A_ID
+                mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
 
                 response = await async_client.get(
@@ -318,17 +365,26 @@ class TestGraphsCRUD:
     @pytest.mark.api
     async def test_get_graph_404_for_unknown_id(self, async_client):
         """GET /graphs/{unknown_id} → 404."""
+        unknown_id = str(uuid.uuid4())
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_vga.return_value = unknown_id
+                mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = None  # not found
 
                 response = await async_client.get(
-                    f"/api/v1/graphs/{uuid.uuid4()}", headers=_auth_headers()
+                    f"/api/v1/graphs/{unknown_id}", headers=_auth_headers()
                 )
         finally:
             auth_patch.stop()
@@ -339,17 +395,19 @@ class TestGraphsCRUD:
     @pytest.mark.api
     async def test_get_graph_403_when_not_owner(self, async_client):
         """GET /graphs/{id} belonging to User B when authenticated as User A → 403."""
-        graph_record = _neo4j_graph(GRAPH_B_ID, USER_B_ID, name="Graph B")
+        from fastapi import HTTPException
+        from fastapi import status as fastapi_status
 
-        auth_patch = _patch_auth(FAKE_USER_A)  # User A is calling
+        auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with (
-                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
-            ):
-                mock_neo4j.sync_driver = MagicMock()
-                MockService.return_value.get_graph.return_value = (
-                    graph_record  # belongs to User B
+            with patch(
+                "app.api.v1.endpoints.graphs.verify_graph_access",
+                new_callable=AsyncMock,
+            ) as mock_vga:
+                # ReBAC denies User A access to Graph B
+                mock_vga.side_effect = HTTPException(
+                    status_code=fastapi_status.HTTP_403_FORBIDDEN,
+                    detail="Access denied",
                 )
 
                 response = await async_client.get(
@@ -372,10 +430,18 @@ class TestGraphsCRUD:
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_vga.return_value = GRAPH_A_ID
+                mock_neo4j.async_driver = MagicMock()
                 svc = MockService.return_value
                 svc.get_graph.return_value = existing
                 svc.update_graph.return_value = updated
@@ -396,16 +462,20 @@ class TestGraphsCRUD:
     @pytest.mark.api
     async def test_update_graph_403_when_not_owner(self, async_client):
         """PUT /graphs/{id} on another user's graph → 403."""
-        graph_record = _neo4j_graph(GRAPH_B_ID, USER_B_ID, name="Graph B")
+        from fastapi import HTTPException
+        from fastapi import status as fastapi_status
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with (
-                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
-            ):
-                mock_neo4j.sync_driver = MagicMock()
-                MockService.return_value.get_graph.return_value = graph_record
+            with patch(
+                "app.api.v1.endpoints.graphs.verify_graph_access",
+                new_callable=AsyncMock,
+            ) as mock_vga:
+                # ReBAC denies User A write access to Graph B
+                mock_vga.side_effect = HTTPException(
+                    status_code=fastapi_status.HTTP_403_FORBIDDEN,
+                    detail="Access denied",
+                )
 
                 response = await async_client.put(
                     f"/api/v1/graphs/{GRAPH_B_ID}",
@@ -421,17 +491,26 @@ class TestGraphsCRUD:
     @pytest.mark.api
     async def test_update_graph_404_when_not_found(self, async_client):
         """PUT /graphs/{unknown_id} → 404."""
+        unknown_id = str(uuid.uuid4())
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_vga.return_value = unknown_id
+                mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = None
 
                 response = await async_client.put(
-                    f"/api/v1/graphs/{uuid.uuid4()}",
+                    f"/api/v1/graphs/{unknown_id}",
                     json={"name": "Ghost Graph"},
                     headers=_auth_headers(),
                 )
@@ -462,10 +541,13 @@ class TestDeleteGraphEndpoint:
                     new_callable=AsyncMock,
                 ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
                 mock_vga.return_value = GRAPH_A_ID
-                mock_neo4j.sync_driver = MagicMock()
+                mock_neo4j.async_driver = MagicMock()
                 svc = MockService.return_value
                 svc.get_graph.return_value = graph_record
                 svc.soft_delete_graph.return_value = True
@@ -500,10 +582,13 @@ class TestDeleteGraphEndpoint:
                     new_callable=AsyncMock,
                 ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
                 mock_vga.return_value = GRAPH_A_ID
-                mock_neo4j.sync_driver = MagicMock()
+                mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = None
 
                 response = await async_client.delete(
@@ -543,7 +628,7 @@ class TestDeleteGraphEndpoint:
     @pytest.mark.integration
     @pytest.mark.api
     async def test_delete_graph_returns_503_when_neo4j_unavailable(self, async_client):
-        """DELETE /graphs/{id} → 503 when Neo4j sync driver is None."""
+        """DELETE /graphs/{id} → 503 when Neo4j async driver is None."""
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
@@ -554,7 +639,8 @@ class TestDeleteGraphEndpoint:
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
             ):
                 mock_vga.return_value = GRAPH_A_ID
-                mock_neo4j.sync_driver = None
+                # ORA-302: endpoints check async_driver (not sync_driver)
+                mock_neo4j.async_driver = None
 
                 response = await async_client.delete(
                     f"/api/v1/graphs/{GRAPH_A_ID}", headers=_auth_headers()
@@ -665,35 +751,46 @@ class TestIngestEndpoint:
         mock_job.source_type = "text"
         mock_job.created_at = datetime.now(UTC)
 
+        # Build mock DB session before the override so it's captured in the closure.
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+
+        def _refresh_job(job):
+            job.id = uuid.UUID(JOB_ID)
+            if getattr(job, "progress", None) is None:
+                job.progress = 0
+            if getattr(job, "created_at", None) is None:
+                job.created_at = datetime.now(UTC)
+
+        mock_session.refresh = AsyncMock(side_effect=_refresh_job)
+
+        async def _mock_db():
+            yield mock_session
+
+        # Override get_database via DI — module-level patch is bypassed by
+        # FastAPI's DI container which holds the original function reference.
+        _app.dependency_overrides[get_database] = _mock_db
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
                 patch("app.api.v1.endpoints.graphs.background_job_service") as mock_bg,
-                patch("app.api.v1.endpoints.graphs.get_database") as mock_db_dep,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_vga.return_value = GRAPH_A_ID
+                mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
-                mock_bg.start_ingestion_job.return_value = {
-                    "status": "started",
-                    "message": "ok",
-                }
-
-                # Mock the database session
-                mock_session = AsyncMock()
-                mock_session.add = MagicMock()
-                mock_session.commit = AsyncMock()
-                mock_session.refresh = AsyncMock(
-                    side_effect=lambda job: (
-                        setattr(job, "id", uuid.UUID(JOB_ID)) or None
-                    )
+                mock_bg.start_ingestion_job = AsyncMock(
+                    return_value={"status": "started", "message": "ok"}
                 )
-
-                async def _db_gen():
-                    yield mock_session
-
-                mock_db_dep.return_value = _db_gen()
 
                 response = await async_client.post(
                     f"/api/v1/graphs/{GRAPH_A_ID}/ingest",
@@ -704,6 +801,7 @@ class TestIngestEndpoint:
                 )
         finally:
             auth_patch.stop()
+            _app.dependency_overrides.pop(get_database, None)
 
         # Should succeed and return a job (200 or 201)
         assert response.status_code in (200, 201)
@@ -715,18 +813,27 @@ class TestIngestEndpoint:
     @pytest.mark.api
     async def test_ingest_404_for_nonexistent_graph(self, async_client):
         """POST /graphs/{unknown_id}/ingest → 404."""
+        unknown_id = str(uuid.uuid4())
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_vga.return_value = unknown_id
+                mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = None
 
                 response = await async_client.post(
-                    f"/api/v1/graphs/{uuid.uuid4()}/ingest",
-                    json={"content": "Some content"},
+                    f"/api/v1/graphs/{unknown_id}/ingest",
+                    json={"content": "Some content here for testing purposes"},
                     headers=_auth_headers(),
                 )
         finally:
@@ -738,20 +845,24 @@ class TestIngestEndpoint:
     @pytest.mark.api
     async def test_ingest_403_for_other_users_graph(self, async_client):
         """POST /graphs/{id}/ingest on another user's graph → 403."""
-        graph_record = _neo4j_graph(GRAPH_B_ID, USER_B_ID)
+        from fastapi import HTTPException
+        from fastapi import status as fastapi_status
 
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
-            with (
-                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
-            ):
-                mock_neo4j.sync_driver = MagicMock()
-                MockService.return_value.get_graph.return_value = graph_record
+            with patch(
+                "app.api.v1.endpoints.graphs.verify_graph_access",
+                new_callable=AsyncMock,
+            ) as mock_vga:
+                # ReBAC denies User A write access to Graph B
+                mock_vga.side_effect = HTTPException(
+                    status_code=fastapi_status.HTTP_403_FORBIDDEN,
+                    detail="Access denied",
+                )
 
                 response = await async_client.post(
                     f"/api/v1/graphs/{GRAPH_B_ID}/ingest",
-                    json={"content": "Some content"},
+                    json={"content": "Some content here for testing purposes"},
                     headers=_auth_headers(),
                 )
         finally:
@@ -791,10 +902,18 @@ class TestGraphResponseFields:
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
+                patch(
+                    "app.api.v1.endpoints.graphs.verify_graph_access",
+                    new_callable=AsyncMock,
+                ) as mock_vga,
                 patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-                patch("app.api.v1.endpoints.graphs.GraphNodeService") as MockService,
+                patch(
+                    "app.api.v1.endpoints.graphs.GraphNodeService",
+                    spec=_GraphNodeServiceCls,
+                ) as MockService,
             ):
-                mock_neo4j.sync_driver = MagicMock()
+                mock_vga.return_value = GRAPH_A_ID
+                mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
 
                 response = await async_client.get(
