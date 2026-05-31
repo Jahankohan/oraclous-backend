@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.api.dependencies import get_database
 from app.core.dependencies import get_neo4j_async_driver
 from app.main import app as _app
 from app.services.graph_node_service import GraphNodeService as _GraphNodeServiceCls
@@ -218,6 +219,9 @@ class TestGraphsCRUD:
     @pytest.mark.api
     async def test_create_graph_missing_name_returns_422(self, async_client):
         """POST /graphs without required 'name' field → 422."""
+        # FastAPI resolves DI before Pydantic validates the body, so the async
+        # driver must be overridden even for validation-only tests.
+        _app.dependency_overrides[get_neo4j_async_driver] = lambda: AsyncMock()
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             response = await async_client.post(
@@ -227,6 +231,7 @@ class TestGraphsCRUD:
             )
         finally:
             auth_patch.stop()
+            _app.dependency_overrides.pop(get_neo4j_async_driver, None)
 
         assert response.status_code == 422
 
@@ -746,6 +751,26 @@ class TestIngestEndpoint:
         mock_job.source_type = "text"
         mock_job.created_at = datetime.now(UTC)
 
+        # Build mock DB session before the override so it's captured in the closure.
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+
+        def _refresh_job(job):
+            job.id = uuid.UUID(JOB_ID)
+            if getattr(job, "progress", None) is None:
+                job.progress = 0
+            if getattr(job, "created_at", None) is None:
+                job.created_at = datetime.now(UTC)
+
+        mock_session.refresh = AsyncMock(side_effect=_refresh_job)
+
+        async def _mock_db():
+            yield mock_session
+
+        # Override get_database via DI — module-level patch is bypassed by
+        # FastAPI's DI container which holds the original function reference.
+        _app.dependency_overrides[get_database] = _mock_db
         auth_patch = _patch_auth(FAKE_USER_A)
         try:
             with (
@@ -759,30 +784,13 @@ class TestIngestEndpoint:
                     spec=_GraphNodeServiceCls,
                 ) as MockService,
                 patch("app.api.v1.endpoints.graphs.background_job_service") as mock_bg,
-                patch("app.api.v1.endpoints.graphs.get_database") as mock_db_dep,
             ):
                 mock_vga.return_value = GRAPH_A_ID
                 mock_neo4j.async_driver = MagicMock()
                 MockService.return_value.get_graph.return_value = graph_record
-                mock_bg.start_ingestion_job.return_value = {
-                    "status": "started",
-                    "message": "ok",
-                }
-
-                # Mock the database session
-                mock_session = AsyncMock()
-                mock_session.add = MagicMock()
-                mock_session.commit = AsyncMock()
-                mock_session.refresh = AsyncMock(
-                    side_effect=lambda job: (
-                        setattr(job, "id", uuid.UUID(JOB_ID)) or None
-                    )
+                mock_bg.start_ingestion_job = AsyncMock(
+                    return_value={"status": "started", "message": "ok"}
                 )
-
-                async def _db_gen():
-                    yield mock_session
-
-                mock_db_dep.return_value = _db_gen()
 
                 response = await async_client.post(
                     f"/api/v1/graphs/{GRAPH_A_ID}/ingest",
@@ -793,6 +801,7 @@ class TestIngestEndpoint:
                 )
         finally:
             auth_patch.stop()
+            _app.dependency_overrides.pop(get_database, None)
 
         # Should succeed and return a job (200 or 201)
         assert response.status_code in (200, 201)
