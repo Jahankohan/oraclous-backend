@@ -20,6 +20,7 @@ from app.api.v1.endpoints import (
     organizations,
     permissions,
     service_accounts,
+    tools,
     webhooks,
 )
 from app.api.v1.endpoints.federation import graph_federation_router
@@ -51,3 +52,4 @@ api_router.include_router(organizations.router, tags=["organizations"])
 api_router.include_router(webhooks.router, tags=["webhooks"])
 api_router.include_router(service_accounts.router, tags=["service-accounts"])
 api_router.include_router(linked_to.router, tags=["linked-to"])
+api_router.include_router(tools.router, tags=["tools"])
