@@ -1,4 +1,4 @@
-"""Audit event logging for public agent calls (STORY-022)."""
+"""Audit event logging for public agent calls (STORY-022) and SA security events (ORA-316)."""
 
 import hashlib
 import time
@@ -53,3 +53,47 @@ async def log_public_call(
     except Exception as exc:
         # Audit failure must not propagate to the caller
         logger.error("Failed to write AuditEvent: %s", exc)
+
+
+async def log_sa_security_event(
+    session,
+    event_type: str,
+    sa_id: str,
+    actor_user_id: str,
+    home_graph_id: str,
+    tenant_id: str,
+    key_prefix: str | None = None,
+) -> None:
+    """Write one :SecurityAuditLog node + [:FOR_SA]->(:AgentServiceAccount) edge.
+
+    Caller provides the session — no try/except here so exceptions propagate and
+    the caller's transaction rolls back atomically.  Raw API key and bcrypt hash
+    MUST NOT be passed as key_prefix.
+    """
+    audit_log_id = str(uuid.uuid4())
+    await session.run(
+        """
+        CREATE (a:SecurityAuditLog {
+            audit_log_id:   $audit_log_id,
+            event_type:     $event_type,
+            sa_id:          $sa_id,
+            actor_user_id:  $actor_user_id,
+            home_graph_id:  $home_graph_id,
+            tenant_id:      $tenant_id,
+            key_prefix:     $key_prefix,
+            timestamp:      datetime()
+        })
+        WITH a
+        MATCH (sa:AgentServiceAccount {service_account_id: $sa_id, tenant_id: $tenant_id})
+        CREATE (a)-[:FOR_SA]->(sa)
+        """,
+        {
+            "audit_log_id": audit_log_id,
+            "event_type": event_type,
+            "sa_id": sa_id,
+            "actor_user_id": actor_user_id,
+            "home_graph_id": home_graph_id,
+            "tenant_id": tenant_id,
+            "key_prefix": key_prefix,
+        },
+    )

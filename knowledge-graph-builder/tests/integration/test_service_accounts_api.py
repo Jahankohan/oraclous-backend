@@ -798,3 +798,214 @@ class TestRevokedSAToken:
             deps_p.stop()
 
         assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Scenario 7: SA audit log — lifecycle entries, ordering, cursor (ORA-316)
+# ---------------------------------------------------------------------------
+
+_T1 = "2026-01-01T10:00:00+00:00"
+_T2 = "2026-01-01T11:00:00+00:00"
+_T3 = "2026-01-01T12:00:00+00:00"
+
+_AUDIT_CREATED = {
+    "audit_log_id": str(uuid.uuid4()),
+    "event_type": "service_account.created",
+    "sa_id": SA_ID,
+    "actor_user_id": USER_ID,
+    "home_graph_id": HOME_GRAPH_ID,
+    "tenant_id": TENANT_ID,
+    "key_prefix": "osk_abc1",
+    "timestamp": _T1,
+}
+_AUDIT_ROTATED = {
+    "audit_log_id": str(uuid.uuid4()),
+    "event_type": "service_account.key_rotated",
+    "sa_id": SA_ID,
+    "actor_user_id": USER_ID,
+    "home_graph_id": HOME_GRAPH_ID,
+    "tenant_id": TENANT_ID,
+    "key_prefix": "osk_new1",
+    "timestamp": _T2,
+}
+_AUDIT_REVOKED = {
+    "audit_log_id": str(uuid.uuid4()),
+    "event_type": "service_account.revoked",
+    "sa_id": SA_ID,
+    "actor_user_id": USER_ID,
+    "home_graph_id": HOME_GRAPH_ID,
+    "tenant_id": TENANT_ID,
+    "key_prefix": None,
+    "timestamp": _T3,
+}
+
+
+class TestAuditLogEndpoint:
+    """GET /service-accounts/{accountId}/audit-log — lifecycle, ordering, cursor."""
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_full_lifecycle_entries_present(self, async_client):
+        """Audit log contains created, key_rotated, and revoked entries for a full lifecycle."""
+        audit_rows = [_AUDIT_REVOKED, _AUDIT_ROTATED, _AUDIT_CREATED]
+
+        mock_driver = _make_mock_driver()
+        mock_session = mock_driver.session.return_value
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=audit_rows)
+        mock_session.run = AsyncMock(return_value=mock_result)
+
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}/audit-log",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 200
+        data = response.json()
+        event_types = [e["event_type"] for e in data["items"]]
+        assert "service_account.created" in event_types
+        assert "service_account.key_rotated" in event_types
+        assert "service_account.revoked" in event_types
+        assert data["total_count"] == 3
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_is_reverse_chronological(self, async_client):
+        """Items are returned newest-first (reverse-chronological order)."""
+        audit_rows = [_AUDIT_REVOKED, _AUDIT_ROTATED, _AUDIT_CREATED]
+
+        mock_driver = _make_mock_driver()
+        mock_session = mock_driver.session.return_value
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=audit_rows)
+        mock_session.run = AsyncMock(return_value=mock_result)
+
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}/audit-log",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 200
+        items = response.json()["items"]
+        assert items[0]["event_type"] == "service_account.revoked"
+        assert items[1]["event_type"] == "service_account.key_rotated"
+        assert items[2]["event_type"] == "service_account.created"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_before_cursor_filters_entries(self, async_client):
+        """?before=<timestamp> only returns entries strictly before that timestamp."""
+        audit_rows = [_AUDIT_CREATED]
+
+        mock_driver = _make_mock_driver()
+        mock_session = mock_driver.session.return_value
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=audit_rows)
+        mock_session.run = AsyncMock(return_value=mock_result)
+
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}/audit-log",
+                    params={"before": _T2},
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 1
+        assert data["items"][0]["event_type"] == "service_account.created"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_sa_principal_denied(self, async_client):
+        """SA principal cannot access audit log — always 403."""
+        mock_driver = _make_mock_driver()
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_SA_PRINCIPAL)
+        try:
+            response = await async_client.get(
+                f"/api/v1/api/v1/service-accounts/{SA_ID}/audit-log",
+                headers=_auth_headers(),
+            )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 403
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_invalid_before_returns_422(self, async_client):
+        """Unparseable ?before value → 422 Unprocessable Entity."""
+        mock_driver = _make_mock_driver()
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/api/v1/service-accounts/{SA_ID}/audit-log",
+                    params={"before": "not-a-date"},
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 422
