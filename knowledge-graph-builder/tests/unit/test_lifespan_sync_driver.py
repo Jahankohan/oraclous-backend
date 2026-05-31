@@ -52,8 +52,13 @@ async def test_lifespan_calls_connect_sync(monkeypatch):
         slowapi_errors_stub.RateLimitExceeded = sys.modules["slowapi"].RateLimitExceeded
         monkeypatch.setitem(sys.modules, "slowapi.errors", slowapi_errors_stub)
 
-    # Ensure app.main is re-imported fresh (cleared via monkeypatch for auto-restore).
-    monkeypatch.delitem(sys.modules, "app.main", raising=False)
+    # Ensure app.main is re-imported fresh and cleaned up after the test.
+    # monkeypatch.setitem registers the original state for teardown:
+    #   - if app.main was absent → saves notset → teardown DELETES the freshly-imported module
+    #   - if app.main was present → saves the original module → teardown restores it
+    # This prevents the stub-contaminated module from leaking into subsequent tests.
+    monkeypatch.setitem(sys.modules, "app.main", None)
+    del sys.modules["app.main"]  # clear the None so import gets a fresh module
 
     # Build mock neo4j_client
     mock_client = MagicMock()
