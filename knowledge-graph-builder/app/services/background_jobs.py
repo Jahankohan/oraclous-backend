@@ -3,6 +3,7 @@ Refactored Background Jobs using Pipeline Service
 Clean implementation with Neo4j GraphRAG pipeline and multi-tenant support
 """
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -1523,8 +1524,7 @@ def code_ingest_task(self, job_id: str, user_id: str) -> dict[str, Any]:
     ) -> None:
         with pg_engine.begin() as conn:
             conn.execute(
-                _text(
-                    """
+                _text("""
                     UPDATE ingestion_jobs
                     SET status = :status,
                         progress = :progress,
@@ -1533,8 +1533,7 @@ def code_ingest_task(self, job_id: str, user_id: str) -> dict[str, Any]:
                         completed_at = CASE WHEN :status IN ('completed','failed') THEN NOW() ELSE completed_at END,
                         started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN NOW() ELSE started_at END
                     WHERE id = :id
-                """
-                ),
+                """),
                 {
                     "id": job_id_str,
                     "status": status,
@@ -1864,12 +1863,20 @@ async def _sync_database_connector_async(
         except Exception as exc:
             logger.error(f"DB connector {connector_id} connect failed: {exc}")
             await _worker_record_sync_error(
-                async_driver, graph_id, connector_id, "connection_failed", str(exc)
+                async_driver,
+                graph_id,
+                connector_id,
+                "connection_failed",
+                _scrub_credentials(str(exc)),
             )
             await _worker_update_sync_status(
-                async_driver, graph_id, connector_id, "failed", error_msg=str(exc)
+                async_driver,
+                graph_id,
+                connector_id,
+                "failed",
+                error_msg=_scrub_credentials(str(exc)),
             )
-            return {"status": "failed", "error": str(exc)}
+            return {"status": "failed", "error": _scrub_credentials(str(exc))}
 
         total_entities = 0
         tables_failed: list = []
@@ -2070,15 +2077,28 @@ async def _sync_database_connector_async(
         except Exception as exc:
             logger.error(f"DB connector sync failed: {exc}", exc_info=True)
             await _worker_record_sync_error(
-                async_driver, graph_id, connector_id, "schema_error", str(exc)
+                async_driver,
+                graph_id,
+                connector_id,
+                "schema_error",
+                _scrub_credentials(str(exc)),
             )
             await _worker_update_sync_status(
-                async_driver, graph_id, connector_id, "failed", error_msg=str(exc)
+                async_driver,
+                graph_id,
+                connector_id,
+                "failed",
+                error_msg=_scrub_credentials(str(exc)),
             )
-            return {"status": "failed", "error": str(exc)}
+            return {"status": "failed", "error": _scrub_credentials(str(exc))}
 
         finally:
             await connector.close()
+
+
+def _scrub_credentials(msg: str) -> str:
+    """Redact embedded credentials from URI-style exception messages before storage."""
+    return re.sub(r"://[^:]+:[^@]+@", "://<redacted>@", msg)  # pragma: allowlist secret
 
 
 async def _worker_update_sync_status(
