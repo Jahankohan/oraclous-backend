@@ -6,6 +6,7 @@ Fast, no-I/O tests — no Neo4j, no Postgres. The endpoint is purely static.
 import pytest
 
 from app.api.v1.endpoints.tools import _MANIFEST
+from app.core.config import settings
 
 EXPECTED_TOOL_COUNT = 9
 EXPECTED_TOOL_NAMES = {
@@ -37,7 +38,7 @@ class TestManifestStructure:
 
     @pytest.mark.unit
     def test_service_name(self):
-        assert _MANIFEST["service"] == "knowledge-graph-builder"
+        assert _MANIFEST["service"] == settings.SERVICE_NAME
 
     @pytest.mark.unit
     def test_version_semver_format(self):
