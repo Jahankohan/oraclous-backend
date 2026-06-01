@@ -52,6 +52,7 @@ from app.schemas.graph_schemas import (
     DocumentResponse,
     EntityDeduplicateRequest,
     EntityDeduplicateResponse,
+    EntityDetailResponse,
     GraphCreate,
     GraphDataResponse,
     GraphInstructions,
@@ -1998,6 +1999,38 @@ async def get_entities_at(
         ],
         "total": len(records),
     }
+
+
+@router.get(
+    "/graphs/{graph_id}/entities/{entity_id}",
+    response_model=EntityDetailResponse,
+    summary="Get entity detail",
+    responses={
+        403: {"description": "Graph belongs to another user"},
+        404: {"description": "Entity not found"},
+    },
+)
+async def get_entity_detail(
+    graph_id: UUID,
+    entity_id: str,
+    user_id: str = Depends(get_current_user_id),
+    analytics: GraphAnalyticsService = Depends(_get_analytics_service),
+) -> EntityDetailResponse:
+    """
+    Return full detail for a single entity: base properties, source provenance, and relationships.
+
+    `sources` lists every document + chunk the entity was extracted from.
+    `relationships` lists all edges on this entity node in both directions,
+    excluding internal structural relationships (IN_COMMUNITY, FROM_CHUNK, etc.).
+    """
+    await _verify_graph_ownership(graph_id, user_id)
+    result = await analytics.get_entity_detail(str(graph_id), entity_id)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Entity not found",
+        )
+    return EntityDetailResponse(**result)
 
 
 @router.get(

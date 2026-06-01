@@ -2036,6 +2036,139 @@ class GraphAnalyticsService:
 
         return analysis_results
 
+    # ==================== ENTITY DETAIL ====================
+
+    async def get_entity_detail(
+        self,
+        graph_id: str,
+        entity_id: str,
+    ) -> dict | None:
+        """Return full detail for a single entity: properties, sources, and relationships.
+
+        Returns None when no entity with graph_id + id exists (caller raises 404).
+        All three Cypher queries are scoped by graph_id — no cross-tenant access.
+        """
+        entity_query = """
+        MATCH (e:__Entity__ {graph_id: $graph_id, id: $entity_id})
+        OPTIONAL MATCH (e)-[:IN_COMMUNITY {graph_id: $graph_id, level: 1}]->
+                       (c:__Community__ {graph_id: $graph_id})
+        RETURN
+          coalesce(e.id, elementId(e)) AS id,
+          e.name AS name,
+          e.type AS type,
+          e.confidence AS confidence,
+          e.valid_from AS valid_from,
+          e.valid_to AS valid_to,
+          coalesce(c.id, elementId(c)) AS community_id,
+          properties(e) AS all_props
+        """
+        entity_records = await neo4j_client.execute_query(
+            entity_query, {"graph_id": graph_id, "entity_id": entity_id}
+        )
+        if not entity_records:
+            return None
+
+        rec = entity_records[0]
+        _STRIP_KEYS = {
+            "graph_id",
+            "id",
+            "name",
+            "type",
+            "confidence",
+            "valid_from",
+            "valid_to",
+            "community_id",
+            "embedding",
+            "fingerprint",
+            "prop_hash",
+            "transaction_time",
+            "ingestion_time",
+            "lastJobId",
+            "created_by",
+            "ingestion_source",
+            "canonical_name",
+        }
+        props = {
+            k: v
+            for k, v in (rec.get("all_props") or {}).items()
+            if k not in _STRIP_KEYS
+        }
+
+        sources_query = """
+        MATCH (e:__Entity__ {graph_id: $graph_id, id: $entity_id})
+        -[:FROM_CHUNK|MENTIONS]->(ch:Chunk {graph_id: $graph_id})
+        -[:FROM_DOCUMENT]->(d:Document {graph_id: $graph_id})
+        RETURN DISTINCT
+          coalesce(d.id, elementId(d)) AS document_id,
+          coalesce(d.name, d.title, d.filename, d.source) AS document_name,
+          coalesce(ch.chunk_index, ch.index) AS chunk_index
+        """
+        source_records = await neo4j_client.execute_query(
+            sources_query, {"graph_id": graph_id, "entity_id": entity_id}
+        )
+
+        _EXCLUDE_REL_TYPES = [
+            "FROM_CHUNK",
+            "FROM_DOCUMENT",
+            "MENTIONS",
+            "IN_COMMUNITY",
+            "SIMILAR_TO",
+            "SAME_AS",
+            "IN_CHUNK_COMMUNITY",
+            "NEXT_CHUNK",
+            "PARENT_COMMUNITY",
+        ]
+        rels_query = """
+        MATCH (e:__Entity__ {graph_id: $graph_id, id: $entity_id})
+        -[r {graph_id: $graph_id}]-(other:__Entity__ {graph_id: $graph_id})
+        WHERE NOT type(r) IN $exclude_types
+        RETURN
+          type(r) AS rel_type,
+          CASE WHEN startNode(r) = e THEN 'outgoing' ELSE 'incoming' END AS direction,
+          coalesce(other.id, elementId(other)) AS target_id,
+          other.name AS target_name,
+          coalesce(r.weight, r.confidence, r.strength) AS weight
+        """
+        rel_records = await neo4j_client.execute_query(
+            rels_query,
+            {
+                "graph_id": graph_id,
+                "entity_id": entity_id,
+                "exclude_types": _EXCLUDE_REL_TYPES,
+            },
+        )
+
+        return {
+            "id": rec["id"],
+            "name": rec["name"],
+            "type": rec["type"],
+            "confidence": rec["confidence"],
+            "properties": props,
+            "valid_from": _coerce_neo4j_datetime(rec.get("valid_from")),
+            "valid_to": _coerce_neo4j_datetime(rec.get("valid_to")),
+            "community_id": rec["community_id"],
+            "sources": [
+                {
+                    "document_id": s["document_id"],
+                    "document_name": s["document_name"],
+                    "chunk_index": int(s["chunk_index"])
+                    if s["chunk_index"] is not None
+                    else None,
+                }
+                for s in source_records
+            ],
+            "relationships": [
+                {
+                    "type": r["rel_type"],
+                    "direction": r["direction"],
+                    "target_id": r["target_id"],
+                    "target_name": r["target_name"],
+                    "weight": float(r["weight"]) if r["weight"] is not None else None,
+                }
+                for r in rel_records
+            ],
+        }
+
 
 # Create global instance
 analytics_service = GraphAnalyticsService()

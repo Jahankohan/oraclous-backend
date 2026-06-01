@@ -1430,3 +1430,33 @@ class GraphDataResponse(BaseModel):
     nodes: list[GraphDataNode] = Field(default_factory=list)
     edges: list[GraphDataEdge] = Field(default_factory=list)
     truncated: bool = False
+
+
+# ==================== ENTITY DETAIL (ORA-356) ====================
+
+
+class EntityDetailSource(BaseModel):
+    document_id: str
+    document_name: str | None = None
+    chunk_index: int | None = None
+
+
+class EntityDetailRelationship(BaseModel):
+    type: str
+    direction: str  # "incoming" or "outgoing"
+    target_id: str
+    target_name: str | None = None
+    weight: float | None = None
+
+
+class EntityDetailResponse(BaseModel):
+    id: str
+    name: str | None = None
+    type: str | None = None
+    confidence: float | None = None
+    properties: dict[str, Any] = Field(default_factory=dict)
+    valid_from: str | None = None
+    valid_to: str | None = None
+    community_id: str | None = None
+    sources: list[EntityDetailSource] = Field(default_factory=list)
+    relationships: list[EntityDetailRelationship] = Field(default_factory=list)
