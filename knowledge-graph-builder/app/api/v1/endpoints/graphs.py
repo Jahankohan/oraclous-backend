@@ -815,7 +815,7 @@ async def set_graph_instructions(
     graph_id: UUID,
     instructions: GraphInstructions,
     user_id: str = Depends(get_current_user_id),
-    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
 ):
     """
     Set or replace graph-level extraction instructions.
@@ -848,7 +848,7 @@ async def set_graph_instructions(
 async def get_graph_instructions(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
 ):
     """
     Retrieve the current graph-level extraction instructions.
@@ -883,7 +883,7 @@ async def get_graph_instructions(
 async def delete_graph_instructions(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
 ):
     """
     Delete graph-level extraction instructions and revert to free-form extraction.
@@ -1034,7 +1034,7 @@ async def set_graph_ontology(
     graph_id: UUID,
     request: OntologySetRequest,
     user_id: str = Depends(get_current_user_id),
-    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
 ):
     """
     Replace the ontology on a graph — entity types, relationship types, and enforcement mode.
@@ -1061,7 +1061,7 @@ async def set_graph_ontology(
 async def get_graph_ontology(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
 ):
     """
     Retrieve the current ontology configuration for a graph.
@@ -1093,7 +1093,7 @@ async def patch_graph_ontology(
     graph_id: UUID,
     patch: OntologyPatchRequest,
     user_id: str = Depends(get_current_user_id),
-    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
 ):
     """
     Merge-update the graph ontology: add/remove individual type definitions or change the mode.
@@ -1120,7 +1120,7 @@ async def patch_graph_ontology(
 async def delete_graph_ontology(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
 ):
     """
     Remove the ontology from a graph, reverting it to free-form extraction.
@@ -1147,7 +1147,7 @@ async def delete_graph_ontology(
 async def validate_graph_ontology(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
 ):
     """
     Scan existing entities in the graph against the current ontology — no modifications.
@@ -1243,7 +1243,7 @@ async def retroactive_apply_ontology(
     graph_id: UUID,
     request: RetroactiveApplyRequest,
     user_id: str = Depends(get_current_user_id),
-    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
 ):
     """
     Apply the current ontology enforcement to entities already in the graph.
