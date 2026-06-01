@@ -102,8 +102,8 @@ def _llm_mock(responses: list[str]) -> MagicMock:
     return client
 
 
-_AGENT_URL = "/api/v1/api/v1/graphs/{gid}/agents"
-_CHAT_URL = "/api/v1/api/v1/graphs/{gid}/agents/{aid}/chat"
+_AGENT_URL = "/api/v1/graphs/{gid}/agents"
+_CHAT_URL = "/api/v1/graphs/{gid}/agents/{aid}/chat"
 
 
 async def _create_agent(async_client, gid: str, **kwargs) -> str:
@@ -143,7 +143,7 @@ class TestAgentCRUDNeo4j:
         id2 = await _create_agent(async_client, _GID_A, name="ToDelete")
 
         with _mock_verify():
-            await async_client.delete(f"/api/v1/api/v1/graphs/{_GID_A}/agents/{id2}")
+            await async_client.delete(f"/api/v1/graphs/{_GID_A}/agents/{id2}")
             resp = await async_client.get(_AGENT_URL.format(gid=_GID_A))
 
         assert resp.status_code == 200
@@ -156,9 +156,7 @@ class TestAgentCRUDNeo4j:
     ):
         agent_id = await _create_agent(async_client, _GID_A)
         with _mock_verify():
-            await async_client.delete(
-                f"/api/v1/api/v1/graphs/{_GID_A}/agents/{agent_id}"
-            )
+            await async_client.delete(f"/api/v1/graphs/{_GID_A}/agents/{agent_id}")
 
         result = await neo4j_test_driver.execute_query(
             "MATCH (a:Agent {agent_id: $aid}) RETURN a.deactivated_at AS ts",
@@ -175,9 +173,7 @@ class TestDeactivatedAgent:
         agent_id = await _create_agent(async_client, _GID_A)
 
         with _mock_verify():
-            await async_client.delete(
-                f"/api/v1/api/v1/graphs/{_GID_A}/agents/{agent_id}"
-            )
+            await async_client.delete(f"/api/v1/graphs/{_GID_A}/agents/{agent_id}")
             resp = await async_client.post(
                 _CHAT_URL.format(gid=_GID_A, aid=agent_id),
                 json={"message": "hello"},
