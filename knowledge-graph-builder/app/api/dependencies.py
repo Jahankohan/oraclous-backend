@@ -12,7 +12,7 @@ from app.core.database import async_session_maker, get_db
 from app.services.auth_service import auth_service
 from app.services.rebac_service import rebac_service
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # Stores the resolved principal dict for the current request (set in get_current_user).
 # Enables verify_graph_access to route SA vs user permission checks without
@@ -23,9 +23,15 @@ _current_principal: contextvars.ContextVar[dict[str, Any] | None] = (
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict[str, Any]:
     """Dependency to get current authenticated user or service account principal."""
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     token = credentials.credentials
     user = await auth_service.verify_token(token)
     # Store principal in contextvar so verify_graph_access can branch on principal_type
