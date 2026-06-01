@@ -68,18 +68,16 @@ class GraphGrantResponse(BaseModel):
     expires_at: str | None = None
 
 
-class SecurityAuditLogEntry(BaseModel):
-    audit_log_id: str
+class SecurityAuditEventEntry(BaseModel):
+    event_id: str
     event_type: str
     sa_id: str
-    actor_user_id: str
-    home_graph_id: str
+    actor_id: str
     tenant_id: str
-    key_prefix: str | None = None
     timestamp: str
 
 
 class AuditLogListResponse(BaseModel):
-    items: list[SecurityAuditLogEntry]
+    items: list[SecurityAuditEventEntry]
     total_count: int
     has_more: bool

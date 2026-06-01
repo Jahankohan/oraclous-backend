@@ -72,15 +72,15 @@ class ServiceAccountService:
             "FOR (sa:AgentServiceAccount) ON (sa.tenant_id)",
             "CREATE INDEX agent_sa_status IF NOT EXISTS "
             "FOR (sa:AgentServiceAccount) ON (sa.status)",
-            # SecurityAuditLog constraints and indexes (ORA-316)
-            "CREATE CONSTRAINT sa_audit_log_id_unique IF NOT EXISTS "
-            "FOR (a:SecurityAuditLog) REQUIRE a.audit_log_id IS UNIQUE",
-            "CREATE INDEX sa_audit_log_sa IF NOT EXISTS "
-            "FOR (a:SecurityAuditLog) ON (a.sa_id)",
-            "CREATE INDEX sa_audit_log_tenant IF NOT EXISTS "
-            "FOR (a:SecurityAuditLog) ON (a.tenant_id)",
-            "CREATE INDEX sa_audit_log_timestamp IF NOT EXISTS "
-            "FOR (a:SecurityAuditLog) ON (a.timestamp)",
+            # SecurityAuditEvent constraints and indexes (ORA-317)
+            "CREATE CONSTRAINT sa_audit_event_id_unique IF NOT EXISTS "
+            "FOR (a:SecurityAuditEvent) REQUIRE a.event_id IS UNIQUE",
+            "CREATE INDEX sa_audit_event_sa IF NOT EXISTS "
+            "FOR (a:SecurityAuditEvent) ON (a.sa_id)",
+            "CREATE INDEX sa_audit_event_tenant IF NOT EXISTS "
+            "FOR (a:SecurityAuditEvent) ON (a.tenant_id)",
+            "CREATE INDEX sa_audit_event_timestamp IF NOT EXISTS "
+            "FOR (a:SecurityAuditEvent) ON (a.timestamp)",
         ]
         async with driver.session() as session:
             for q in queries:

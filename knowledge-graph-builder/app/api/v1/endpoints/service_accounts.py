@@ -31,7 +31,7 @@ from app.schemas.service_account_schemas import (
     AuditLogListResponse,
     CreateServiceAccountRequest,
     GraphGrantResponse,
-    SecurityAuditLogEntry,
+    SecurityAuditEventEntry,
     ServiceAccountCreatedResponse,
     ServiceAccountResponse,
     ServiceAccountRotatedResponse,
@@ -463,18 +463,16 @@ async def get_sa_audit_log(
     async with driver.session() as session:
         result = await session.run(
             """
-            MATCH (a:SecurityAuditLog {sa_id: $sa_id, tenant_id: $tenant_id})
+            MATCH (a:SecurityAuditEvent {sa_id: $sa_id, tenant_id: $tenant_id})
             WHERE $before IS NULL OR a.timestamp < datetime($before)
             WITH a
             ORDER BY a.timestamp DESC
             LIMIT $fetch_limit
-            RETURN a.audit_log_id   AS audit_log_id,
-                   a.event_type     AS event_type,
-                   a.sa_id          AS sa_id,
-                   a.actor_user_id  AS actor_user_id,
-                   a.home_graph_id  AS home_graph_id,
-                   a.tenant_id      AS tenant_id,
-                   a.key_prefix     AS key_prefix,
+            RETURN a.event_id        AS event_id,
+                   a.event_type      AS event_type,
+                   a.sa_id           AS sa_id,
+                   a.actor_id        AS actor_id,
+                   a.tenant_id       AS tenant_id,
                    toString(a.timestamp) AS timestamp
             """,
             {
@@ -490,7 +488,7 @@ async def get_sa_audit_log(
     items = rows[:limit]
 
     return AuditLogListResponse(
-        items=[SecurityAuditLogEntry(**r) for r in items],
+        items=[SecurityAuditEventEntry(**r) for r in items],
         total_count=len(items),
         has_more=has_more,
     )
