@@ -186,38 +186,34 @@ async def create_graph(
         )
 
         # Register in ReBAC system so creator immediately has admin access
-        from app.core.neo4j_client import neo4j_client as _neo4j_client
         from app.services.rebac_service import rebac_service
 
-        if _neo4j_client.async_driver:
-            try:
-                await rebac_service.register_new_graph(
-                    driver=_neo4j_client.async_driver,
-                    user_id=user_id,
-                    graph_id=graph_id,
-                    name=graph_data.name,
-                )
-            except Exception as rebac_exc:
-                logger.warning(
-                    f"ReBAC graph registration failed (non-fatal): {rebac_exc}"
-                )
+        try:
+            await rebac_service.register_new_graph(
+                driver=driver,
+                user_id=user_id,
+                graph_id=graph_id,
+                name=graph_data.name,
+            )
+        except Exception as rebac_exc:
+            logger.warning(f"ReBAC graph registration failed (non-fatal): {rebac_exc}")
 
-            # Org owners and admins see + access every subgraph the org owns.
-            # The creator was just registered above; grant the org's other
-            # privileged members ReBAC admin on this new subgraph too.
-            try:
-                from app.services import org_member_service
+        # Org owners and admins see + access every subgraph the org owns.
+        # The creator was just registered above; grant the org's other
+        # privileged members ReBAC admin on this new subgraph too.
+        try:
+            from app.services import org_member_service
 
-                await org_member_service.grant_privileged_members_on_graph(
-                    _neo4j_client.async_driver,
-                    org_id=org_id,
-                    graph_id=graph_id,
-                    granted_by=user_id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    f"Org owner/admin grant on new subgraph failed (non-fatal): {exc}"
-                )
+            await org_member_service.grant_privileged_members_on_graph(
+                driver,
+                org_id=org_id,
+                graph_id=graph_id,
+                granted_by=user_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Org owner/admin grant on new subgraph failed (non-fatal): {exc}"
+            )
 
         # Return response in expected format
         return GraphResponse(
@@ -676,6 +672,7 @@ async def ingest_data_corrected(
 async def list_graph_llm_configs(
     graph_id: UUID,
     current_user: dict = Depends(get_current_user),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     await verify_graph_access(str(graph_id), "read", str(current_user["id"]))
     org_id = str(
@@ -683,9 +680,7 @@ async def list_graph_llm_configs(
         or current_user.get("org_id")
         or current_user["id"]
     )
-    if not neo4j_client.async_driver:
-        return []
-    svc = LLMConfigService(neo4j_client.async_driver)
+    svc = LLMConfigService(driver)
     configs = await svc.list_org_configs(org_id)
     return [
         GraphLLMConfigResponse(
