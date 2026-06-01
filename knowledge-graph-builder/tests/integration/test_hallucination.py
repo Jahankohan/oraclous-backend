@@ -157,7 +157,7 @@ class TestKnownFactsCorrectness:
                 ],
             ):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={
                         "query": "Who is the CEO of TechNova Corp?",
                         "graph_id": GRAPH_ID,
@@ -195,7 +195,7 @@ class TestKnownFactsCorrectness:
                 ],
             ):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={
                         "query": "Where is TechNova headquartered?",
                         "graph_id": GRAPH_ID,
@@ -235,7 +235,7 @@ class TestKnownFactsCorrectness:
                 ],
             ):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={"query": "Who founded TechNova?", "graph_id": GRAPH_ID},
                     headers=_headers(),
                 )
@@ -268,7 +268,7 @@ class TestNoDataResponses:
         try:
             with _ChatPatch(answer="", items=[]):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={
                         "query": "Who is the CFO of Acme Corp?",
                         "graph_id": "empty-graph-id",
@@ -311,7 +311,7 @@ class TestNoDataResponses:
         try:
             with _ChatPatch(answer="", items=[]):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={
                         "query": "What is the revenue of Phantom Corp?",
                         "graph_id": "empty-graph-id",
@@ -342,7 +342,7 @@ class TestNoDataResponses:
         try:
             with _ChatPatch(answer="", items=[]):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={
                         "query": "What is the annual revenue of Phantom Corp in fiscal year 2024?",
                         "graph_id": GRAPH_ID,
@@ -383,7 +383,7 @@ class TestNoDataResponses:
                 ],
             ):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={
                         "query": "Tell me about AI companies in the graph",
                         "graph_id": GRAPH_ID,
@@ -417,7 +417,7 @@ class TestGroundingIntegrity:
         try:
             with _ChatPatch(answer="Some invented text", items=[]):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={"query": "Random question", "graph_id": GRAPH_ID},
                     headers=_headers(),
                 )
@@ -440,7 +440,7 @@ class TestGroundingIntegrity:
                 items=[_retriever_item("Alice Smith - CEO", score=0.9)],
             ):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={"query": "Who is the CEO?", "graph_id": GRAPH_ID},
                     headers=_headers(),
                 )
@@ -465,7 +465,7 @@ class TestGroundingIntegrity:
                 items=[_retriever_item("Some content")],
             ):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={"query": "Test query", "graph_id": target_graph_id},
                     headers=_headers(),
                 )
@@ -500,7 +500,7 @@ class TestGroundingIntegrity:
                 items=items,
             ):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={
                         "query": "Summary query",
                         "graph_id": GRAPH_ID,
@@ -540,7 +540,7 @@ class TestErrorRecoveryNoHallucination:
         try:
             with _ChatPatch(retriever_error=Exception("Neo4j connection refused")):
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={"query": "What are the key entities?", "graph_id": GRAPH_ID},
                     headers=_headers(),
                 )

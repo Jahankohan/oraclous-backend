@@ -344,7 +344,7 @@ class TestServiceAccountJWTAuthPath:
             deps_p.stop()
 
         assert response.status_code == 403
-        assert response.json()["message"] == "Permission denied"
+        assert response.json()["detail"] == "Access denied"
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -370,7 +370,7 @@ class TestServiceAccountJWTAuthPath:
             deps_p.stop()
 
         assert response.status_code == 403
-        assert response.json()["message"] == "Permission denied"
+        assert "cannot grant" in response.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +581,7 @@ class TestListRequiresAdmin:
             deps_p.stop()
 
         assert response.status_code == 403
-        assert response.json()["message"] == "Permission denied"
+        assert response.json()["detail"] == "Access denied"
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -604,8 +604,8 @@ class TestListRequiresAdmin:
             deps_p.stop()
 
         assert response.status_code == 403
-        detail = response.json()["message"]
-        # Error message must not leak graph_id or internal paths
+        detail = response.json()["detail"]
+        # Error detail must not leak graph_id or internal paths
         assert HOME_GRAPH_ID not in detail
         assert "/" not in detail
 
@@ -668,7 +668,7 @@ class TestCrossTenantIsolation:
 
         # Must return 403, not 404 — never reveal SA existence
         assert response.status_code == 403
-        assert response.json()["message"] == "Permission denied"
+        assert response.json()["detail"] == "Access denied"
 
     @pytest.mark.integration
     @pytest.mark.api
@@ -763,11 +763,11 @@ class TestRevokedSAToken:
 
     @pytest.mark.integration
     @pytest.mark.api
-    async def test_missing_auth_header_returns_401(self, async_client):
-        """Request with no Authorization header → 401 (HTTPBearer rejects it)."""
+    async def test_missing_auth_header_returns_403(self, async_client):
+        """Request with no Authorization header → 403 (HTTPBearer rejects it)."""
         response = await async_client.get(f"/api/v1/service-accounts/{SA_ID}")
-        # HTTPBearer returns 401 when no credentials provided
-        assert response.status_code == 401
+        # HTTPBearer returns 403 when no credentials provided
+        assert response.status_code == 403
 
     @pytest.mark.integration
     @pytest.mark.api

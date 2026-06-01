@@ -1,12 +1,11 @@
 """
-Integration tests for POST /api/v1/api/v1/graphs/{graph_id}/evaluate.
+Integration tests for POST /api/v1/graphs/{graph_id}/evaluate.
 
 Tests the full request → auth → ownership check → EvaluationService → response
 pipeline. EvaluationService internals (ChatService, RAGAS) are mocked.
 
-URL: /api/v1/api/v1/graphs/{graph_id}/evaluate
-     ^^^^^^^^ main app prefix
-              ^^^^^^^^ router prefix in api_router
+URL: /api/v1/graphs/{graph_id}/evaluate
+     ^^^^^^^^ prefix applied once in main.py; not duplicated in api_router
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,7 +17,7 @@ from app.schemas.evaluation_schemas import EvaluationScores, RetrievedContextIte
 
 GRAPH_ID = "test-graph-eval-001"
 FAKE_USER_ID = "eval-user-42"
-BASE_URL = f"/api/v1/api/v1/graphs/{GRAPH_ID}/evaluate"
+BASE_URL = f"/api/v1/graphs/{GRAPH_ID}/evaluate"
 
 
 # ---------------------------------------------------------------------------

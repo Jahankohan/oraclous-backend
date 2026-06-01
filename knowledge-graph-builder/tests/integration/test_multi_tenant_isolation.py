@@ -293,7 +293,7 @@ class TestChatCrossTenantIsolation:
                 mock_auth.verify_token = AsyncMock(return_value={"id": USER_A_ID})
 
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={
                         "query": f"Tell me about {tenant_b_secret}",
                         "graph_id": GRAPH_A_ID,
@@ -357,7 +357,7 @@ class TestChatCrossTenantIsolation:
                 MockRAG.return_value = rag
 
                 await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={"query": "Test query", "graph_id": GRAPH_A_ID},
                     headers=_headers(),
                 )
@@ -421,9 +421,7 @@ class TestSchemaCrossTenantIsolation:
             with patch("app.api.schema.schema_manager") as mock_manager:
                 mock_manager.extract_schema = AsyncMock(return_value=schema_a)
 
-                response = await async_client.get(
-                    f"/api/v1/api/v1/schema/info/{GRAPH_A_ID}"
-                )
+                response = await async_client.get(f"/api/v1/schema/info/{GRAPH_A_ID}")
         finally:
             auth.stop()
 
@@ -474,7 +472,7 @@ class TestSchemaCrossTenantIsolation:
                 mock_manager.extract_schema = AsyncMock(return_value=schema_a)
 
                 response = await async_client.post(
-                    "/api/v1/api/v1/schema/refresh",
+                    "/api/v1/schema/refresh",
                     json={"graph_id": GRAPH_A_ID, "force_refresh": True},
                 )
         finally:
@@ -642,7 +640,7 @@ class TestAuthBoundaryChecks:
     async def test_chat_endpoint_requires_authentication(self, async_client):
         """POST /chat without token → 401/403."""
         response = await async_client.post(
-            "/api/v1/api/v1/chat",
+            "/api/v1/chat",
             json={"query": "Q", "graph_id": GRAPH_A_ID},
         )
         assert response.status_code in (401, 403)
