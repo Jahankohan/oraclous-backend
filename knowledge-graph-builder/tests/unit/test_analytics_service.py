@@ -467,3 +467,236 @@ class TestMultiTenantIsolation:
         # graph_2 should not see graph_1's cache
         assert svc.get_cached_statistics(graph_2) is None
         assert svc.get_cached_statistics(graph_1) is not None
+
+
+# ---------------------------------------------------------------------------
+# Tests: list_entities — entity explorer
+# ---------------------------------------------------------------------------
+
+
+class TestListEntities:
+    def _captured_side_effect(self, captured: list, entity_rows: list | None = None):
+        """Async side_effect that records call params and returns canned data."""
+        rows = entity_rows or []
+
+        async def _capture(query: str, params: dict):
+            captured.append({"query": query, "params": params})
+            return [{"total": len(rows)}] if len(captured) == 1 else rows
+
+        return _capture
+
+    @pytest.mark.unit
+    async def test_returns_correct_structure(self):
+        """Result always contains items, total, page, page_size."""
+        svc = _make_service()
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(side_effect=[[{"total": 3}], []])
+            result = await svc.list_entities(graph_id="g1")
+
+        assert "items" in result
+        assert "total" in result
+        assert "page" in result
+        assert "page_size" in result
+        assert result["total"] == 3
+        assert result["page"] == 1
+        assert result["page_size"] == 50
+
+    @pytest.mark.unit
+    async def test_graph_id_in_all_queries(self):
+        """graph_id must appear in params for every Neo4j query — multi-tenant isolation."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            await svc.list_entities(graph_id="tenant-abc")
+
+        assert len(captured) == 2
+        assert all(p["params"].get("graph_id") == "tenant-abc" for p in captured)
+
+    @pytest.mark.unit
+    async def test_no_filters_omits_where_clause(self):
+        """No q/types/community_id: WHERE clause absent from both queries."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            await svc.list_entities(graph_id="g1")
+
+        for entry in captured:
+            assert "WHERE" not in entry["query"]
+
+    @pytest.mark.unit
+    async def test_q_filter_adds_q_param(self):
+        """q value must be passed as a Cypher parameter, not interpolated."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            await svc.list_entities(graph_id="g1", q="Alice")
+
+        assert all("q" in p["params"] for p in captured)
+        assert all(p["params"]["q"] == "Alice" for p in captured)
+
+    @pytest.mark.unit
+    async def test_types_filter_adds_types_param(self):
+        """types list passed as Cypher parameter; IN clause in both queries."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            await svc.list_entities(graph_id="g1", types=["Person", "Company"])
+
+        assert all("types" in p["params"] for p in captured)
+        assert all(p["params"]["types"] == ["Person", "Company"] for p in captured)
+
+    @pytest.mark.unit
+    async def test_types_none_omits_types_param(self):
+        """None types: no types key in params and no IN clause."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            await svc.list_entities(graph_id="g1", types=None)
+
+        assert all("types" not in p["params"] for p in captured)
+
+    @pytest.mark.unit
+    async def test_community_id_filter_adds_community_id_param(self):
+        """community_id must be passed as a Cypher parameter, not interpolated."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            await svc.list_entities(graph_id="g1", community_id="comm-42")
+
+        assert all("community_id" in p["params"] for p in captured)
+        assert all(p["params"]["community_id"] == "comm-42" for p in captured)
+
+    @pytest.mark.unit
+    async def test_sort_degree_desc_in_list_query(self):
+        """sort=degree_desc: ORDER BY degree DESC appears in the list query."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            await svc.list_entities(graph_id="g1", sort="degree_desc")
+
+        list_query = captured[1]["query"]
+        assert "degree DESC" in list_query
+
+    @pytest.mark.unit
+    async def test_sort_name_asc_in_list_query(self):
+        """sort=name_asc: ORDER BY e.name ASC appears in the list query."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            await svc.list_entities(graph_id="g1", sort="name_asc")
+
+        list_query = captured[1]["query"]
+        assert "e.name ASC" in list_query
+
+    @pytest.mark.unit
+    async def test_sort_default_confidence_desc_in_list_query(self):
+        """Default sort: coalesce confidence DESC appears in list query."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            await svc.list_entities(graph_id="g1")
+
+        list_query = captured[1]["query"]
+        assert "confidence" in list_query.lower()
+        assert "DESC" in list_query
+
+    @pytest.mark.unit
+    async def test_page_2_sets_skip_to_page_size(self):
+        """page=2 with page_size=50 must pass skip=50 to both queries."""
+        svc = _make_service()
+        captured: list = []
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=self._captured_side_effect(captured)
+            )
+            result = await svc.list_entities(graph_id="g1", page=2, page_size=50)
+
+        assert result["page"] == 2
+        assert result["page_size"] == 50
+        assert all(p["params"]["skip"] == 50 for p in captured)
+
+    @pytest.mark.unit
+    async def test_items_mapped_from_query_results(self):
+        """Items returned by Neo4j are correctly shaped in the response."""
+        svc = _make_service()
+        mock_entity = {
+            "id": "elem-1",
+            "name": "Alice",
+            "type": "Person",
+            "confidence": 0.9,
+            "community_id": "comm-1",
+            "degree": 5,
+        }
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=[[{"total": 1}], [mock_entity]]
+            )
+            result = await svc.list_entities(graph_id="g1")
+
+        assert len(result["items"]) == 1
+        item = result["items"][0]
+        assert item["id"] == "elem-1"
+        assert item["name"] == "Alice"
+        assert item["type"] == "Person"
+        assert item["confidence"] == 0.9
+        assert item["community_id"] == "comm-1"
+        assert item["degree"] == 5
+
+    @pytest.mark.unit
+    async def test_community_id_none_when_no_community(self):
+        """community_id is None in returned item when entity has no community membership."""
+        svc = _make_service()
+        mock_entity = {
+            "id": "elem-2",
+            "name": "Bob",
+            "type": "Person",
+            "confidence": 0.5,
+            "community_id": None,
+            "degree": 2,
+        }
+
+        with patch("app.services.analytics_service.neo4j_client") as mock_client:
+            mock_client.execute_query = AsyncMock(
+                side_effect=[[{"total": 1}], [mock_entity]]
+            )
+            result = await svc.list_entities(graph_id="g1")
+
+        assert result["items"][0]["community_id"] is None
