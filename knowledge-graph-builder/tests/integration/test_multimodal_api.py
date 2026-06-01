@@ -55,19 +55,25 @@ _1_BYTE_PNG = (
 # ---------------------------------------------------------------------------
 
 
-def _make_client(user_id: str = TEST_USER_ID, graph_owner_id: str = TEST_USER_ID):
+def _make_client(
+    user_id: str = TEST_USER_ID,
+    graph_owner_id: str = TEST_USER_ID,
+    neo4j_available: bool = True,
+):
     """
     Return an async HTTP client with mocked auth, mocked graph access,
     and an in-memory database session.
 
     `graph_owner_id` is the user that "owns" the graph returned by Neo4j.
     When `graph_owner_id != user_id` the verify_graph_write_access mock raises 403.
+    When `neo4j_available=False` the get_neo4j_driver DI raises 503.
     """
     from app.api.dependencies import (
         get_current_user_id,
         get_database,
         verify_graph_write_access,
     )
+    from app.core.dependencies import get_neo4j_driver
     from app.main import app
 
     async def _mock_user_id() -> str:
@@ -93,9 +99,18 @@ def _make_client(user_id: str = TEST_USER_ID, graph_owner_id: str = TEST_USER_ID
     async def _mock_db():
         yield mock_session
 
+    def _mock_driver():
+        if not neo4j_available:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Neo4j connection not available",
+            )
+        return MagicMock()
+
     app.dependency_overrides[get_current_user_id] = _mock_user_id
     app.dependency_overrides[verify_graph_write_access] = _mock_verify
     app.dependency_overrides[get_database] = _mock_db
+    app.dependency_overrides[get_neo4j_driver] = _mock_driver
 
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
@@ -188,10 +203,7 @@ async def test_ingest_document_pdf_success(client: AsyncClient) -> None:
             "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
         ),
         patch("app.api.v1.endpoints.multimodal.background_job_service", job_svc),
-        patch("app.api.v1.endpoints.multimodal.neo4j_client") as mock_neo4j,
     ):
-        mock_neo4j.sync_driver = MagicMock()  # driver is available
-
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.dict(os.environ, {"MULTIMODAL_UPLOAD_DIR": tmpdir}):
                 # Re-patch the module-level _UPLOAD_ROOT
@@ -231,10 +243,7 @@ async def test_ingest_image_png_success(client: AsyncClient) -> None:
             "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
         ),
         patch("app.api.v1.endpoints.multimodal.background_job_service", job_svc),
-        patch("app.api.v1.endpoints.multimodal.neo4j_client") as mock_neo4j,
     ):
-        mock_neo4j.sync_driver = MagicMock()
-
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
                 "app.api.v1.endpoints.multimodal._UPLOAD_ROOT",
@@ -272,14 +281,9 @@ async def test_ingest_document_too_large(client: AsyncClient) -> None:
 
     graph_svc = _mock_neo4j_graph()
 
-    with (
-        patch(
-            "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
-        ),
-        patch("app.api.v1.endpoints.multimodal.neo4j_client") as mock_neo4j,
+    with patch(
+        "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
     ):
-        mock_neo4j.sync_driver = MagicMock()
-
         resp = await client.post(
             f"/api/v1/graphs/{TEST_GRAPH_ID}/ingest/document",
             files=[
@@ -301,14 +305,9 @@ async def test_ingest_image_too_large(client: AsyncClient) -> None:
 
     graph_svc = _mock_neo4j_graph()
 
-    with (
-        patch(
-            "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
-        ),
-        patch("app.api.v1.endpoints.multimodal.neo4j_client") as mock_neo4j,
+    with patch(
+        "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
     ):
-        mock_neo4j.sync_driver = MagicMock()
-
         resp = await client.post(
             f"/api/v1/graphs/{TEST_GRAPH_ID}/ingest/image",
             files=[("file", ("big.png", io.BytesIO(oversized_data), "image/png"))],
@@ -330,14 +329,9 @@ async def test_ingest_document_invalid_mime(client: AsyncClient) -> None:
     """Uploading an audio file as a document → 400 unsupported type."""
     graph_svc = _mock_neo4j_graph()
 
-    with (
-        patch(
-            "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
-        ),
-        patch("app.api.v1.endpoints.multimodal.neo4j_client") as mock_neo4j,
+    with patch(
+        "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
     ):
-        mock_neo4j.sync_driver = MagicMock()
-
         resp = await client.post(
             f"/api/v1/graphs/{TEST_GRAPH_ID}/ingest/document",
             files=[("file", ("audio.mp3", io.BytesIO(b"ID3"), "audio/mpeg"))],
@@ -355,14 +349,9 @@ async def test_ingest_image_invalid_mime(client: AsyncClient) -> None:
     """Uploading a PDF as an image → 400 unsupported type."""
     graph_svc = _mock_neo4j_graph()
 
-    with (
-        patch(
-            "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
-        ),
-        patch("app.api.v1.endpoints.multimodal.neo4j_client") as mock_neo4j,
+    with patch(
+        "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
     ):
-        mock_neo4j.sync_driver = MagicMock()
-
         resp = await client.post(
             f"/api/v1/graphs/{TEST_GRAPH_ID}/ingest/image",
             files=[("file", ("doc.pdf", io.BytesIO(_1_BYTE_PDF), "application/pdf"))],
@@ -391,15 +380,12 @@ async def test_ingest_document_missing_upload_dir(client: AsyncClient) -> None:
             "app.api.v1.endpoints.multimodal.GraphNodeService", return_value=graph_svc
         ),
         patch("app.api.v1.endpoints.multimodal.background_job_service", job_svc),
-        patch("app.api.v1.endpoints.multimodal.neo4j_client") as mock_neo4j,
         # Point _UPLOAD_ROOT at a path that cannot be created
         patch(
             "app.api.v1.endpoints.multimodal._UPLOAD_ROOT",
             __import__("pathlib").Path("/proc/oraclous_forbidden_upload_dir"),
         ),
     ):
-        mock_neo4j.sync_driver = MagicMock()
-
         resp = await client.post(
             f"/api/v1/graphs/{TEST_GRAPH_ID}/ingest/document",
             files=[_pdf_upload()],
@@ -421,16 +407,18 @@ async def test_ingest_document_missing_upload_dir(client: AsyncClient) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ingest_document_neo4j_unavailable(client: AsyncClient) -> None:
-    """If Neo4j sync_driver is None → 503."""
-    with patch("app.api.v1.endpoints.multimodal.neo4j_client") as mock_neo4j:
-        mock_neo4j.sync_driver = None  # simulate connection not ready
+async def test_ingest_document_neo4j_unavailable() -> None:
+    """If get_neo4j_driver raises 503, the document endpoint propagates it."""
+    from app.main import app
 
-        resp = await client.post(
+    async with _make_client(neo4j_available=False) as c:
+        resp = await c.post(
             f"/api/v1/graphs/{TEST_GRAPH_ID}/ingest/document",
             files=[_pdf_upload()],
             data={"extractor": "auto"},
         )
+
+    app.dependency_overrides.clear()
 
     assert resp.status_code == 503, resp.text
     assert "Neo4j" in resp.json().get("detail", "")
@@ -438,16 +426,18 @@ async def test_ingest_document_neo4j_unavailable(client: AsyncClient) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ingest_image_neo4j_unavailable(client: AsyncClient) -> None:
-    """If Neo4j sync_driver is None → 503."""
-    with patch("app.api.v1.endpoints.multimodal.neo4j_client") as mock_neo4j:
-        mock_neo4j.sync_driver = None
+async def test_ingest_image_neo4j_unavailable() -> None:
+    """If get_neo4j_driver raises 503, the image endpoint propagates it."""
+    from app.main import app
 
-        resp = await client.post(
+    async with _make_client(neo4j_available=False) as c:
+        resp = await c.post(
             f"/api/v1/graphs/{TEST_GRAPH_ID}/ingest/image",
             files=[_png_upload()],
             data={"vision_model": "claude"},
         )
+
+    app.dependency_overrides.clear()
 
     assert resp.status_code == 503, resp.text
     assert "Neo4j" in resp.json().get("detail", "")
