@@ -17,7 +17,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from neo4j import Driver
+from neo4j import AsyncDriver
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
@@ -25,7 +25,7 @@ from app.api.dependencies import (
     get_database,
     verify_graph_write_access,
 )
-from app.core.dependencies import get_neo4j_driver
+from app.core.dependencies import get_neo4j_async_driver
 from app.core.logging import get_logger
 from app.models.graph import IngestionJob
 from app.schemas.multimodal import MultiModalJobResponse, PDFExtractor, VisionModel
@@ -66,10 +66,10 @@ def _save_upload(graph_id: str, job_id: str, upload: UploadFile, data: bytes) ->
     return str(dest_path)
 
 
-async def _verify_graph(graph_id: UUID, driver: Driver) -> None:
+async def _verify_graph(graph_id: UUID, driver: AsyncDriver) -> None:
     """Raise 404 if the graph does not exist (503 is raised by get_neo4j_driver DI)."""
     graph_service = GraphNodeService(driver)
-    if not graph_service.get_graph(str(graph_id)):
+    if not await graph_service.get_graph(str(graph_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
         )
@@ -100,7 +100,7 @@ async def ingest_document(
     user_id: str = Depends(get_current_user_id),
     _access: str = Depends(verify_graph_write_access),
     db: AsyncSession = Depends(get_database),
-    driver: Driver = Depends(get_neo4j_driver),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Upload a PDF or DOCX document for entity/relationship extraction.
@@ -214,7 +214,7 @@ async def ingest_image(
     user_id: str = Depends(get_current_user_id),
     _access: str = Depends(verify_graph_write_access),
     db: AsyncSession = Depends(get_database),
-    driver: Driver = Depends(get_neo4j_driver),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Upload an image for entity/relationship extraction using a vision model.
