@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     code_graphs,
     communities,
     connectors,
+    entities,
     evaluation,
     federation,
     graphs,
@@ -34,6 +35,7 @@ api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(graphs.router, tags=["graphs"])
 api_router.include_router(communities.router, tags=["communities"])
+api_router.include_router(entities.router, tags=["entities"])
 api_router.include_router(agents.router, tags=["agents"])
 api_router.include_router(llm_configs.router, tags=["llm-configs"])
 api_router.include_router(integration.router, tags=["integration"])
