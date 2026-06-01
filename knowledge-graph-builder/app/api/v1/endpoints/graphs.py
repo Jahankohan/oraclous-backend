@@ -1480,7 +1480,10 @@ from app.schemas.community_kinds import (
     UnknownCommunityKindError,
     get_kind,
 )
-from app.services.analytics_service import GraphAnalyticsService
+from app.services.analytics_service import (
+    GraphAnalyticsService,
+    get_entity_neighborhood,
+)
 from app.services.community_summarizer import CommunitySummarizer
 from app.services.entity_dedup_service import entity_dedup_service
 from app.services.similarity_service import similarity_service
@@ -2618,5 +2621,55 @@ async def get_graph_data(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to build graph data",
         ) from None
+
+    return GraphDataResponse(**data)
+
+
+@router.get(
+    "/graphs/{graph_id}/entities/{entity_id}/neighborhood",
+    response_model=GraphDataResponse,
+    summary="Get N-hop neighborhood subgraph around an entity",
+    responses={
+        403: {"description": "Caller lacks read access to the graph"},
+        404: {"description": "Graph or entity not found"},
+        422: {"description": "hops out of range (must be 1–3)"},
+    },
+)
+async def get_entity_neighborhood_endpoint(
+    graph_id: UUID,
+    entity_id: str,
+    hops: int = Query(default=2, ge=1, le=3),
+    edge_types: str | None = Query(default=None),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+    user_id: str = Depends(get_current_user_id),
+) -> GraphDataResponse:
+    """Return the N-hop entity neighborhood subgraph around a focal entity.
+
+    ``hops`` controls traversal depth (1–3). ``edge_types`` is an optional
+    comma-separated list of relationship types; when provided only edges of
+    those types appear in the response.
+
+    Requires ``read``-level access via ReBAC. Returns 404 when the entity
+    does not exist in the graph.
+    """
+    await verify_graph_access(str(graph_id), "read", user_id)
+
+    parsed_edge_types: list[str] | None = (
+        [t.strip() for t in edge_types.split(",") if t.strip()] if edge_types else None
+    )
+
+    data = await get_entity_neighborhood(
+        driver,
+        graph_id=str(graph_id),
+        entity_id=entity_id,
+        hops=hops,
+        edge_types=parsed_edge_types,
+    )
+
+    if not data["nodes"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Entity not found in graph",
+        )
 
     return GraphDataResponse(**data)
