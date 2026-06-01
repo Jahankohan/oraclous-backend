@@ -11,8 +11,9 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from neo4j import AsyncDriver
+
 from app.core.logging import get_logger
-from app.core.neo4j_client import neo4j_client
 from app.schemas.graph_schemas import (
     EntityTypeDefinition,
     ExtractionDensity,
@@ -64,6 +65,9 @@ class InstructionsResolver:
     - overrides.extra_entity_types → appended to entity_types if any
     - overrides.schema_evolution_hint → appended to custom_prompt_suffix
     """
+
+    def __init__(self, driver: AsyncDriver) -> None:
+        self._driver = driver
 
     async def resolve(
         self,
@@ -147,10 +151,10 @@ class InstructionsResolver:
         RETURN g.instructions_config AS instructions_config
         """
         try:
-            records = await neo4j_client.execute_query(query, {"graph_id": graph_id})
-            if not records:
+            result = await self._driver.execute_query(query, {"graph_id": graph_id})
+            if not result.records:
                 return None
-            raw = records[0].get("instructions_config")
+            raw = result.records[0].get("instructions_config")
             if not raw:
                 return None
             data = json.loads(raw) if isinstance(raw, str) else raw
@@ -279,6 +283,9 @@ class InstructionsService:
     Stores on the Neo4j Graph node (authoritative) and in PostgreSQL schema_config (cache).
     """
 
+    def __init__(self, driver: AsyncDriver) -> None:
+        self._driver = driver
+
     async def set_instructions(
         self, graph_id: str, instructions: GraphInstructions
     ) -> GraphInstructionsResponse:
@@ -293,7 +300,7 @@ class InstructionsService:
             g.instructions_updated_at = datetime($updated_at)
         RETURN g.instructions_version AS version
         """
-        records = await neo4j_client.execute_query(
+        result = await self._driver.execute_query(
             query,
             {
                 "graph_id": graph_id,
@@ -302,7 +309,7 @@ class InstructionsService:
             },
         )
 
-        version = records[0]["version"] if records else 1
+        version = result.records[0]["version"] if result.records else 1
         logger.info(f"Set instructions v{version} for graph {graph_id}")
 
         return GraphInstructionsResponse(
@@ -320,11 +327,11 @@ class InstructionsService:
                g.instructions_version AS version,
                g.instructions_updated_at AS updated_at
         """
-        records = await neo4j_client.execute_query(query, {"graph_id": graph_id})
-        if not records:
+        result = await self._driver.execute_query(query, {"graph_id": graph_id})
+        if not result.records:
             return None
 
-        row = records[0]
+        row = result.records[0]
         raw_config = row.get("config")
         if not raw_config:
             return None
@@ -359,7 +366,7 @@ class InstructionsService:
         MATCH (g:Graph:__Platform__ {graph_id: $graph_id})
         REMOVE g.instructions_config, g.instructions_version, g.instructions_updated_at
         """
-        await neo4j_client.execute_query(query, {"graph_id": graph_id})
+        await self._driver.execute_query(query, {"graph_id": graph_id})
         logger.info(f"Deleted instructions for graph {graph_id}")
 
     # ==================== ONTOLOGY CRUD ====================
@@ -517,6 +524,4 @@ class InstructionsService:
 
 # ==================== GLOBAL INSTANCES ====================
 
-instructions_resolver = InstructionsResolver()
 instructions_compiler = InstructionsCompiler()
-instructions_service = InstructionsService()

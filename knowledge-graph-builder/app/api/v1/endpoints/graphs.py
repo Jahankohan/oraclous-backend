@@ -88,6 +88,7 @@ from app.services.background_job_service import background_job_service
 
 # Neo4j Services
 from app.services.graph_node_service import GraphNodeService
+from app.services.instructions_service import InstructionsService
 from app.services.llm_config_service import LLMConfigService
 from app.services.rollback_service import rollback_service
 from app.services.snapshot_service import snapshot_service
@@ -815,7 +816,7 @@ async def set_graph_instructions(
     graph_id: UUID,
     instructions: GraphInstructions,
     user_id: str = Depends(get_current_user_id),
-    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Set or replace graph-level extraction instructions.
@@ -831,9 +832,9 @@ async def set_graph_instructions(
     # ReBAC check — write level required to set instructions
     await verify_graph_access(str(graph_id), "write", user_id)
 
-    from app.services.instructions_service import instructions_service
+    svc = InstructionsService(driver)
 
-    return await instructions_service.set_instructions(str(graph_id), instructions)
+    return await svc.set_instructions(str(graph_id), instructions)
 
 
 @router.get(
@@ -848,7 +849,7 @@ async def set_graph_instructions(
 async def get_graph_instructions(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Retrieve the current graph-level extraction instructions.
@@ -859,9 +860,9 @@ async def get_graph_instructions(
     # ReBAC check — read level required to view instructions
     await verify_graph_access(str(graph_id), "read", user_id)
 
-    from app.services.instructions_service import instructions_service
+    svc = InstructionsService(driver)
 
-    result = await instructions_service.get_instructions(str(graph_id))
+    result = await svc.get_instructions(str(graph_id))
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -883,7 +884,7 @@ async def get_graph_instructions(
 async def delete_graph_instructions(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Delete graph-level extraction instructions and revert to free-form extraction.
@@ -895,9 +896,9 @@ async def delete_graph_instructions(
     # ReBAC check — admin level required to delete instructions
     await verify_graph_access(str(graph_id), "admin", user_id)
 
-    from app.services.instructions_service import instructions_service
+    svc = InstructionsService(driver)
 
-    await instructions_service.delete_instructions(str(graph_id))
+    await svc.delete_instructions(str(graph_id))
 
 
 # ==================== MIGRATION ENDPOINT ====================
@@ -1034,7 +1035,7 @@ async def set_graph_ontology(
     graph_id: UUID,
     request: OntologySetRequest,
     user_id: str = Depends(get_current_user_id),
-    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Replace the ontology on a graph — entity types, relationship types, and enforcement mode.
@@ -1043,10 +1044,10 @@ async def set_graph_ontology(
     Existing graph data is NOT modified; use the retroactive-apply endpoint for that.
     Invalidates the schema cache.
     """
-    from app.services.instructions_service import instructions_service
+    svc = InstructionsService(driver)
 
     await _verify_graph_ownership(graph_id, user_id)
-    return await instructions_service.set_ontology(str(graph_id), request)
+    return await svc.set_ontology(str(graph_id), request)
 
 
 @router.get(
@@ -1061,17 +1062,17 @@ async def set_graph_ontology(
 async def get_graph_ontology(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Retrieve the current ontology configuration for a graph.
 
     Returns `404` if no ontology has been configured. Free-form graphs have no ontology.
     """
-    from app.services.instructions_service import instructions_service
+    svc = InstructionsService(driver)
 
     await _verify_graph_ownership(graph_id, user_id)
-    result = await instructions_service.get_ontology(str(graph_id))
+    result = await svc.get_ontology(str(graph_id))
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1093,7 +1094,7 @@ async def patch_graph_ontology(
     graph_id: UUID,
     patch: OntologyPatchRequest,
     user_id: str = Depends(get_current_user_id),
-    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Merge-update the graph ontology: add/remove individual type definitions or change the mode.
@@ -1101,10 +1102,10 @@ async def patch_graph_ontology(
     Types are matched by name. Adding a type that already exists replaces it.
     Invalidates the schema cache.
     """
-    from app.services.instructions_service import instructions_service
+    svc = InstructionsService(driver)
 
     await _verify_graph_ownership(graph_id, user_id)
-    return await instructions_service.patch_ontology(str(graph_id), patch)
+    return await svc.patch_ontology(str(graph_id), patch)
 
 
 @router.delete(
@@ -1120,7 +1121,7 @@ async def patch_graph_ontology(
 async def delete_graph_ontology(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Remove the ontology from a graph, reverting it to free-form extraction.
@@ -1129,10 +1130,10 @@ async def delete_graph_ontology(
     Previously extracted entities are NOT removed.
     Invalidates the schema cache.
     """
-    from app.services.instructions_service import instructions_service
+    svc = InstructionsService(driver)
 
     await _verify_graph_ownership(graph_id, user_id)
-    await instructions_service.delete_ontology(str(graph_id))
+    await svc.delete_ontology(str(graph_id))
 
 
 @router.post(
@@ -1147,7 +1148,7 @@ async def delete_graph_ontology(
 async def validate_graph_ontology(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
-    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Scan existing entities in the graph against the current ontology — no modifications.
@@ -1155,10 +1156,10 @@ async def validate_graph_ontology(
     Returns violation counts and a sample of offending entities. Use this to assess
     the impact before running retroactive-apply.
     """
-    from app.services.instructions_service import instructions_service
+    svc = InstructionsService(driver)
 
     await _verify_graph_ownership(graph_id, user_id)
-    ontology = await instructions_service.get_ontology(str(graph_id))
+    ontology = await svc.get_ontology(str(graph_id))
     if ontology is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1243,7 +1244,7 @@ async def retroactive_apply_ontology(
     graph_id: UUID,
     request: RetroactiveApplyRequest,
     user_id: str = Depends(get_current_user_id),
-    _: AsyncDriver = Depends(get_neo4j_async_driver),  # 503 if Neo4j unavailable
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Apply the current ontology enforcement to entities already in the graph.
@@ -1253,10 +1254,10 @@ async def retroactive_apply_ontology(
     - `dry_run=false, >10k entities`: dispatches a Celery background task and returns
       `celery_task_id`. Poll job status separately.
     """
-    from app.services.instructions_service import instructions_service
+    svc = InstructionsService(driver)
 
     await _verify_graph_ownership(graph_id, user_id)
-    ontology = await instructions_service.get_ontology(str(graph_id))
+    ontology = await svc.get_ontology(str(graph_id))
     if ontology is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

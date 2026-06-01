@@ -9,7 +9,7 @@ Tests:
 """
 
 import warnings
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -25,6 +25,7 @@ from app.schemas.graph_schemas import (
 from app.services.instructions_service import (
     InstructionsCompiler,
     InstructionsResolver,
+    InstructionsService,
     ResolvedInstructions,
 )
 
@@ -33,8 +34,15 @@ from app.services.instructions_service import (
 # ---------------------------------------------------------------------------
 
 
+def _mock_driver():
+    """Return a minimal AsyncDriver mock."""
+    driver = MagicMock()
+    driver.execute_query = AsyncMock()
+    return driver
+
+
 def _make_resolver(instructions_json=None) -> InstructionsResolver:
-    resolver = InstructionsResolver()
+    resolver = InstructionsResolver(_mock_driver())
     resolver._load_from_neo4j = AsyncMock(
         return_value=(
             GraphInstructions(**instructions_json) if instructions_json else None
@@ -234,7 +242,7 @@ class TestInstructionsResolver:
 
     @pytest.mark.unit
     async def test_graph_id_passed_to_neo4j_loader(self):
-        resolver = InstructionsResolver()
+        resolver = InstructionsResolver(_mock_driver())
         resolver._load_from_neo4j = AsyncMock(return_value=None)
         await resolver.resolve("specific-graph-id")
         resolver._load_from_neo4j.assert_awaited_once_with("specific-graph-id")
@@ -331,3 +339,109 @@ class TestInstructionsCompiler:
     def test_language_included_in_rules(self):
         result = self._compile(language="fr")
         assert "fr" in result
+
+
+# ---------------------------------------------------------------------------
+# Tests: InstructionsService — CRUD with mock AsyncDriver
+# ---------------------------------------------------------------------------
+
+
+def _eager_result(records):
+    """Build a minimal EagerResult-like mock."""
+    mock = MagicMock()
+    mock.records = records
+    return mock
+
+
+def _record(**kwargs):
+    """Build a dict-like Record mock."""
+    r = MagicMock()
+    r.__getitem__ = lambda self, k: kwargs[k]
+    r.get = lambda k, default=None: kwargs.get(k, default)
+    return r
+
+
+_GID = "00000000-0000-0000-0000-000000000001"
+_GID2 = "00000000-0000-0000-0000-000000000002"
+
+
+class TestInstructionsService:
+    @pytest.mark.unit
+    async def test_set_instructions_uses_driver_and_returns_response(self):
+        driver = _mock_driver()
+        driver.execute_query.return_value = _eager_result([_record(version=3)])
+        svc = InstructionsService(driver)
+        inst = GraphInstructions(domain="finance")
+
+        resp = await svc.set_instructions(_GID, inst)
+
+        driver.execute_query.assert_awaited_once()
+        # graph_id must appear in parameters to satisfy multi-tenancy
+        assert driver.execute_query.call_args.args[1]["graph_id"] == _GID
+        assert resp.version == 3
+        assert resp.instructions.domain == "finance"
+
+    @pytest.mark.unit
+    async def test_set_instructions_version_defaults_to_1_when_no_records(self):
+        driver = _mock_driver()
+        driver.execute_query.return_value = _eager_result([])
+        svc = InstructionsService(driver)
+
+        resp = await svc.set_instructions(_GID, GraphInstructions())
+        assert resp.version == 1
+
+    @pytest.mark.unit
+    async def test_get_instructions_returns_none_when_no_records(self):
+        driver = _mock_driver()
+        driver.execute_query.return_value = _eager_result([])
+        svc = InstructionsService(driver)
+
+        result = await svc.get_instructions(_GID)
+        assert result is None
+
+    @pytest.mark.unit
+    async def test_get_instructions_returns_none_when_config_empty(self):
+        driver = _mock_driver()
+        driver.execute_query.return_value = _eager_result(
+            [_record(config=None, version=1, updated_at=None)]
+        )
+        svc = InstructionsService(driver)
+
+        result = await svc.get_instructions(_GID)
+        assert result is None
+
+    @pytest.mark.unit
+    async def test_get_instructions_deserializes_stored_json(self):
+        driver = _mock_driver()
+        inst = GraphInstructions(domain="legal")
+        driver.execute_query.return_value = _eager_result(
+            [_record(config=inst.model_dump_json(), version=2, updated_at=None)]
+        )
+        svc = InstructionsService(driver)
+
+        result = await svc.get_instructions(_GID)
+        assert result is not None
+        assert result.instructions.domain == "legal"
+        assert result.version == 2
+
+    @pytest.mark.unit
+    async def test_get_instructions_passes_graph_id(self):
+        driver = _mock_driver()
+        driver.execute_query.return_value = _eager_result([])
+        svc = InstructionsService(driver)
+
+        await svc.get_instructions(_GID2)
+        params = driver.execute_query.call_args.args[1]
+        assert params["graph_id"] == _GID2
+
+    @pytest.mark.unit
+    async def test_delete_instructions_calls_driver(self):
+        driver = _mock_driver()
+        driver.execute_query.return_value = _eager_result([])
+        svc = InstructionsService(driver)
+
+        await svc.delete_instructions(_GID)
+
+        driver.execute_query.assert_awaited_once()
+        params = driver.execute_query.call_args.args[1]
+        assert params["graph_id"] == _GID

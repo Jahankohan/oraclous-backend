@@ -65,9 +65,9 @@ from app.schemas.graph_schemas import (
     TemporalFilter,
 )
 from app.services.instructions_service import (
+    InstructionsResolver,
     ResolvedInstructions,
     instructions_compiler,
-    instructions_resolver,
 )
 
 logger = get_logger(__name__)
@@ -450,7 +450,8 @@ class MultiTenantGraphRAGPipeline:
             start_time = datetime.now()
 
             # Resolve instructions once for all documents in this call
-            resolved = await instructions_resolver.resolve(self.graph_id, overrides)
+            resolver = InstructionsResolver(neo4j_client.async_driver)
+            resolved = await resolver.resolve(self.graph_id, overrides)
 
             # For large document sets, use background processing
             if len(documents) > 10 or background_tasks:
