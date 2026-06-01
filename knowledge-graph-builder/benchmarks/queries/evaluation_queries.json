@@ -1,0 +1,1085 @@
+[
+  {
+    "id": "q_current_00",
+    "bucket": "current",
+    "text": "What is the relationship between Henry Abara and Nexon Technologies?",
+    "expected_answer": "Henry Abara works at Nexon Technologies.",
+    "expected_memory_hint": "stable_0000",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_01",
+    "bucket": "current",
+    "text": "What is the relationship between Rosa Fernandez and Nexon Technologies?",
+    "expected_answer": "Rosa Fernandez works at Nexon Technologies.",
+    "expected_memory_hint": "stable_0013",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_02",
+    "bucket": "current",
+    "text": "What is the relationship between Xia Zhao and AlphaStream?",
+    "expected_answer": "Xia Zhao works at AlphaStream.",
+    "expected_memory_hint": "stable_0026",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_03",
+    "bucket": "current",
+    "text": "What is the relationship between Yuki Sato and SparkLabs?",
+    "expected_answer": "Yuki Sato works at SparkLabs.",
+    "expected_memory_hint": "stable_0039",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_04",
+    "bucket": "current",
+    "text": "What is the relationship between Lena Fischer and CloudForge?",
+    "expected_answer": "Lena Fischer works at CloudForge.",
+    "expected_memory_hint": "stable_0052",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_05",
+    "bucket": "current",
+    "text": "What is the relationship between Ivan Sokolov and SparkLabs?",
+    "expected_answer": "Ivan Sokolov works at SparkLabs.",
+    "expected_memory_hint": "stable_0065",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_06",
+    "bucket": "current",
+    "text": "What is the relationship between Fatima Alawi and Nexon Technologies?",
+    "expected_answer": "Fatima Alawi works at Nexon Technologies.",
+    "expected_memory_hint": "stable_0078",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_07",
+    "bucket": "current",
+    "text": "What is the relationship between Tina M\u00fcller and Fusion Networks?",
+    "expected_answer": "Tina M\u00fcller works at Fusion Networks.",
+    "expected_memory_hint": "stable_0091",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_08",
+    "bucket": "current",
+    "text": "What is the relationship between Patrick Dubois and SparkLabs?",
+    "expected_answer": "Patrick Dubois works at SparkLabs.",
+    "expected_memory_hint": "stable_0104",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_09",
+    "bucket": "current",
+    "text": "What is the relationship between Patrick Dubois and TerraCloud?",
+    "expected_answer": "Patrick Dubois works at TerraCloud.",
+    "expected_memory_hint": "stable_0117",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_10",
+    "bucket": "current",
+    "text": "What is the relationship between David Petrov and PostgreSQL?",
+    "expected_answer": "David Petrov is known for expertise in PostgreSQL.",
+    "expected_memory_hint": "stable_0130",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_11",
+    "bucket": "current",
+    "text": "What is the relationship between Karen Schmidt and Rust?",
+    "expected_answer": "Karen Schmidt is known for expertise in Rust.",
+    "expected_memory_hint": "stable_0143",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_12",
+    "bucket": "current",
+    "text": "What is the relationship between Patrick Dubois and Docker?",
+    "expected_answer": "Patrick Dubois is known for expertise in Docker.",
+    "expected_memory_hint": "stable_0156",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_13",
+    "bucket": "current",
+    "text": "What is the relationship between Ivan Sokolov and FastAPI?",
+    "expected_answer": "Ivan Sokolov is known for expertise in FastAPI.",
+    "expected_memory_hint": "stable_0169",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_14",
+    "bucket": "current",
+    "text": "What is the relationship between Bella Stone and Docker?",
+    "expected_answer": "Bella Stone is known for expertise in Docker.",
+    "expected_memory_hint": "stable_0182",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_15",
+    "bucket": "current",
+    "text": "What is the relationship between Xia Zhao and Rust?",
+    "expected_answer": "Xia Zhao is known for expertise in Rust.",
+    "expected_memory_hint": "stable_0195",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_16",
+    "bucket": "current",
+    "text": "What is the relationship between Maya Patel and Spark?",
+    "expected_answer": "Maya Patel is known for expertise in Spark.",
+    "expected_memory_hint": "stable_0208",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_17",
+    "bucket": "current",
+    "text": "What is the relationship between Marco Esposito and Kafka?",
+    "expected_answer": "Marco Esposito is known for expertise in Kafka.",
+    "expected_memory_hint": "stable_0221",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_18",
+    "bucket": "current",
+    "text": "What is the relationship between Tina M\u00fcller and Sydney?",
+    "expected_answer": "Tina M\u00fcller is based in Sydney.",
+    "expected_memory_hint": "stable_0234",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_19",
+    "bucket": "current",
+    "text": "What is the relationship between Bella Stone and New York?",
+    "expected_answer": "Bella Stone is based in New York.",
+    "expected_memory_hint": "stable_0247",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_20",
+    "bucket": "current",
+    "text": "What is the relationship between Bob Nakamura and Berlin?",
+    "expected_answer": "Bob Nakamura is based in Berlin.",
+    "expected_memory_hint": "stable_0260",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_21",
+    "bucket": "current",
+    "text": "What is the relationship between Patrick Dubois and Tokyo?",
+    "expected_answer": "Patrick Dubois is based in Tokyo.",
+    "expected_memory_hint": "stable_0273",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_22",
+    "bucket": "current",
+    "text": "What is the relationship between Patrick Dubois and Singapore?",
+    "expected_answer": "Patrick Dubois is based in Singapore.",
+    "expected_memory_hint": "stable_0286",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_23",
+    "bucket": "current",
+    "text": "What is the relationship between David Petrov and San Francisco?",
+    "expected_answer": "David Petrov is based in San Francisco.",
+    "expected_memory_hint": "stable_0299",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_24",
+    "bucket": "current",
+    "text": "What is the relationship between Apex Dynamics and Zurich?",
+    "expected_answer": "Apex Dynamics is headquartered in Zurich.",
+    "expected_memory_hint": "stable_0312",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_25",
+    "bucket": "current",
+    "text": "What is the relationship between Apex Dynamics and Amsterdam?",
+    "expected_answer": "Apex Dynamics is headquartered in Amsterdam.",
+    "expected_memory_hint": "stable_0325",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_26",
+    "bucket": "current",
+    "text": "What is the relationship between PeakSoft Ltd and New York?",
+    "expected_answer": "PeakSoft Ltd is headquartered in New York.",
+    "expected_memory_hint": "stable_0338",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_27",
+    "bucket": "current",
+    "text": "What is the relationship between ZenithWorks and Zurich?",
+    "expected_answer": "ZenithWorks is headquartered in Zurich.",
+    "expected_memory_hint": "stable_0351",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_28",
+    "bucket": "current",
+    "text": "What is the relationship between Ethan Fox and PCT/IB2023/965845?",
+    "expected_answer": "Ethan Fox co-invented PCT/IB2023/965845.",
+    "expected_memory_hint": "stable_0364",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_current_29",
+    "bucket": "current",
+    "text": "What is the relationship between Patrick Dubois and PCT/IB2025/709805?",
+    "expected_answer": "Patrick Dubois co-invented PCT/IB2025/709805.",
+    "expected_memory_hint": "stable_0377",
+    "temporal_filter": "current",
+    "graph_segment": "stable"
+  },
+  {
+    "id": "q_pit_recent_00",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Alice Chen hold?",
+    "expected_answer": "Alice Chen holds_position Engineering Manager",
+    "expected_object": "Engineering Manager",
+    "expected_memory_hint": "volatile_0000",
+    "temporal_filter": "current",
+    "at_date": "2022-09-17T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_01",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Olivia Brown hold?",
+    "expected_answer": "Olivia Brown holds_position CTO",
+    "expected_object": "CTO",
+    "expected_memory_hint": "volatile_0014",
+    "temporal_filter": "current",
+    "at_date": "2023-04-01T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_02",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Carlos Rivera hold?",
+    "expected_answer": "Carlos Rivera holds_position Senior PM",
+    "expected_object": "Senior PM",
+    "expected_memory_hint": "volatile_0028",
+    "temporal_filter": "current",
+    "at_date": "2022-05-30T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_03",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Carol Osei hold?",
+    "expected_answer": "Carol Osei holds_position Product Manager",
+    "expected_object": "Product Manager",
+    "expected_memory_hint": "volatile_0042",
+    "temporal_filter": "current",
+    "at_date": "2022-08-27T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_04",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Quinn Adeyemi hold?",
+    "expected_answer": "Quinn Adeyemi holds_position Director of Engineering",
+    "expected_object": "Director of Engineering",
+    "expected_memory_hint": "volatile_0056",
+    "temporal_filter": "current",
+    "at_date": "2022-08-19T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_05",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Ethan Fox hold?",
+    "expected_answer": "Ethan Fox holds_position CTO",
+    "expected_object": "CTO",
+    "expected_memory_hint": "volatile_0070",
+    "temporal_filter": "current",
+    "at_date": "2023-01-28T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_06",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Eva Martinez hold?",
+    "expected_answer": "Eva Martinez holds_position Site Reliability Engineer",
+    "expected_object": "Site Reliability Engineer",
+    "expected_memory_hint": "volatile_0084",
+    "temporal_filter": "current",
+    "at_date": "2023-03-12T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_07",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Sam Tanaka hold?",
+    "expected_answer": "Sam Tanaka holds_position Senior PM",
+    "expected_object": "Senior PM",
+    "expected_memory_hint": "volatile_0098",
+    "temporal_filter": "current",
+    "at_date": "2023-06-06T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_08",
+    "bucket": "point_in_time_recent",
+    "text": "What position does George King hold?",
+    "expected_answer": "George King holds_position Software Engineer",
+    "expected_object": "Software Engineer",
+    "expected_memory_hint": "volatile_0112",
+    "temporal_filter": "current",
+    "at_date": "2023-09-30T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_09",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Grace Liu hold?",
+    "expected_answer": "Grace Liu holds_position Product Manager",
+    "expected_object": "Product Manager",
+    "expected_memory_hint": "volatile_0126",
+    "temporal_filter": "current",
+    "at_date": "2023-09-20T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_10",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Umar Hassan hold?",
+    "expected_answer": "Umar Hassan holds_position Staff Engineer",
+    "expected_object": "Staff Engineer",
+    "expected_memory_hint": "volatile_0140",
+    "temporal_filter": "current",
+    "at_date": "2023-08-30T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_11",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Ivan Sokolov hold?",
+    "expected_answer": "Ivan Sokolov holds_position Senior Engineer",
+    "expected_object": "Senior Engineer",
+    "expected_memory_hint": "volatile_0154",
+    "temporal_filter": "current",
+    "at_date": "2023-08-11T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_12",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Isabel Torres hold?",
+    "expected_answer": "Isabel Torres holds_position DevOps Engineer",
+    "expected_object": "DevOps Engineer",
+    "expected_memory_hint": "volatile_0168",
+    "temporal_filter": "current",
+    "at_date": "2023-10-17T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_13",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Walter Ferreira hold?",
+    "expected_answer": "Walter Ferreira holds_position Data Scientist",
+    "expected_object": "Data Scientist",
+    "expected_memory_hint": "volatile_0182",
+    "temporal_filter": "current",
+    "at_date": "2024-03-11T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_14",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Kevin Okafor hold?",
+    "expected_answer": "Kevin Okafor holds_position Director of Engineering",
+    "expected_object": "Director of Engineering",
+    "expected_memory_hint": "volatile_0196",
+    "temporal_filter": "current",
+    "at_date": "2024-01-20T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_15",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Karen Schmidt hold?",
+    "expected_answer": "Karen Schmidt holds_position Site Reliability Engineer",
+    "expected_object": "Site Reliability Engineer",
+    "expected_memory_hint": "volatile_0210",
+    "temporal_filter": "current",
+    "at_date": "2023-11-13T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_16",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Yuki Sato hold?",
+    "expected_answer": "Yuki Sato holds_position DevOps Engineer",
+    "expected_object": "DevOps Engineer",
+    "expected_memory_hint": "volatile_0224",
+    "temporal_filter": "current",
+    "at_date": "2024-09-24T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_17",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Marco Esposito hold?",
+    "expected_answer": "Marco Esposito holds_position VP of Engineering",
+    "expected_object": "VP of Engineering",
+    "expected_memory_hint": "volatile_0238",
+    "temporal_filter": "current",
+    "at_date": "2024-06-05T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_18",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Maya Patel hold?",
+    "expected_answer": "Maya Patel holds_position Senior Engineer",
+    "expected_object": "Senior Engineer",
+    "expected_memory_hint": "volatile_0252",
+    "temporal_filter": "current",
+    "at_date": "2025-03-17T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_recent_19",
+    "bucket": "point_in_time_recent",
+    "text": "What position does Aaron Cole hold?",
+    "expected_answer": "Aaron Cole holds_position Staff Engineer",
+    "expected_object": "Staff Engineer",
+    "expected_memory_hint": "volatile_0266",
+    "temporal_filter": "current",
+    "at_date": "2024-06-01T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_00",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Frank Kowalski at that time?",
+    "expected_answer": "Frank Kowalski holds_position ML Engineer",
+    "expected_object": "ML Engineer",
+    "expected_memory_hint": "volatile_0005",
+    "temporal_filter": "all",
+    "at_date": "2022-01-26T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_01",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Walter Ferreira at that time?",
+    "expected_answer": "Walter Ferreira holds_position Site Reliability Engineer",
+    "expected_object": "Site Reliability Engineer",
+    "expected_memory_hint": "volatile_0022",
+    "temporal_filter": "all",
+    "at_date": "2022-03-18T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_02",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Nina Johansson at that time?",
+    "expected_answer": "Nina Johansson holds_position ML Engineer",
+    "expected_object": "ML Engineer",
+    "expected_memory_hint": "volatile_0039",
+    "temporal_filter": "all",
+    "at_date": "2022-05-08T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_03",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Quinn Adeyemi at that time?",
+    "expected_answer": "Quinn Adeyemi holds_position QA Lead",
+    "expected_object": "QA Lead",
+    "expected_memory_hint": "volatile_0056",
+    "temporal_filter": "all",
+    "at_date": "2022-06-28T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_04",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Helena Bj\u00f6rk at that time?",
+    "expected_answer": "Helena Bj\u00f6rk holds_position Data Scientist",
+    "expected_object": "Data Scientist",
+    "expected_memory_hint": "volatile_0073",
+    "temporal_filter": "all",
+    "at_date": "2022-08-18T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_05",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Karen Schmidt at that time?",
+    "expected_answer": "Karen Schmidt holds_position Principal Engineer",
+    "expected_object": "Principal Engineer",
+    "expected_memory_hint": "volatile_0090",
+    "temporal_filter": "all",
+    "at_date": "2022-10-08T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_06",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Bella Stone at that time?",
+    "expected_answer": "Bella Stone holds_position Principal Engineer",
+    "expected_object": "Principal Engineer",
+    "expected_memory_hint": "volatile_0107",
+    "temporal_filter": "all",
+    "at_date": "2022-11-28T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_07",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Eva Martinez at that time?",
+    "expected_answer": "Eva Martinez holds_position Engineering Manager",
+    "expected_object": "Engineering Manager",
+    "expected_memory_hint": "volatile_0124",
+    "temporal_filter": "all",
+    "at_date": "2023-01-18T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_08",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Vera Ivanova at that time?",
+    "expected_answer": "Vera Ivanova holds_position Software Engineer",
+    "expected_object": "Software Engineer",
+    "expected_memory_hint": "volatile_0141",
+    "temporal_filter": "all",
+    "at_date": "2023-03-10T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_09",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Marco Esposito at that time?",
+    "expected_answer": "Marco Esposito holds_position QA Lead",
+    "expected_object": "QA Lead",
+    "expected_memory_hint": "volatile_0158",
+    "temporal_filter": "all",
+    "at_date": "2023-04-30T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_10",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Patrick Dubois at that time?",
+    "expected_answer": "Patrick Dubois holds_position Senior Engineer",
+    "expected_object": "Senior Engineer",
+    "expected_memory_hint": "volatile_0175",
+    "temporal_filter": "all",
+    "at_date": "2023-06-20T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_11",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of George King at that time?",
+    "expected_answer": "George King holds_position ML Engineer",
+    "expected_object": "ML Engineer",
+    "expected_memory_hint": "volatile_0192",
+    "temporal_filter": "all",
+    "at_date": "2023-08-10T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_12",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of James Park at that time?",
+    "expected_answer": "James Park holds_position Staff Engineer",
+    "expected_object": "Staff Engineer",
+    "expected_memory_hint": "volatile_0209",
+    "temporal_filter": "all",
+    "at_date": "2023-09-30T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_13",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Aaron Cole at that time?",
+    "expected_answer": "Aaron Cole holds_position Product Manager",
+    "expected_object": "Product Manager",
+    "expected_memory_hint": "volatile_0226",
+    "temporal_filter": "all",
+    "at_date": "2023-11-20T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_14",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of David Petrov at that time?",
+    "expected_answer": "David Petrov holds_position CTO",
+    "expected_object": "CTO",
+    "expected_memory_hint": "volatile_0243",
+    "temporal_filter": "all",
+    "at_date": "2024-01-10T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_15",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Umar Hassan at that time?",
+    "expected_answer": "Umar Hassan holds_position Data Scientist",
+    "expected_object": "Data Scientist",
+    "expected_memory_hint": "volatile_0260",
+    "temporal_filter": "all",
+    "at_date": "2024-03-01T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_16",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Lena Fischer at that time?",
+    "expected_answer": "Lena Fischer holds_position Staff Engineer",
+    "expected_object": "Staff Engineer",
+    "expected_memory_hint": "volatile_0277",
+    "temporal_filter": "all",
+    "at_date": "2024-04-21T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_17",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Olivia Brown at that time?",
+    "expected_answer": "Olivia Brown holds_position DevOps Engineer",
+    "expected_object": "DevOps Engineer",
+    "expected_memory_hint": "volatile_0294",
+    "temporal_filter": "all",
+    "at_date": "2024-06-11T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_18",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Leo Nguyen at that time?",
+    "expected_answer": "Leo Nguyen holds_position Senior Engineer",
+    "expected_object": "Senior Engineer",
+    "expected_memory_hint": "volatile_0011",
+    "temporal_filter": "all",
+    "at_date": "2022-02-13T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_pit_distant_19",
+    "bucket": "point_in_time_distant",
+    "text": "What was the role of Carlos Rivera at that time?",
+    "expected_answer": "Carlos Rivera holds_position QA Lead",
+    "expected_object": "QA Lead",
+    "expected_memory_hint": "volatile_0028",
+    "temporal_filter": "all",
+    "at_date": "2022-04-05T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_00",
+    "bucket": "range",
+    "text": "List all positions held by David Petrov between 2022-01-10 and 2022-07-28.",
+    "expected_objects": [
+      "ML Engineer",
+      "Data Scientist"
+    ],
+    "expected_memory_hint": "volatile_0003",
+    "temporal_filter": "all",
+    "from_date": "2022-01-10T00:00:00+00:00",
+    "to_date": "2022-07-28T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_01",
+    "bucket": "range",
+    "text": "List all positions held by Walter Ferreira between 2022-03-08 and 2023-02-25.",
+    "expected_objects": [
+      "Site Reliability Engineer",
+      "Software Engineer",
+      "Data Scientist",
+      "ML Engineer"
+    ],
+    "expected_memory_hint": "volatile_0022",
+    "temporal_filter": "all",
+    "from_date": "2022-03-08T00:00:00+00:00",
+    "to_date": "2023-02-25T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_02",
+    "bucket": "range",
+    "text": "List all positions held by Bob Nakamura between 2022-05-04 and 2022-09-04.",
+    "expected_objects": [
+      "Engineering Manager",
+      "CTO"
+    ],
+    "expected_memory_hint": "volatile_0041",
+    "temporal_filter": "all",
+    "from_date": "2022-05-04T00:00:00+00:00",
+    "to_date": "2022-09-04T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_03",
+    "bucket": "range",
+    "text": "List all positions held by Umar Hassan between 2022-06-30 and 2023-02-14.",
+    "expected_objects": [
+      "Senior PM",
+      "Principal Engineer",
+      "ML Engineer"
+    ],
+    "expected_memory_hint": "volatile_0060",
+    "temporal_filter": "all",
+    "from_date": "2022-06-30T00:00:00+00:00",
+    "to_date": "2023-02-14T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_04",
+    "bucket": "range",
+    "text": "List all positions held by Nina Johansson between 2022-08-26 and 2023-10-10.",
+    "expected_objects": [
+      "QA Lead",
+      "Engineering Manager",
+      "Product Manager",
+      "Site Reliability Engineer"
+    ],
+    "expected_memory_hint": "volatile_0079",
+    "temporal_filter": "all",
+    "from_date": "2022-08-26T00:00:00+00:00",
+    "to_date": "2023-10-10T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_05",
+    "bucket": "range",
+    "text": "List all positions held by Sam Tanaka between 2022-10-22 and 2023-06-21.",
+    "expected_objects": [
+      "VP of Engineering",
+      "DevOps Engineer",
+      "Senior PM"
+    ],
+    "expected_memory_hint": "volatile_0098",
+    "temporal_filter": "all",
+    "from_date": "2022-10-22T00:00:00+00:00",
+    "to_date": "2023-06-21T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_06",
+    "bucket": "range",
+    "text": "List all positions held by Lena Fischer between 2022-12-18 and 2023-10-10.",
+    "expected_objects": [
+      "Staff Engineer",
+      "ML Engineer",
+      "Product Manager"
+    ],
+    "expected_memory_hint": "volatile_0117",
+    "temporal_filter": "all",
+    "from_date": "2022-12-18T00:00:00+00:00",
+    "to_date": "2023-10-10T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_07",
+    "bucket": "range",
+    "text": "List all positions held by Quinn Adeyemi between 2023-02-13 and 2024-02-27.",
+    "expected_objects": [
+      "Data Scientist",
+      "QA Lead",
+      "Software Engineer",
+      "Staff Engineer"
+    ],
+    "expected_memory_hint": "volatile_0136",
+    "temporal_filter": "all",
+    "from_date": "2023-02-13T00:00:00+00:00",
+    "to_date": "2024-02-27T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_08",
+    "bucket": "range",
+    "text": "List all positions held by Julia Weiss between 2023-04-11 and 2023-11-18.",
+    "expected_objects": [
+      "Senior Engineer",
+      "DevOps Engineer",
+      "VP of Engineering"
+    ],
+    "expected_memory_hint": "volatile_0155",
+    "temporal_filter": "all",
+    "from_date": "2023-04-11T00:00:00+00:00",
+    "to_date": "2023-11-18T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_09",
+    "bucket": "range",
+    "text": "List all positions held by Olivia Brown between 2023-06-07 and 2024-05-24.",
+    "expected_objects": [
+      "Director of Engineering",
+      "Data Scientist",
+      "ML Engineer"
+    ],
+    "expected_memory_hint": "volatile_0174",
+    "temporal_filter": "all",
+    "from_date": "2023-06-07T00:00:00+00:00",
+    "to_date": "2024-05-24T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_10",
+    "bucket": "range",
+    "text": "List all positions held by Helena Bj\u00f6rk between 2023-08-03 and 2024-01-11.",
+    "expected_objects": [
+      "DevOps Engineer",
+      "Principal Engineer"
+    ],
+    "expected_memory_hint": "volatile_0193",
+    "temporal_filter": "all",
+    "from_date": "2023-08-03T00:00:00+00:00",
+    "to_date": "2024-01-11T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_11",
+    "bucket": "range",
+    "text": "List all positions held by Maya Patel between 2023-09-29 and 2024-02-11.",
+    "expected_objects": [
+      "Software Engineer",
+      "Staff Engineer",
+      "Engineering Manager"
+    ],
+    "expected_memory_hint": "volatile_0212",
+    "temporal_filter": "all",
+    "from_date": "2023-09-29T00:00:00+00:00",
+    "to_date": "2024-02-11T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_12",
+    "bucket": "range",
+    "text": "List all positions held by Fatima Alawi between 2023-11-25 and 2024-01-31.",
+    "expected_objects": [
+      "Staff Engineer",
+      "ML Engineer"
+    ],
+    "expected_memory_hint": "volatile_0231",
+    "temporal_filter": "all",
+    "from_date": "2023-11-25T00:00:00+00:00",
+    "to_date": "2024-01-31T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_13",
+    "bucket": "range",
+    "text": "List all positions held by Karen Schmidt between 2024-01-21 and 2024-06-17.",
+    "expected_objects": [
+      "Principal Engineer",
+      "Staff Engineer",
+      "Senior PM"
+    ],
+    "expected_memory_hint": "volatile_0250",
+    "temporal_filter": "all",
+    "from_date": "2024-01-21T00:00:00+00:00",
+    "to_date": "2024-06-17T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_range_14",
+    "bucket": "range",
+    "text": "List all positions held by Diana Popescu between 2024-03-18 and 2024-06-28.",
+    "expected_objects": [
+      "Staff Engineer",
+      "QA Lead"
+    ],
+    "expected_memory_hint": "volatile_0269",
+    "temporal_filter": "all",
+    "from_date": "2024-03-18T00:00:00+00:00",
+    "to_date": "2024-06-28T00:00:00+00:00",
+    "graph_segment": "volatile"
+  },
+  {
+    "id": "q_post_contradiction_00",
+    "bucket": "post_contradiction",
+    "text": "Who employs Alice Chen currently?",
+    "expected_answer": "Alice Chen is employed by NovaMind.",
+    "expected_object": "NovaMind",
+    "expected_memory_hint": "contradiction_0000",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_01",
+    "bucket": "post_contradiction",
+    "text": "Who employs Noah Williams currently?",
+    "expected_answer": "Noah Williams is employed by Nexon Technologies.",
+    "expected_object": "Nexon Technologies",
+    "expected_memory_hint": "contradiction_0013",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_02",
+    "bucket": "post_contradiction",
+    "text": "Who employs Aaron Cole currently?",
+    "expected_answer": "Aaron Cole is employed by CloudForge.",
+    "expected_object": "CloudForge",
+    "expected_memory_hint": "contradiction_0026",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_03",
+    "bucket": "post_contradiction",
+    "text": "Who employs Nina Johansson currently?",
+    "expected_answer": "Nina Johansson is employed by TerraCloud.",
+    "expected_object": "TerraCloud",
+    "expected_memory_hint": "contradiction_0039",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_04",
+    "bucket": "post_contradiction",
+    "text": "Who employs Maya Patel currently?",
+    "expected_answer": "Maya Patel is employed by QuantumLeap Systems.",
+    "expected_object": "QuantumLeap Systems",
+    "expected_memory_hint": "contradiction_0052",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_05",
+    "bucket": "post_contradiction",
+    "text": "Who employs Zara Ahmed currently?",
+    "expected_answer": "Zara Ahmed is employed by Fusion Networks.",
+    "expected_object": "Fusion Networks",
+    "expected_memory_hint": "contradiction_0065",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_06",
+    "bucket": "post_contradiction",
+    "text": "Who employs Marco Esposito currently?",
+    "expected_answer": "Marco Esposito is employed by BlueStar Analytics.",
+    "expected_object": "BlueStar Analytics",
+    "expected_memory_hint": "contradiction_0078",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_07",
+    "bucket": "post_contradiction",
+    "text": "Who employs Leo Nguyen currently?",
+    "expected_answer": "Leo Nguyen is employed by AlphaStream.",
+    "expected_object": "AlphaStream",
+    "expected_memory_hint": "contradiction_0091",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_08",
+    "bucket": "post_contradiction",
+    "text": "Who employs Yuki Sato currently?",
+    "expected_answer": "Yuki Sato is employed by Lighthouse AI.",
+    "expected_object": "Lighthouse AI",
+    "expected_memory_hint": "contradiction_0104",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_09",
+    "bucket": "post_contradiction",
+    "text": "Who employs Lena Fischer currently?",
+    "expected_answer": "Lena Fischer is employed by OrbitSystems.",
+    "expected_object": "OrbitSystems",
+    "expected_memory_hint": "contradiction_0117",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_10",
+    "bucket": "post_contradiction",
+    "text": "Who employs Karen Schmidt currently?",
+    "expected_answer": "Karen Schmidt is employed by NanoSoft.",
+    "expected_object": "NanoSoft",
+    "expected_memory_hint": "contradiction_0130",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_11",
+    "bucket": "post_contradiction",
+    "text": "Who employs Xia Zhao currently?",
+    "expected_answer": "Xia Zhao is employed by Apex Dynamics.",
+    "expected_object": "Apex Dynamics",
+    "expected_memory_hint": "contradiction_0143",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_12",
+    "bucket": "post_contradiction",
+    "text": "Who employs Kevin Okafor currently?",
+    "expected_answer": "Kevin Okafor is employed by PeakSoft Ltd.",
+    "expected_object": "PeakSoft Ltd",
+    "expected_memory_hint": "contradiction_0156",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_13",
+    "bucket": "post_contradiction",
+    "text": "Who employs James Park currently?",
+    "expected_answer": "James Park is employed by ProtonWave.",
+    "expected_object": "ProtonWave",
+    "expected_memory_hint": "contradiction_0169",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  },
+  {
+    "id": "q_post_contradiction_14",
+    "bucket": "post_contradiction",
+    "text": "Who employs Walter Ferreira currently?",
+    "expected_answer": "Walter Ferreira is employed by ZenithWorks.",
+    "expected_object": "ZenithWorks",
+    "expected_memory_hint": "contradiction_0182",
+    "temporal_filter": "current",
+    "graph_segment": "contradictory"
+  }
+]
