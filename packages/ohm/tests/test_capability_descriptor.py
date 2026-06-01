@@ -87,6 +87,21 @@ def _parse(data: dict) -> CapabilityDescriptor:
 # ---------------------------------------------------------------------------
 # Fixtures: minimal valid payloads for each kind
 # ---------------------------------------------------------------------------
+#
+# NOTE — created_at / updated_at fields are intentionally absent from these fixtures.
+#
+# The CapabilityDescriptor kind-discriminated union (ToolDescriptor, SkillDescriptor,
+# AgentDescriptor, HarnessDescriptor, HumanRoleDescriptor) does NOT define
+# created_at or updated_at at the schema-validation layer. These timestamps are
+# persistence-layer concerns: they are injected or defaulted by the ORM / database
+# when a descriptor record is written — not declared in the OHM Pydantic schemas.
+#
+# All descriptor models use ConfigDict(extra="ignore"), so if a payload carries
+# these fields they are silently dropped at parse time and do not cause a
+# ValidationError. Test fixtures therefore correctly omit them — no schema change
+# is needed or appropriate here.
+#
+# Reference: ORAA-94 gate item 4, ORAA-105.
 
 MINIMAL_TOOL: dict = {
     "kind": "tool",
