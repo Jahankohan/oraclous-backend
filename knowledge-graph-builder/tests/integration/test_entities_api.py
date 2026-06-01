@@ -134,6 +134,28 @@ class TestListEntitiesEndpoint:
 
     @pytest.mark.integration
     @pytest.mark.api
+    async def test_unknown_graph_returns_404(self, async_client):
+        """verify_graph_access raises HTTPException 404 for unknown graph → propagated."""
+        from fastapi import HTTPException
+
+        auth_patch = _patch_auth()
+        try:
+            with patch(
+                "app.api.v1.endpoints.entities.verify_graph_access",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(status_code=404, detail="Graph not found"),
+            ):
+                response = await async_client.get(
+                    f"/api/v1/graphs/{GRAPH_ID}/entities",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_patch.stop()
+
+        assert response.status_code == 404
+
+    @pytest.mark.integration
+    @pytest.mark.api
     async def test_q_parameter_forwarded_to_service(self, async_client):
         """?q=alice is passed as q= to list_entities()."""
         service_result = _list_result([_entity_item("e-3", "Alice", "Person")])

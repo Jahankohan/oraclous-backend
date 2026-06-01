@@ -1,6 +1,6 @@
 """GET /graphs/{graph_id}/entities — entity explorer endpoint (ORA-372)."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,8 +12,6 @@ from app.services.analytics_service import GraphAnalyticsService
 
 router = APIRouter()
 logger = get_logger(__name__)
-
-_VALID_SORT = {"confidence_desc", "name_asc", "degree_desc"}
 
 
 def _get_analytics_service() -> GraphAnalyticsService:
@@ -30,15 +28,15 @@ async def list_entities(
     q: Annotated[
         str | None, Query(description="Full-text search on name and aliases")
     ] = None,
-    type: Annotated[
+    type_: Annotated[
         list[str] | None,
-        Query(description="Filter by entity type (multi-value)"),
+        Query(alias="type", description="Filter by entity type (multi-value)"),
     ] = None,
     community_id: Annotated[
         str | None, Query(description="Filter by community id")
     ] = None,
     sort: Annotated[
-        str,
+        Literal["confidence_desc", "name_asc", "degree_desc"],
         Query(description="Sort order: confidence_desc | name_asc | degree_desc"),
     ] = "confidence_desc",
     page: Annotated[int, Query(ge=1, description="Page number (1-based)")] = 1,
@@ -55,17 +53,11 @@ async def list_entities(
     """
     await verify_graph_access(str(graph_id), "read", user_id)
 
-    if sort not in _VALID_SORT:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"sort must be one of {sorted(_VALID_SORT)}",
-        )
-
     try:
         result = await analytics.list_entities(
             graph_id=str(graph_id),
             q=q,
-            types=type,
+            types=type_,
             community_id=community_id,
             sort=sort,
             page=page,
