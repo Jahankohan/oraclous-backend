@@ -35,8 +35,16 @@ def _make_session(single_return=None, data_return=None):
     mock_result.single = AsyncMock(return_value=single_return)
     mock_result.data = AsyncMock(return_value=data_return or [])
 
+    tx = AsyncMock()
+    tx.run = AsyncMock(return_value=mock_result)
+    tx.commit = AsyncMock()
+    tx.rollback = AsyncMock()
+    tx.__aenter__ = AsyncMock(return_value=tx)
+    tx.__aexit__ = AsyncMock(return_value=None)
+
     session = AsyncMock()
     session.run = AsyncMock(return_value=mock_result)
+    session.begin_transaction = MagicMock(return_value=tx)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=None)
     return session
@@ -52,6 +60,7 @@ def _make_driver(single_return=None, data_return=None):
 # ── Test 1: audit write is called on SA create ─────────────────────────────
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_audit_called_on_create():
     """log_sa_security_event must be invoked with event_type=service_account.created."""
@@ -85,6 +94,7 @@ async def test_audit_called_on_create():
 # ── Test 2: audit write is called on key rotate ────────────────────────────
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_audit_called_on_rotate():
     """log_sa_security_event must be invoked with event_type=service_account.key_rotated."""
@@ -123,12 +133,13 @@ async def test_audit_called_on_rotate():
     mock_audit.assert_called_once()
     call_kwargs = mock_audit.call_args.kwargs
     assert call_kwargs["event_type"] == "service_account.key_rotated"
-    assert call_kwargs["key_prefix"] == "osk_new1"
+    assert call_kwargs["actor_id"] == USER_ID
 
 
 # ── Test 3: audit write is called on SA revoke ─────────────────────────────
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_audit_called_on_revoke():
     """log_sa_security_event must be invoked with event_type=service_account.revoked."""
@@ -160,9 +171,10 @@ async def test_audit_called_on_revoke():
 # ── Test 4: raw API key / bcrypt hash never in audit params ───────────────
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_no_raw_key_in_audit_params():
-    """The audit call must never receive the raw api_key or a bcrypt hash as key_prefix."""
+    """The audit call must never receive the raw api_key or a bcrypt hash as actor_id."""
     service = ServiceAccountService()
     driver, session = _make_driver()
 
@@ -184,35 +196,31 @@ async def test_no_raw_key_in_audit_params():
         )
 
     call_kwargs = mock_audit.call_args.kwargs
-    # key_prefix must not be the full raw API key or a bcrypt hash
-    assert call_kwargs.get("key_prefix") != RAW_KEY
-    assert call_kwargs.get("key_prefix") != BCRYPT_HASH
-    # key_prefix may be None or the short prefix string
-    kp = call_kwargs.get("key_prefix")
-    assert kp is None or kp == KEY_PREFIX
+    # actor_id must not be the raw API key or a bcrypt hash — only a user UUID
+    assert call_kwargs.get("actor_id") != RAW_KEY
+    assert call_kwargs.get("actor_id") != BCRYPT_HASH
 
 
 # ── Test 5: tenant isolation in Cypher ────────────────────────────────────
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_tenant_isolation_in_cypher():
     """log_sa_security_event Cypher must include tenant_id in the WHERE clause."""
-    session = AsyncMock()
-    session.run = AsyncMock(return_value=AsyncMock())
+    tx = AsyncMock()
+    tx.run = AsyncMock(return_value=AsyncMock())
 
     await log_sa_security_event(
-        session=session,
+        tx,
         event_type="service_account.created",
         sa_id=SA_ID,
-        actor_user_id=USER_ID,
-        home_graph_id=GRAPH_ID,
         tenant_id=TENANT_ID,
-        key_prefix=KEY_PREFIX,
+        actor_id=USER_ID,
     )
 
-    session.run.assert_called_once()
-    call_args = session.run.call_args
+    tx.run.assert_called_once()
+    call_args = tx.run.call_args
     cypher = call_args.args[0] if call_args.args else call_args[0][0]
     params = call_args.args[1] if len(call_args.args) > 1 else call_args[0][1]
 
@@ -224,18 +232,18 @@ async def test_tenant_isolation_in_cypher():
 # ── Test 6: audit errors propagate (not swallowed) ────────────────────────
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_audit_errors_propagate():
     """Exceptions in log_sa_security_event must not be caught — they must bubble up."""
-    session = AsyncMock()
-    session.run = AsyncMock(side_effect=RuntimeError("Neo4j write failed"))
+    tx = AsyncMock()
+    tx.run = AsyncMock(side_effect=RuntimeError("Neo4j write failed"))
 
     with pytest.raises(RuntimeError, match="Neo4j write failed"):
         await log_sa_security_event(
-            session=session,
+            tx,
             event_type="service_account.created",
             sa_id=SA_ID,
-            actor_user_id=USER_ID,
-            home_graph_id=GRAPH_ID,
             tenant_id=TENANT_ID,
+            actor_id=USER_ID,
         )

@@ -809,33 +809,27 @@ _T2 = "2026-01-01T11:00:00+00:00"
 _T3 = "2026-01-01T12:00:00+00:00"
 
 _AUDIT_CREATED = {
-    "audit_log_id": str(uuid.uuid4()),
+    "event_id": str(uuid.uuid4()),
     "event_type": "service_account.created",
     "sa_id": SA_ID,
-    "actor_user_id": USER_ID,
-    "home_graph_id": HOME_GRAPH_ID,
+    "actor_id": USER_ID,
     "tenant_id": TENANT_ID,
-    "key_prefix": "osk_abc1",
     "timestamp": _T1,
 }
 _AUDIT_ROTATED = {
-    "audit_log_id": str(uuid.uuid4()),
+    "event_id": str(uuid.uuid4()),
     "event_type": "service_account.key_rotated",
     "sa_id": SA_ID,
-    "actor_user_id": USER_ID,
-    "home_graph_id": HOME_GRAPH_ID,
+    "actor_id": USER_ID,
     "tenant_id": TENANT_ID,
-    "key_prefix": "osk_new1",
     "timestamp": _T2,
 }
 _AUDIT_REVOKED = {
-    "audit_log_id": str(uuid.uuid4()),
+    "event_id": str(uuid.uuid4()),
     "event_type": "service_account.revoked",
     "sa_id": SA_ID,
-    "actor_user_id": USER_ID,
-    "home_graph_id": HOME_GRAPH_ID,
+    "actor_id": USER_ID,
     "tenant_id": TENANT_ID,
-    "key_prefix": None,
     "timestamp": _T3,
 }
 

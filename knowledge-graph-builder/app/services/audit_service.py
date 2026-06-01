@@ -3,6 +3,7 @@
 import hashlib
 import time
 import uuid
+from datetime import UTC, datetime
 
 from app.core.logging import get_logger
 
@@ -83,6 +84,6 @@ async def log_sa_security_event(
             "sa_id": sa_id,
             "tenant_id": tenant_id,
             "actor_id": actor_id,
-            "timestamp": int(time.time()),
+            "timestamp": datetime.now(UTC),
         },
     )

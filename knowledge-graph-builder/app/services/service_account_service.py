@@ -172,7 +172,11 @@ class ServiceAccountService:
                     },
                 )
                 await log_sa_security_event(
-                    tx, "sa_created", sa_id, tenant_id, created_by_user_id
+                    tx,
+                    event_type="service_account.created",
+                    sa_id=sa_id,
+                    tenant_id=tenant_id,
+                    actor_id=created_by_user_id,
                 )
                 await tx.commit()
 
@@ -304,7 +308,11 @@ class ServiceAccountService:
                     await tx.rollback()
                     return False
                 await log_sa_security_event(
-                    tx, "sa_revoked", sa_id, tenant_id, actor_user_id or sa_id
+                    tx,
+                    event_type="service_account.revoked",
+                    sa_id=sa_id,
+                    tenant_id=tenant_id,
+                    actor_id=actor_user_id or sa_id,
                 )
                 await tx.commit()
 
@@ -352,7 +360,11 @@ class ServiceAccountService:
                     },
                 )
                 await log_sa_security_event(
-                    tx, "key_rotated", sa_id, tenant_id, created_by_user_id
+                    tx,
+                    event_type="service_account.key_rotated",
+                    sa_id=sa_id,
+                    tenant_id=tenant_id,
+                    actor_id=created_by_user_id,
                 )
                 await tx.commit()
 
