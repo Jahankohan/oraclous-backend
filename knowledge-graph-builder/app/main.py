@@ -193,9 +193,12 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             content={"error_code": code, "message": msg, "detail": str(exc.detail)},
         )
     # All other status codes — return plain detail without a KGB code.
+    # Forward exc.headers (e.g. WWW-Authenticate on 401) per RFC 7235 §3.1.
+    exc_headers = getattr(exc, "headers", None) or {}
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
+        headers=exc_headers if exc_headers else None,
     )
 
 

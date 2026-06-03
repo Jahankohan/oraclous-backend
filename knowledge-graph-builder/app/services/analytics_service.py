@@ -77,6 +77,15 @@ def _pick_entity_type(labels: list[str] | None, member_label: str) -> str:
     return member_label
 
 
+# ORDER BY clauses for list_entities() sort variants.
+# Values are compile-time constants — never user input — so interpolation is safe.
+_ENTITY_LIST_SORT_MAP: dict[str, str] = {
+    "confidence_desc": "coalesce(e.confidence, 0.0) DESC",
+    "name_asc": "e.name ASC",
+    "degree_desc": "degree DESC",
+}
+
+
 class GraphAnalyticsService:
     """
     Dedicated service for graph analytics and algorithm execution.
@@ -2038,6 +2047,106 @@ class GraphAnalyticsService:
             analysis_results["success"] = False
 
         return analysis_results
+
+    # ==================== ENTITY EXPLORER ====================
+
+    async def list_entities(
+        self,
+        graph_id: str,
+        q: str | None = None,
+        types: list[str] | None = None,
+        community_id: str | None = None,
+        sort: str = "confidence_desc",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict:
+        """Return a paginated, filterable list of __Entity__ nodes for a graph.
+
+        Multi-tenant safe: graph_id scoped on every Cypher query.
+        All user-supplied values are Cypher parameters; the ORDER BY clause
+        is resolved from a closed compile-time mapping (_ENTITY_LIST_SORT_MAP),
+        never from user input.
+        """
+        params: dict[str, Any] = {
+            "graph_id": graph_id,
+            "page_size": page_size,
+            "skip": (page - 1) * page_size,
+        }
+
+        # When filtering by community, a required MATCH enforces membership.
+        if community_id:
+            base_match = (
+                "MATCH (e:__Entity__ {graph_id: $graph_id})"
+                "-[:IN_COMMUNITY]->(filter_c:__Community__ {id: $community_id, graph_id: $graph_id})"
+            )
+            params["community_id"] = community_id
+        else:
+            base_match = "MATCH (e:__Entity__ {graph_id: $graph_id})"
+
+        # Predefined WHERE clause fragments — values go into params, never Cypher text.
+        where_clauses: list[str] = []
+        if q:
+            where_clauses.append(
+                "(e.name CONTAINS $q"
+                " OR any(alias IN coalesce(e.aliases, []) WHERE alias CONTAINS $q))"
+            )
+            params["q"] = q
+        if types:
+            where_clauses.append("e.type IN $types")
+            params["types"] = types
+
+        where_clause = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+        # ORDER BY resolved from compile-time constant map; unknown sort falls back to default.
+        order_by = _ENTITY_LIST_SORT_MAP.get(sort, "coalesce(e.confidence, 0.0) DESC")
+
+        count_query = f"""
+        {base_match}
+        {where_clause}
+        RETURN count(e) AS total
+        """
+
+        list_query = f"""
+        {base_match}
+        {where_clause}
+        WITH e
+        OPTIONAL MATCH (e)-[degree_r]-()
+        WITH e, count(degree_r) AS degree
+        OPTIONAL MATCH (e)-[:IN_COMMUNITY {{graph_id: $graph_id, level: 1}}]->(comm:__Community__ {{graph_id: $graph_id}})
+        WITH e, degree, coalesce(e.confidence, 0.0) AS confidence, comm.id AS entity_community_id
+        ORDER BY {order_by}
+        SKIP $skip LIMIT $page_size
+        RETURN elementId(e) AS id,
+               e.name AS name,
+               e.type AS type,
+               confidence,
+               entity_community_id AS community_id,
+               degree
+        """
+
+        count_results = await neo4j_client.execute_query(count_query, params)
+        total = count_results[0]["total"] if count_results else 0
+
+        list_results = await neo4j_client.execute_query(list_query, params)
+
+        items = [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "type": r["type"],
+                "confidence": r["confidence"],
+                "community_id": r["community_id"],
+                "degree": r["degree"],
+            }
+            for r in list_results
+        ]
+
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
 
 
 # Create global instance
