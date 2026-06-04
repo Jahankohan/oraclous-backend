@@ -42,9 +42,7 @@ _AGENT_ID = f"integ-story022-agent-{_RUN}"
 _USER_ID = f"integ-story022-user-{_RUN}"
 _SLUG = f"test-slug-{_RUN}"
 
-# Integration router is mounted under /api/v1 inside api_router which is itself
-# mounted at /api/v1 — resulting in the double prefix.
-_PREFIX = f"/api/v1/api/v1/graphs/{_GRAPH_ID}/agents/{_AGENT_ID}"
+_PREFIX = f"/api/v1/graphs/{_GRAPH_ID}/agents/{_AGENT_ID}"
 _PUBLIC_PREFIX = f"/public/agents/{_SLUG}"
 
 _PUBLISH_BODY = {
@@ -181,9 +179,7 @@ class TestPublishAgent:
         assert resp1.status_code == 201
 
         # Second publish with same slug on a different (fake) agent
-        other_prefix = (
-            f"/api/v1/api/v1/graphs/{_GRAPH_ID}/agents/other-agent-99/publish"
-        )
+        other_prefix = f"/api/v1/graphs/{_GRAPH_ID}/agents/other-agent-99/publish"
         resp2 = await async_client.post(other_prefix, json=_PUBLISH_BODY)
         assert resp2.status_code == 409
 

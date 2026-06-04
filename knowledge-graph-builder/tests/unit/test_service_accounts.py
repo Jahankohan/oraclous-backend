@@ -15,6 +15,32 @@ from app.services.service_account_service import ServiceAccountService
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
+def _make_tx_mock(sa_record=None):
+    """Build a mock AsyncTransaction for atomicity tests."""
+    mock_result = AsyncMock()
+    mock_result.single = AsyncMock(return_value=sa_record)
+
+    tx = AsyncMock()
+    tx.run = AsyncMock(return_value=mock_result)
+    tx.commit = AsyncMock()
+    tx.rollback = AsyncMock()
+    tx.__aenter__ = AsyncMock(return_value=tx)
+    tx.__aexit__ = AsyncMock(return_value=None)
+    return tx
+
+
+def _make_driver_with_tx(tx_mock):
+    """Build a mock AsyncDriver that routes session.begin_transaction() to tx_mock."""
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    session.begin_transaction = MagicMock(return_value=tx_mock)
+
+    driver = MagicMock()
+    driver.session = MagicMock(return_value=session)
+    return driver
+
+
 def _make_driver(query_results: list[dict] | dict | None = None):
     """Build a mock AsyncDriver that returns the given data."""
     mock_result = AsyncMock()
@@ -30,8 +56,16 @@ def _make_driver(query_results: list[dict] | dict | None = None):
         mock_result.single = AsyncMock(return_value=None)
         mock_result.data = AsyncMock(return_value=[])
 
+    mock_tx = AsyncMock()
+    mock_tx.run = AsyncMock(return_value=mock_result)
+    mock_tx.commit = AsyncMock()
+    mock_tx.rollback = AsyncMock()
+    mock_tx.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx.__aexit__ = AsyncMock(return_value=None)
+
     mock_session = AsyncMock()
     mock_session.run = AsyncMock(return_value=mock_result)
+    mock_session.begin_transaction = MagicMock(return_value=mock_tx)
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=None)
 
@@ -687,3 +721,57 @@ async def test_update_service_account_rejects_extra_fields_at_runtime():
         await service.update_service_account(driver, SA_ID, TENANT_ID, name="updated")
 
     mock_guard.assert_called_once_with({"name": "updated"})
+
+
+# ── ORA-332: begin_transaction atomicity rollback tests ───────────────────
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_revoke_sa_tx_sa_write_fails_no_audit_written():
+    """Test A — SA Cypher raises → audit log never written, commit never called."""
+    service = ServiceAccountService()
+    tx = _make_tx_mock(sa_record={"sa_id": SA_ID})
+    tx.run = AsyncMock(side_effect=RuntimeError("Neo4j write failure"))
+    driver = _make_driver_with_tx(tx)
+
+    with patch(
+        "app.services.service_account_service.log_sa_security_event"
+    ) as mock_audit:
+        with pytest.raises(RuntimeError):
+            await service.revoke_service_account(driver, SA_ID, TENANT_ID)
+
+    mock_audit.assert_not_called()
+    tx.commit.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_revoke_sa_tx_audit_write_fails_commit_not_called():
+    """Test B — Audit Cypher raises → SA op rolled back (commit not called)."""
+    service = ServiceAccountService()
+    tx = _make_tx_mock()
+    first_result = AsyncMock()
+    first_result.single = AsyncMock(return_value={"sa_id": SA_ID})
+    tx.run = AsyncMock(side_effect=[first_result, RuntimeError("Audit write failure")])
+    driver = _make_driver_with_tx(tx)
+
+    with pytest.raises(RuntimeError):
+        await service.revoke_service_account(driver, SA_ID, TENANT_ID)
+
+    tx.commit.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_revoke_sa_tx_happy_path_commit_called_once():
+    """Test C — Both SA and audit writes succeed → commit called exactly once."""
+    service = ServiceAccountService()
+    tx = _make_tx_mock(sa_record={"sa_id": SA_ID})
+    driver = _make_driver_with_tx(tx)
+    service._revoke_auth_keys = AsyncMock()
+
+    result = await service.revoke_service_account(driver, SA_ID, TENANT_ID)
+
+    assert result is True
+    tx.commit.assert_called_once()

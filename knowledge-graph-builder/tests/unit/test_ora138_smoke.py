@@ -34,6 +34,15 @@ def _read(rel: str) -> str:
         return f.read()
 
 
+def _read_index_sources() -> str:
+    """Combined source for index checks — snapshot_service imports SHARED from graph_node_service."""
+    return (
+        _read("services/graph_node_service.py")
+        + "\n"
+        + _read("services/snapshot_service.py")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Suite 1: snapshot_service.py — index definitions
 # ---------------------------------------------------------------------------
@@ -44,7 +53,7 @@ class TestSnapshotServiceTemporalIndex:
     """Verify rel_temporal_idx composite index is defined correctly."""
 
     def _get_index_lines(self) -> list[str]:
-        src = _read("services/snapshot_service.py")
+        src = _read_index_sources()
         return [
             line.strip()
             for line in src.splitlines()
@@ -53,15 +62,14 @@ class TestSnapshotServiceTemporalIndex:
 
     def test_rel_temporal_idx_present(self):
         """The composite temporal index for relationships must exist."""
-        src = _read("services/snapshot_service.py")
+        src = _read_index_sources()
         assert "rel_temporal_idx" in src, (
             "Missing rel_temporal_idx — ORA-138 fix not applied or index renamed"
         )
 
     def test_rel_temporal_idx_covers_valid_from(self):
         """Composite index must include r.valid_from."""
-        src = _read("services/snapshot_service.py")
-        # Find the line containing rel_temporal_idx
+        src = _read_index_sources()
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
                 assert "valid_from" in line, (
@@ -72,7 +80,7 @@ class TestSnapshotServiceTemporalIndex:
 
     def test_rel_temporal_idx_covers_valid_to(self):
         """Composite index must include r.valid_to."""
-        src = _read("services/snapshot_service.py")
+        src = _read_index_sources()
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
                 assert "valid_to" in line, (
@@ -83,13 +91,12 @@ class TestSnapshotServiceTemporalIndex:
 
     def test_rel_temporal_idx_covers_graph_id(self):
         """Composite index must lead with graph_id for multi-tenant partitioning."""
-        src = _read("services/snapshot_service.py")
+        src = _read_index_sources()
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
                 assert "graph_id" in line, (
                     f"rel_temporal_idx missing graph_id — multi-tenant scan risk: {line!r}"
                 )
-                # graph_id should appear before valid_from in the index definition
                 gi = line.index("graph_id")
                 vf = line.index("valid_from")
                 assert gi < vf, (
@@ -101,7 +108,7 @@ class TestSnapshotServiceTemporalIndex:
 
     def test_rel_temporal_idx_is_relationship_index(self):
         """Index must be on relationships ()-[r]-(), not nodes."""
-        src = _read("services/snapshot_service.py")
+        src = _read_index_sources()
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
                 assert "()-[r]-()" in line or "FOR ()-[" in line, (
@@ -112,7 +119,7 @@ class TestSnapshotServiceTemporalIndex:
 
     def test_rel_temporal_idx_uses_if_not_exists(self):
         """Index creation must be idempotent (IF NOT EXISTS)."""
-        src = _read("services/snapshot_service.py")
+        src = _read_index_sources()
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
                 assert "IF NOT EXISTS" in line, (
@@ -122,19 +129,33 @@ class TestSnapshotServiceTemporalIndex:
         pytest.fail("rel_temporal_idx CREATE INDEX statement not found")
 
     def test_pre_existing_indexes_not_removed(self):
-        """Regression: pre-existing versioning indexes must still be present."""
-        src = _read("services/snapshot_service.py")
-        required = [
+        """Regression: pre-existing versioning indexes must still be present in each service."""
+        # Shared indexes now live in graph_node_service.SHARED_TEMPORAL_INDEX_STATEMENTS
+        gns_src = _read("services/graph_node_service.py")
+        for idx in (
             "entity_transaction_time_idx",
+            "rel_temporal_idx",
+            "rel_valid_from_idx",
+            "rel_valid_to_idx",
+        ):
+            assert idx in gns_src, (
+                f"Shared index {idx!r} was removed from graph_node_service — regression"
+            )
+        # Snapshot-only indexes must stay in snapshot_service
+        snap_src = _read("services/snapshot_service.py")
+        for idx in (
             "entity_invalidated_at_idx",
             "version_graph_idx",
             "version_number_idx",
             "rel_version_composite_idx",
-        ]
-        for idx in required:
-            assert idx in src, (
-                f"Pre-existing index {idx!r} was removed — regression in ORA-138 fix"
+        ):
+            assert idx in snap_src, (
+                f"Pre-existing index {idx!r} was removed from snapshot_service — regression in ORA-138 fix"
             )
+        # snapshot_service must import the shared tuple
+        assert "SHARED_TEMPORAL_INDEX_STATEMENTS" in snap_src, (
+            "snapshot_service must import SHARED_TEMPORAL_INDEX_STATEMENTS from graph_node_service"
+        )
 
     def test_ensure_indexes_is_async(self):
         """ensure_indexes must be an async method (called with await in lifespan)."""
@@ -338,7 +359,7 @@ class TestIndexStrategyReview:
 
     def test_composite_approach_is_graph_id_scoped(self):
         """Composite index includes graph_id — avoids cross-tenant index scans."""
-        src = _read("services/snapshot_service.py")
+        src = _read_index_sources()
         for line in src.splitlines():
             if "rel_temporal_idx" in line and "CREATE INDEX" in line:
                 assert "graph_id" in line
@@ -351,7 +372,7 @@ class TestIndexStrategyReview:
         Neo4j cannot use the composite rel_temporal_idx for single-property
         multihop traversal steps — a dedicated index is required.
         """
-        src = _read("services/snapshot_service.py")
+        src = _read_index_sources()
         assert "rel_valid_from_idx" in src, (
             "rel_valid_from_idx missing — multihop temporal traversal will "
             "fall back to full relationship scans without this index"
@@ -362,7 +383,7 @@ class TestIndexStrategyReview:
         rel_valid_to_idx must exist alongside the composite index.
         Same rationale as rel_valid_from_idx — required for multihop traversal.
         """
-        src = _read("services/snapshot_service.py")
+        src = _read_index_sources()
         assert "rel_valid_to_idx" in src, (
             "rel_valid_to_idx missing — multihop temporal traversal will "
             "fall back to full relationship scans without this index"

@@ -1,23 +1,23 @@
 """
-Integration tests for POST /api/v1/api/v1/graphs/{graph_id}/evaluate.
+Integration tests for POST /api/v1/graphs/{graph_id}/evaluate.
 
 Tests the full request → auth → ownership check → EvaluationService → response
 pipeline. EvaluationService internals (ChatService, RAGAS) are mocked.
 
-URL: /api/v1/api/v1/graphs/{graph_id}/evaluate
-     ^^^^^^^^ main app prefix
-              ^^^^^^^^ router prefix in api_router
+URL: /api/v1/graphs/{graph_id}/evaluate
+     ^^^^^^^^ prefix applied once in main.py; not duplicated in api_router
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException, status
 
 from app.schemas.evaluation_schemas import EvaluationScores, RetrievedContextItem
 
 GRAPH_ID = "test-graph-eval-001"
 FAKE_USER_ID = "eval-user-42"
-BASE_URL = f"/api/v1/api/v1/graphs/{GRAPH_ID}/evaluate"
+BASE_URL = f"/api/v1/graphs/{GRAPH_ID}/evaluate"
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +82,9 @@ class _AuthAndEvalPatch:
         self._eval_raises = eval_raises
 
     def __enter__(self):
+        from app.core.dependencies import get_neo4j_driver
+        from app.main import app
+
         self._p_auth = patch("app.api.v1.endpoints.evaluation.auth_service")
         self._p_gs = patch("app.api.v1.endpoints.evaluation.GraphNodeService")
         self._p_svc = patch("app.api.v1.endpoints.evaluation.EvaluationService")
@@ -104,12 +107,17 @@ class _AuthAndEvalPatch:
         mock_svc_cls.return_value = mock_svc_inst
         self.mock_svc_inst = mock_svc_inst
 
+        self._app = app
+        self._get_neo4j_driver = get_neo4j_driver
+        app.dependency_overrides[get_neo4j_driver] = lambda: MagicMock()
+
         return self
 
     def __exit__(self, *_):
         self._p_auth.stop()
         self._p_gs.stop()
         self._p_svc.stop()
+        self._app.dependency_overrides.pop(self._get_neo4j_driver, None)
 
 
 # ---------------------------------------------------------------------------
@@ -256,19 +264,28 @@ class TestEvaluationEndpointAuth:
     @pytest.mark.api
     async def test_cross_tenant_access_denied(self, async_client):
         """A user cannot evaluate another user's graph."""
-        with (
-            patch("app.api.v1.endpoints.evaluation.auth_service") as mock_auth,
-            patch("app.api.v1.endpoints.evaluation.GraphNodeService") as mock_gs_cls,
-        ):
-            mock_auth.verify_token = AsyncMock(return_value={"id": "user-A"})
-            # Graph belongs to user-B
-            mock_gs_cls.return_value.get_graph.return_value = {"user_id": "user-B"}
+        from app.core.dependencies import get_neo4j_driver
+        from app.main import app
 
-            response = await async_client.post(
-                BASE_URL,
-                json={"question": "Who?"},
-                headers={"Authorization": "Bearer token-for-user-A"},
-            )
+        app.dependency_overrides[get_neo4j_driver] = lambda: MagicMock()
+        try:
+            with (
+                patch("app.api.v1.endpoints.evaluation.auth_service") as mock_auth,
+                patch(
+                    "app.api.v1.endpoints.evaluation.GraphNodeService"
+                ) as mock_gs_cls,
+            ):
+                mock_auth.verify_token = AsyncMock(return_value={"id": "user-A"})
+                # Graph belongs to user-B
+                mock_gs_cls.return_value.get_graph.return_value = {"user_id": "user-B"}
+
+                response = await async_client.post(
+                    BASE_URL,
+                    json={"question": "Who?"},
+                    headers={"Authorization": "Bearer token-for-user-A"},
+                )
+        finally:
+            app.dependency_overrides.pop(get_neo4j_driver, None)
 
         assert response.status_code == 403
 
@@ -335,3 +352,31 @@ class TestEvaluationEndpointErrors:
 
         assert response.status_code == 500
         assert "Evaluation failed" in response.json()["detail"]
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_neo4j_unavailable_returns_503(self, async_client):
+        """When get_neo4j_driver raises 503, the endpoint propagates it."""
+        from app.core.dependencies import get_neo4j_driver
+        from app.main import app
+
+        def _raise_503():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Neo4j sync connection not available",
+            )
+
+        app.dependency_overrides[get_neo4j_driver] = _raise_503
+        try:
+            with patch("app.api.v1.endpoints.evaluation.auth_service") as mock_auth:
+                mock_auth.verify_token = AsyncMock(return_value={"id": FAKE_USER_ID})
+                response = await async_client.post(
+                    BASE_URL,
+                    json={"question": "Who?"},
+                    headers={"Authorization": "Bearer fake-token"},
+                )
+        finally:
+            app.dependency_overrides.pop(get_neo4j_driver, None)
+
+        assert response.status_code == 503
+        assert "Neo4j" in response.json()["detail"]

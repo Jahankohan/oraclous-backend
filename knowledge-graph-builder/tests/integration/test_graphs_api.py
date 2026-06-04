@@ -216,17 +216,24 @@ class TestGraphsCRUD:
     @pytest.mark.api
     async def test_create_graph_neo4j_unavailable_returns_503(self, async_client):
         """POST /graphs when Neo4j driver is None → 503."""
-        auth_patch = _patch_auth(FAKE_USER_A)
-        try:
-            with patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j:
-                mock_neo4j.sync_driver = None
+        from fastapi import HTTPException
 
-                response = await async_client.post(
-                    "/api/v1/graphs",
-                    json={"name": "Graph Neo4j Down"},
-                    headers=_auth_headers(),
-                )
+        from app.core.dependencies import get_neo4j_async_driver
+
+        def override_unavailable():
+            raise HTTPException(status_code=503, detail="Neo4j unavailable")
+
+        auth_patch = _patch_auth(FAKE_USER_A)
+        app = async_client.app
+        app.dependency_overrides[get_neo4j_async_driver] = override_unavailable
+        try:
+            response = await async_client.post(
+                "/api/v1/graphs",
+                json={"name": "Graph Neo4j Down"},
+                headers=_auth_headers(),
+            )
         finally:
+            app.dependency_overrides.pop(get_neo4j_async_driver, None)
             auth_patch.stop()
 
         assert response.status_code == 503
@@ -543,23 +550,23 @@ class TestDeleteGraphEndpoint:
     @pytest.mark.integration
     @pytest.mark.api
     async def test_delete_graph_returns_503_when_neo4j_unavailable(self, async_client):
-        """DELETE /graphs/{id} → 503 when Neo4j sync driver is None."""
-        auth_patch = _patch_auth(FAKE_USER_A)
-        try:
-            with (
-                patch(
-                    "app.api.v1.endpoints.graphs.verify_graph_access",
-                    new_callable=AsyncMock,
-                ) as mock_vga,
-                patch("app.api.v1.endpoints.graphs.neo4j_client") as mock_neo4j,
-            ):
-                mock_vga.return_value = GRAPH_A_ID
-                mock_neo4j.sync_driver = None
+        """DELETE /graphs/{id} → 503 when Neo4j async driver is unavailable."""
+        from fastapi import HTTPException
 
-                response = await async_client.delete(
-                    f"/api/v1/graphs/{GRAPH_A_ID}", headers=_auth_headers()
-                )
+        from app.core.dependencies import get_neo4j_async_driver
+
+        def override_unavailable():
+            raise HTTPException(status_code=503, detail="Neo4j unavailable")
+
+        auth_patch = _patch_auth(FAKE_USER_A)
+        app = async_client.app
+        app.dependency_overrides[get_neo4j_async_driver] = override_unavailable
+        try:
+            response = await async_client.delete(
+                f"/api/v1/graphs/{GRAPH_A_ID}", headers=_auth_headers()
+            )
         finally:
+            app.dependency_overrides.pop(get_neo4j_async_driver, None)
             auth_patch.stop()
 
         assert response.status_code == 503

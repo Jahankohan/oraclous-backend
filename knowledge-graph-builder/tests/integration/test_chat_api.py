@@ -4,7 +4,7 @@ Integration tests for the Chat API.
 Verifies the full request→service→response pipeline against the actual
 ChatService implementation (mocking only Neo4j GraphRAG internals).
 
-Correct endpoint: POST /api/v1/api/v1/chat  (main prefix /api/v1 + router prefix /api/v1)
+Correct endpoint: POST /api/v1/chat  (prefix applied once in main.py)
 Response schema fields: answer, query, graph_id, success, mode, retriever_type,
                         is_grounded, confidence, sources, context
 """
@@ -127,7 +127,7 @@ class TestChatAPIIntegration:
             _patch_auth_and_ownership(),
         ):
             response = await async_client.post(
-                "/api/v1/api/v1/chat",
+                "/api/v1/chat",
                 json={"query": "Tell me about TechNova", "graph_id": "test-graph-123"},
                 headers={"Authorization": "Bearer fake-token"},
             )
@@ -147,7 +147,7 @@ class TestChatAPIIntegration:
         """POST /chat with empty graph → structured no-data response, not a hallucination."""
         with _patch_chat_service(answer="", items=[]), _patch_auth_and_ownership():
             response = await async_client.post(
-                "/api/v1/api/v1/chat",
+                "/api/v1/chat",
                 json={"query": "Who is the CEO?", "graph_id": "empty-graph"},
                 headers={"Authorization": "Bearer fake-token"},
             )
@@ -173,7 +173,7 @@ class TestChatAPIIntegration:
             _patch_auth_and_ownership(),
         ):
             response = await async_client.post(
-                "/api/v1/api/v1/chat",
+                "/api/v1/chat",
                 json={
                     "query": "What is TechNova?",
                     "graph_id": "g1",
@@ -193,7 +193,7 @@ class TestChatAPIIntegration:
     async def test_chat_sources_omitted_when_include_sources_false(self, async_client):
         with _patch_chat_service(), _patch_auth_and_ownership():
             response = await async_client.post(
-                "/api/v1/api/v1/chat",
+                "/api/v1/chat",
                 json={
                     "query": "What is TechNova?",
                     "graph_id": "g1",
@@ -210,7 +210,7 @@ class TestChatAPIIntegration:
     async def test_chat_context_returned_when_return_context_true(self, async_client):
         with _patch_chat_service(), _patch_auth_and_ownership():
             response = await async_client.post(
-                "/api/v1/api/v1/chat",
+                "/api/v1/chat",
                 json={
                     "query": "What is TechNova?",
                     "graph_id": "g1",
@@ -232,7 +232,7 @@ class TestChatAPIIntegration:
         for mode in modes:
             with _patch_chat_service(), _patch_auth_and_ownership():
                 response = await async_client.post(
-                    "/api/v1/api/v1/chat",
+                    "/api/v1/chat",
                     json={"query": "Q", "graph_id": "g1", "mode": mode},
                     headers={"Authorization": "Bearer fake-token"},
                 )
@@ -242,7 +242,7 @@ class TestChatAPIIntegration:
     @pytest.mark.api
     async def test_chat_invalid_mode_returns_422(self, async_client):
         response = await async_client.post(
-            "/api/v1/api/v1/chat",
+            "/api/v1/chat",
             json={"query": "Q", "graph_id": "g1", "mode": "invalid_mode"},
             headers={"Authorization": "Bearer fake-token"},
         )
@@ -252,7 +252,7 @@ class TestChatAPIIntegration:
     @pytest.mark.api
     async def test_chat_missing_graph_id_returns_422(self, async_client):
         response = await async_client.post(
-            "/api/v1/api/v1/chat",
+            "/api/v1/chat",
             json={"query": "Q"},
             headers={"Authorization": "Bearer fake-token"},
         )
@@ -262,7 +262,7 @@ class TestChatAPIIntegration:
     @pytest.mark.api
     async def test_chat_missing_query_returns_422(self, async_client):
         response = await async_client.post(
-            "/api/v1/api/v1/chat",
+            "/api/v1/chat",
             json={"graph_id": "g1"},
             headers={"Authorization": "Bearer fake-token"},
         )
@@ -276,7 +276,7 @@ class TestChatAPIIntegration:
             _patch_auth_and_ownership(),
         ):
             response = await async_client.post(
-                "/api/v1/api/v1/chat",
+                "/api/v1/chat",
                 json={"query": "Q", "graph_id": "g1"},
                 headers={"Authorization": "Bearer fake-token"},
             )
@@ -287,7 +287,7 @@ class TestChatAPIIntegration:
     async def test_get_modes_returns_all_five(self, async_client):
         with _patch_auth_and_ownership():
             response = await async_client.get(
-                "/api/v1/api/v1/modes",
+                "/api/v1/modes",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
@@ -306,7 +306,7 @@ class TestChatAPIIntegration:
         """All required ChatResponse fields must be present."""
         with _patch_chat_service(), _patch_auth_and_ownership():
             response = await async_client.post(
-                "/api/v1/api/v1/chat",
+                "/api/v1/chat",
                 json={"query": "Q", "graph_id": "g1"},
                 headers={"Authorization": "Bearer fake-token"},
             )
@@ -330,7 +330,7 @@ class TestChatAPIIntegration:
         """POST /chat/stream must return text/event-stream content type."""
         with _patch_chat_service(), _patch_auth_and_ownership():
             response = await async_client.post(
-                "/api/v1/api/v1/chat/stream",
+                "/api/v1/chat/stream",
                 json={"query": "Q", "graph_id": "g1"},
                 headers={"Authorization": "Bearer fake-token"},
             )
@@ -350,7 +350,7 @@ class TestChatAPIIntegration:
             _patch_auth_and_ownership(),
         ):
             response = await async_client.post(
-                "/api/v1/api/v1/chat/stream",
+                "/api/v1/chat/stream",
                 json={"query": "Tell me about TechNova", "graph_id": "g1"},
                 headers={"Authorization": "Bearer fake-token"},
             )

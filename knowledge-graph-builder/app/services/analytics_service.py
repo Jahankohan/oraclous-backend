@@ -17,6 +17,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from neo4j import AsyncDriver
+from neo4j.spatial import Point
+from neo4j.time import Date, DateTime, Duration, Time
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
@@ -2039,3 +2042,212 @@ class GraphAnalyticsService:
 
 # Create global instance
 analytics_service = GraphAnalyticsService()
+
+
+# ==================== NEIGHBORHOOD SUBGRAPH (ORA-358) ====================
+
+_NEIGHBORHOOD_MAX_NODES = 300
+
+# Edge types representing internal graph structure — excluded from UI responses.
+_NEIGHBORHOOD_EXCLUDED_EDGE_TYPES: frozenset[str] = frozenset(
+    {"FROM_CHUNK", "IN_COMMUNITY", "PARENT_COMMUNITY"}
+)
+
+# Reserved labels — skipped when picking a node's display label.
+_NEIGHBORHOOD_RESERVED_LABELS: frozenset[str] = frozenset(
+    {
+        "__Entity__",
+        "__KGBuilder__",
+        "__Platform__",
+        "__Chat__",
+        "__Community__",
+        "__Rebac__",
+        "__System__",
+    }
+)
+
+# Node properties never emitted to the browser.
+_NEIGHBORHOOD_DROPPED_PROPS: frozenset[str] = frozenset({"embedding", "graph_id", "id"})
+
+
+def _neighborhood_display_label(labels: list[str]) -> str:
+    """Pick the first non-reserved label; fall back to 'Entity'."""
+    for lbl in labels:
+        if lbl not in _NEIGHBORHOOD_RESERVED_LABELS:
+            return lbl
+    return "Entity"
+
+
+def _neighborhood_clean_props(props: dict[str, Any]) -> dict[str, Any]:
+    """Drop internal properties; coerce Neo4j temporal/spatial values."""
+
+    def _coerce(v: Any) -> Any:
+        if isinstance(v, DateTime | Date | Time | Duration):
+            return v.iso_format()
+        if isinstance(v, Point):
+            return list(v)
+        if isinstance(v, list | tuple):
+            return [_coerce(i) for i in v]
+        if isinstance(v, dict):
+            return {k2: _coerce(v2) for k2, v2 in v.items()}
+        return v
+
+    return {
+        k: _coerce(val)
+        for k, val in props.items()
+        if k not in _NEIGHBORHOOD_DROPPED_PROPS
+    }
+
+
+async def get_entity_neighborhood(
+    driver: AsyncDriver,
+    *,
+    graph_id: str,
+    entity_id: str,
+    hops: int = 2,
+    edge_types: list[str] | None = None,
+) -> dict:
+    """Return an N-hop entity neighborhood subgraph around a focal entity.
+
+    ``hops`` is validated server-side to {1, 2, 3} and embedded as a literal
+    integer in the Cypher path pattern — never interpolated from raw user input.
+    ``graph_id`` appears on every MATCH clause (multi-tenant safety).
+
+    Args:
+        driver: Async Neo4j driver (FastAPI context — use neo4j_client.async_driver).
+        graph_id: Tenant graph — scopes every Cypher MATCH clause.
+        entity_id: Focal entity's ``id`` property or elementId.
+        hops: Traversal depth; must be 1, 2, or 3.
+        edge_types: When provided, only edges of these relationship types are
+            returned in the response. All reachable entity nodes are still
+            included regardless of edge type.
+
+    Returns:
+        dict matching GraphDataResponse shape:
+        ``{"nodes": [...], "edges": [...], "truncated": bool}``
+    """
+    if hops not in (1, 2, 3):
+        raise ValueError(f"hops must be 1, 2, or 3; got {hops!r}")
+
+    # ---- Phase 0: resolve focal entity ---------------------------------
+    # If the entity does not exist in this graph, return an empty response.
+    focal_pre_query = """
+    MATCH (focal:__Entity__ {graph_id: $graph_id})
+    WHERE focal.id = $entity_id OR elementId(focal) = $entity_id
+    RETURN coalesce(focal.id, elementId(focal)) AS focal_id
+    LIMIT 1
+    """
+    async with driver.session() as session:
+        focal_result = await session.run(
+            focal_pre_query, {"graph_id": graph_id, "entity_id": entity_id}
+        )
+        focal_row = await focal_result.single()
+
+    if not focal_row:
+        return {"nodes": [], "edges": [], "truncated": False}
+
+    focal_id: str = focal_row["focal_id"]
+
+    # ---- Phase 1: focal entity + N-hop entity neighbors ----------------
+    # hops is a validated literal from {1,2,3} — safe to embed in Cypher.
+    # Neo4j does not support parameterized variable-length path bounds.
+    node_query = (
+        "MATCH (focal:__Entity__ {graph_id: $graph_id}) "
+        "WHERE focal.id = $entity_id OR elementId(focal) = $entity_id "
+        f"OPTIONAL MATCH (focal)-[*1..{hops}]-(neighbor:__Entity__ {{graph_id: $graph_id}}) "
+        "WITH focal, collect(DISTINCT neighbor) AS nbrs "
+        "WITH [focal] + [n IN nbrs WHERE n IS NOT NULL] AS all_nodes "
+        "UNWIND all_nodes AS n "
+        "WITH n, "
+        "     COUNT { "
+        "       MATCH (n)-[r {graph_id: $graph_id}]-(m:__Entity__ {graph_id: $graph_id}) "
+        "       RETURN DISTINCT r "
+        "     } AS degree "
+        "OPTIONAL MATCH (n)-[:IN_COMMUNITY {graph_id: $graph_id}]-> "
+        "               (c:__Community__ {graph_id: $graph_id, status: 'active'}) "
+        "WITH n, degree, c "
+        "ORDER BY coalesce(c.level, 2147483647) ASC "
+        "WITH n, degree, collect(c.id)[0] AS community_id "
+        "RETURN "
+        "  coalesce(n.id, elementId(n)) AS node_id, "
+        "  labels(n) AS node_labels, "
+        "  n.type AS node_type, "
+        "  degree, "
+        "  community_id, "
+        "  properties(n) AS node_props"
+    )
+    async with driver.session() as session:
+        node_result = await session.run(
+            node_query, {"graph_id": graph_id, "entity_id": entity_id}
+        )
+        node_rows = await node_result.data()
+
+    all_nodes: list[dict[str, Any]] = []
+    for nr in node_rows:
+        all_nodes.append(
+            {
+                "id": nr["node_id"],
+                "label": _neighborhood_display_label(nr["node_labels"] or []),
+                "type": nr.get("node_type"),
+                "community_id": nr.get("community_id"),
+                "degree": nr.get("degree") or 0,
+                "properties": _neighborhood_clean_props(nr.get("node_props") or {}),
+            }
+        )
+
+    # ---- Truncation: keep focal + highest-degree neighbors -------------
+    truncated = False
+    if len(all_nodes) > _NEIGHBORHOOD_MAX_NODES:
+        truncated = True
+        focal_nodes = [n for n in all_nodes if n["id"] == focal_id]
+        other_nodes = [n for n in all_nodes if n["id"] != focal_id]
+        other_nodes.sort(key=lambda n: n["degree"], reverse=True)
+        slots = _NEIGHBORHOOD_MAX_NODES - len(focal_nodes)
+        all_nodes = focal_nodes + other_nodes[:slots]
+
+    node_ids = [n["id"] for n in all_nodes]
+
+    # ---- Phase 2: induced edges among the node set ---------------------
+    # Exclude internal structural edge types; apply optional edge type filter.
+    # edge_types=None → $edge_types is null in Cypher → IS NULL check is true
+    # → all edge types pass the filter.
+    edges: list[dict[str, Any]] = []
+    if node_ids:
+        edge_query = """
+        MATCH (a:__Entity__ {graph_id: $graph_id})
+              -[r {graph_id: $graph_id}]->
+              (b:__Entity__ {graph_id: $graph_id})
+        WHERE coalesce(a.id, elementId(a)) IN $node_ids
+          AND coalesce(b.id, elementId(b)) IN $node_ids
+          AND NOT type(r) IN $excluded_types
+          AND ($edge_types IS NULL OR type(r) IN $edge_types)
+        RETURN elementId(r) AS id,
+               coalesce(a.id, elementId(a)) AS source,
+               coalesce(b.id, elementId(b)) AS target,
+               type(r) AS type,
+               toFloat(coalesce(r.weight, r.count, r.score, 1.0)) AS weight
+        """
+        async with driver.session() as session:
+            edge_result = await session.run(
+                edge_query,
+                {
+                    "graph_id": graph_id,
+                    "node_ids": node_ids,
+                    "excluded_types": list(_NEIGHBORHOOD_EXCLUDED_EDGE_TYPES),
+                    "edge_types": edge_types,
+                },
+            )
+            edge_rows = await edge_result.data()
+
+        for er in edge_rows:
+            edges.append(
+                {
+                    "id": er["id"],
+                    "source": er["source"],
+                    "target": er["target"],
+                    "type": er["type"],
+                    "weight": float(er["weight"]) if er["weight"] is not None else 1.0,
+                }
+            )
+
+    return {"nodes": all_nodes, "edges": edges, "truncated": truncated}

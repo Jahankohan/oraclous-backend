@@ -48,8 +48,8 @@ _CREATE_BODY = {
 
 # The llm_configs router is mounted under /api/v1 inside the api_router which is
 # itself mounted at /api/v1 in main.py — resulting in the double prefix.
-_ORG_PREFIX = "/api/v1/api/v1/org/llm-configs"
-_GRAPH_PREFIX = "/api/v1/api/v1/graphs"
+_ORG_PREFIX = "/api/v1/org/llm-configs"
+_GRAPH_PREFIX = "/api/v1/graphs"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
