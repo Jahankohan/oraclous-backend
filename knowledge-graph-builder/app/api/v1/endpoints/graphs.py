@@ -144,13 +144,6 @@ async def create_graph(
     """
 
     try:
-        # Use GraphNodeService with Neo4j sync driver for Neo4j operations
-        if not neo4j_client.sync_driver:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available",
-            )
-
         # Resolve the owning organization (TASK-202).
         if graph_data.org_id is not None:
             org = await organization_service.get_organization(db, graph_data.org_id)
@@ -166,7 +159,7 @@ async def create_graph(
                 db, driver, user_id
             )
 
-        graph_service = GraphNodeService(neo4j_client.sync_driver)
+        graph_service = GraphNodeService(driver)
 
         # Generate unique graph_id
         from uuid import uuid4
@@ -174,7 +167,7 @@ async def create_graph(
         graph_id = str(uuid4())
 
         # Create graph in Neo4j
-        graph_result = graph_service.create_graph(
+        graph_result = await graph_service.create_graph(
             graph_id=graph_id,
             user_id=user_id,
             name=graph_data.name,
@@ -250,7 +243,10 @@ async def create_graph(
     response_model=list[GraphResponse],
     summary="List knowledge graphs",
 )
-async def list_graphs(user_id: str = Depends(get_current_user_id)):
+async def list_graphs(
+    user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+):
     """
     Return all knowledge graphs owned by the authenticated user.
 
@@ -259,14 +255,8 @@ async def list_graphs(user_id: str = Depends(get_current_user_id)):
     """
 
     try:
-        if not neo4j_client.sync_driver:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available",
-            )
-
-        graph_service = GraphNodeService(neo4j_client.sync_driver)
-        graphs = graph_service.list_user_graphs(user_id)
+        graph_service = GraphNodeService(driver)
+        graphs = await graph_service.list_user_graphs(user_id)
 
         # Convert to GraphResponse format
         graph_responses = []
@@ -306,7 +296,11 @@ async def list_graphs(user_id: str = Depends(get_current_user_id)):
         404: {"description": "Graph not found"},
     },
 )
-async def get_graph(graph_id: UUID, user_id: str = Depends(get_current_user_id)):
+async def get_graph(
+    graph_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
+):
     """
     Return details for a specific knowledge graph.
 
@@ -317,14 +311,8 @@ async def get_graph(graph_id: UUID, user_id: str = Depends(get_current_user_id))
     await verify_graph_access(str(graph_id), "read", user_id)
 
     try:
-        if not neo4j_client.sync_driver:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available",
-            )
-
-        graph_service = GraphNodeService(neo4j_client.sync_driver)
-        graph = graph_service.get_graph(str(graph_id))
+        graph_service = GraphNodeService(driver)
+        graph = await graph_service.get_graph(str(graph_id))
 
         if not graph:
             raise HTTPException(
@@ -368,6 +356,7 @@ async def update_graph(
     graph_id: UUID,
     graph_update: GraphUpdate,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Update the name or description of a knowledge graph.
@@ -379,22 +368,16 @@ async def update_graph(
     await verify_graph_access(str(graph_id), "write", user_id)
 
     try:
-        if not neo4j_client.sync_driver:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available",
-            )
+        graph_service = GraphNodeService(driver)
 
-        graph_service = GraphNodeService(neo4j_client.sync_driver)
-
-        existing_graph = graph_service.get_graph(str(graph_id))
+        existing_graph = await graph_service.get_graph(str(graph_id))
         if not existing_graph:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
             )
 
         # Update graph
-        updated_graph = graph_service.update_graph(
+        updated_graph = await graph_service.update_graph(
             graph_id=str(graph_id),
             user_id=user_id,
             name=graph_update.name,
@@ -449,6 +432,7 @@ async def update_graph(
 async def delete_graph(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Soft-delete a knowledge graph.
@@ -464,22 +448,16 @@ async def delete_graph(
     # ReBAC check — admin level required for delete (ORA-39 spec)
     await verify_graph_access(str(graph_id), "admin", user_id)
 
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j connection not available",
-        )
-
     try:
-        graph_service = GraphNodeService(neo4j_client.sync_driver)
+        graph_service = GraphNodeService(driver)
 
-        existing_graph = graph_service.get_graph(str(graph_id))
+        existing_graph = await graph_service.get_graph(str(graph_id))
         if not existing_graph:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
             )
 
-        deactivated = graph_service.soft_delete_graph(str(graph_id))
+        deactivated = await graph_service.soft_delete_graph(str(graph_id))
         if not deactivated:
             # Race: get_graph saw the node but soft_delete didn't match.  Treat as 404.
             raise HTTPException(
@@ -559,6 +537,7 @@ async def ingest_data_corrected(
     background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Submit document content for entity and relationship extraction.
@@ -581,14 +560,8 @@ async def ingest_data_corrected(
 
     # Verify graph exists in Neo4j (authorized users only reach this point)
     try:
-        if not neo4j_client.sync_driver:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Neo4j connection not available",
-            )
-
-        graph_service = GraphNodeService(neo4j_client.sync_driver)
-        neo4j_graph = graph_service.get_graph(str(graph_id))
+        graph_service = GraphNodeService(driver)
+        neo4j_graph = await graph_service.get_graph(str(graph_id))
 
         if not neo4j_graph:
             raise HTTPException(
@@ -817,6 +790,7 @@ async def ingest_incremental(
     background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_database),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Convenience endpoint that forces `mode=incremental`.
@@ -827,7 +801,7 @@ async def ingest_incremental(
     """
     data.mode = IngestMode.INCREMENTAL
     return await ingest_data_corrected(
-        request, graph_id, data, background_tasks, user_id, db
+        request, graph_id, data, background_tasks, user_id, db, driver
     )
 
 
@@ -847,6 +821,7 @@ async def set_graph_instructions(
     graph_id: UUID,
     instructions: GraphInstructions,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Set or replace graph-level extraction instructions.
@@ -861,12 +836,6 @@ async def set_graph_instructions(
     """
     # ReBAC check — write level required to set instructions
     await verify_graph_access(str(graph_id), "write", user_id)
-
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
 
     from app.services.instructions_service import instructions_service
 
@@ -885,6 +854,7 @@ async def set_graph_instructions(
 async def get_graph_instructions(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Retrieve the current graph-level extraction instructions.
@@ -894,12 +864,6 @@ async def get_graph_instructions(
     """
     # ReBAC check — read level required to view instructions
     await verify_graph_access(str(graph_id), "read", user_id)
-
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
 
     from app.services.instructions_service import instructions_service
 
@@ -925,6 +889,7 @@ async def get_graph_instructions(
 async def delete_graph_instructions(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Delete graph-level extraction instructions and revert to free-form extraction.
@@ -935,12 +900,6 @@ async def delete_graph_instructions(
     """
     # ReBAC check — admin level required to delete instructions
     await verify_graph_access(str(graph_id), "admin", user_id)
-
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
 
     from app.services.instructions_service import instructions_service
 
@@ -961,6 +920,7 @@ async def delete_graph_instructions(
 async def migrate_graph_properties(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Run a 3-phase migration to move contextual node properties onto relationship edges.
@@ -976,15 +936,9 @@ async def migrate_graph_properties(
     # ReBAC check — admin level required for property migration
     await verify_graph_access(str(graph_id), "admin", user_id)
 
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
-
-    graph_service = GraphNodeService(neo4j_client.sync_driver)
+    graph_service = GraphNodeService(driver)
     try:
-        result = graph_service.migrate_relationship_properties(str(graph_id))
+        result = await graph_service.migrate_relationship_properties(str(graph_id))
         return result
     except Exception as e:
         logger.error(f"Migration failed for graph {graph_id}: {e}")
@@ -1086,6 +1040,7 @@ async def set_graph_ontology(
     graph_id: UUID,
     request: OntologySetRequest,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Replace the ontology on a graph — entity types, relationship types, and enforcement mode.
@@ -1094,12 +1049,6 @@ async def set_graph_ontology(
     Existing graph data is NOT modified; use the retroactive-apply endpoint for that.
     Invalidates the schema cache.
     """
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
-
     from app.services.instructions_service import instructions_service
 
     await _verify_graph_ownership(graph_id, user_id)
@@ -1118,18 +1067,13 @@ async def set_graph_ontology(
 async def get_graph_ontology(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Retrieve the current ontology configuration for a graph.
 
     Returns `404` if no ontology has been configured. Free-form graphs have no ontology.
     """
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
-
     from app.services.instructions_service import instructions_service
 
     await _verify_graph_ownership(graph_id, user_id)
@@ -1155,6 +1099,7 @@ async def patch_graph_ontology(
     graph_id: UUID,
     patch: OntologyPatchRequest,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Merge-update the graph ontology: add/remove individual type definitions or change the mode.
@@ -1162,12 +1107,6 @@ async def patch_graph_ontology(
     Types are matched by name. Adding a type that already exists replaces it.
     Invalidates the schema cache.
     """
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
-
     from app.services.instructions_service import instructions_service
 
     await _verify_graph_ownership(graph_id, user_id)
@@ -1187,6 +1126,7 @@ async def patch_graph_ontology(
 async def delete_graph_ontology(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Remove the ontology from a graph, reverting it to free-form extraction.
@@ -1195,12 +1135,6 @@ async def delete_graph_ontology(
     Previously extracted entities are NOT removed.
     Invalidates the schema cache.
     """
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
-
     from app.services.instructions_service import instructions_service
 
     await _verify_graph_ownership(graph_id, user_id)
@@ -1219,6 +1153,7 @@ async def delete_graph_ontology(
 async def validate_graph_ontology(
     graph_id: UUID,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Scan existing entities in the graph against the current ontology — no modifications.
@@ -1226,12 +1161,6 @@ async def validate_graph_ontology(
     Returns violation counts and a sample of offending entities. Use this to assess
     the impact before running retroactive-apply.
     """
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
-
     from app.services.instructions_service import instructions_service
 
     await _verify_graph_ownership(graph_id, user_id)
@@ -1320,6 +1249,7 @@ async def retroactive_apply_ontology(
     graph_id: UUID,
     request: RetroactiveApplyRequest,
     user_id: str = Depends(get_current_user_id),
+    driver: AsyncDriver = Depends(get_neo4j_async_driver),
 ):
     """
     Apply the current ontology enforcement to entities already in the graph.
@@ -1329,12 +1259,6 @@ async def retroactive_apply_ontology(
     - `dry_run=false, >10k entities`: dispatches a Celery background task and returns
       `celery_task_id`. Poll job status separately.
     """
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j not available",
-        )
-
     from app.services.instructions_service import instructions_service
 
     await _verify_graph_ownership(graph_id, user_id)

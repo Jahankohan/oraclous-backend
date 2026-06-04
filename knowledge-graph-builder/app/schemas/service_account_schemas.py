@@ -66,3 +66,18 @@ class GraphGrantResponse(BaseModel):
     granted_by: str | None = None
     granted_at: str | None = None
     expires_at: str | None = None
+
+
+class SecurityAuditEventEntry(BaseModel):
+    event_id: str
+    event_type: str
+    sa_id: str
+    actor_id: str
+    tenant_id: str
+    timestamp: str
+
+
+class AuditLogListResponse(BaseModel):
+    items: list[SecurityAuditEventEntry]
+    total_count: int
+    has_more: bool

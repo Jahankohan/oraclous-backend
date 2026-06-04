@@ -154,7 +154,7 @@ class TestServiceAccountFullLifecycle:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.post(
-                    f"/api/v1/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
+                    f"/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
                     json={
                         "name": "integration-test-sa",
                         "description": "created in integration tests",
@@ -193,7 +193,7 @@ class TestServiceAccountFullLifecycle:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -226,7 +226,7 @@ class TestServiceAccountFullLifecycle:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.post(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}/rotate-key",
+                    f"/api/v1/service-accounts/{SA_ID}/rotate-key",
                     headers=_auth_headers(),
                 )
         finally:
@@ -261,7 +261,7 @@ class TestServiceAccountFullLifecycle:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.delete(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -302,7 +302,7 @@ class TestServiceAccountJWTAuthPath:
                 mock_dep_svc.check_sa_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -335,7 +335,7 @@ class TestServiceAccountJWTAuthPath:
                 mock_dep_svc.check_sa_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -360,7 +360,7 @@ class TestServiceAccountJWTAuthPath:
                 mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
 
                 response = await async_client.post(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}/graph-grants",
+                    f"/api/v1/service-accounts/{SA_ID}/graph-grants",
                     json={"graph_id": TARGET_GRAPH_ID, "level": "reader"},
                     headers=_auth_headers(),
                 )
@@ -400,7 +400,7 @@ class TestCrossGraphGrant:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.post(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}/graph-grants",
+                    f"/api/v1/service-accounts/{SA_ID}/graph-grants",
                     json={"graph_id": TARGET_GRAPH_ID, "level": "reader"},
                     headers=_auth_headers(),
                 )
@@ -444,7 +444,7 @@ class TestCrossGraphGrant:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}/graph-grants",
+                    f"/api/v1/service-accounts/{SA_ID}/graph-grants",
                     headers=_auth_headers(),
                 )
         finally:
@@ -478,7 +478,7 @@ class TestCrossGraphGrant:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.delete(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}/graph-grants/{TARGET_GRAPH_ID}",
+                    f"/api/v1/service-accounts/{SA_ID}/graph-grants/{TARGET_GRAPH_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -510,7 +510,7 @@ class TestCrossGraphGrant:
                 mock_dep_svc.check_sa_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -548,7 +548,7 @@ class TestListRequiresAdmin:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
+                    f"/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
                     headers=_auth_headers(),
                 )
         finally:
@@ -572,7 +572,7 @@ class TestListRequiresAdmin:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
+                    f"/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
                     headers=_auth_headers(),
                 )
         finally:
@@ -595,7 +595,7 @@ class TestListRequiresAdmin:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
+                    f"/api/v1/graphs/{HOME_GRAPH_ID}/service-accounts",
                     headers=_auth_headers(),
                 )
         finally:
@@ -632,7 +632,7 @@ class TestCrossTenantIsolation:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.post(
-                    f"/api/v1/api/v1/graphs/{TARGET_GRAPH_ID}/service-accounts",
+                    f"/api/v1/graphs/{TARGET_GRAPH_ID}/service-accounts",
                     json={"name": "hijack-sa", "level": "reader"},
                     headers=_auth_headers(),
                 )
@@ -658,7 +658,7 @@ class TestCrossTenantIsolation:
                 mock_svc.get_service_account = AsyncMock(return_value=None)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -685,7 +685,7 @@ class TestCrossTenantIsolation:
                 mock_svc.get_service_account = AsyncMock(return_value=None)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/service-accounts/{unknown_sa_id}",
+                    f"/api/v1/service-accounts/{unknown_sa_id}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -715,7 +715,7 @@ class TestCrossTenantIsolation:
                 mock_rebac.check_graph_permission = AsyncMock(return_value=False)
 
                 response = await async_client.patch(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/service-accounts/{SA_ID}",
                     json={"name": "updated-name"},
                     headers=_auth_headers(),
                 )
@@ -753,7 +753,7 @@ class TestRevokedSAToken:
         )
         try:
             response = await async_client.get(
-                f"/api/v1/api/v1/service-accounts/{SA_ID}",
+                f"/api/v1/service-accounts/{SA_ID}",
                 headers=_auth_headers(),
             )
         finally:
@@ -765,7 +765,7 @@ class TestRevokedSAToken:
     @pytest.mark.api
     async def test_missing_auth_header_returns_403(self, async_client):
         """Request with no Authorization header → 403 (HTTPBearer rejects it)."""
-        response = await async_client.get(f"/api/v1/api/v1/service-accounts/{SA_ID}")
+        response = await async_client.get(f"/api/v1/service-accounts/{SA_ID}")
         # HTTPBearer returns 403 when no credentials provided
         assert response.status_code == 403
 
@@ -789,7 +789,7 @@ class TestRevokedSAToken:
                 mock_dep_svc.check_sa_graph_permission = AsyncMock(return_value=True)
 
                 response = await async_client.get(
-                    f"/api/v1/api/v1/service-accounts/{SA_ID}",
+                    f"/api/v1/service-accounts/{SA_ID}",
                     headers=_auth_headers(),
                 )
         finally:
@@ -798,3 +798,440 @@ class TestRevokedSAToken:
             deps_p.stop()
 
         assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Scenario 7: SA audit log — lifecycle entries, ordering, cursor (ORA-316)
+# ---------------------------------------------------------------------------
+
+_T1 = "2026-01-01T10:00:00+00:00"
+_T2 = "2026-01-01T11:00:00+00:00"
+_T3 = "2026-01-01T12:00:00+00:00"
+
+_AUDIT_CREATED = {
+    "event_id": str(uuid.uuid4()),
+    "event_type": "service_account.created",
+    "sa_id": SA_ID,
+    "actor_id": USER_ID,
+    "tenant_id": TENANT_ID,
+    "timestamp": _T1,
+}
+_AUDIT_ROTATED = {
+    "event_id": str(uuid.uuid4()),
+    "event_type": "service_account.key_rotated",
+    "sa_id": SA_ID,
+    "actor_id": USER_ID,
+    "tenant_id": TENANT_ID,
+    "timestamp": _T2,
+}
+_AUDIT_REVOKED = {
+    "event_id": str(uuid.uuid4()),
+    "event_type": "service_account.revoked",
+    "sa_id": SA_ID,
+    "actor_id": USER_ID,
+    "tenant_id": TENANT_ID,
+    "timestamp": _T3,
+}
+
+
+class TestAuditLogEndpoint:
+    """GET /service-accounts/{accountId}/audit-log — lifecycle, ordering, cursor."""
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_full_lifecycle_entries_present(self, async_client):
+        """Audit log contains created, key_rotated, and revoked entries for a full lifecycle."""
+        audit_rows = [_AUDIT_REVOKED, _AUDIT_ROTATED, _AUDIT_CREATED]
+
+        mock_driver = _make_mock_driver()
+        mock_session = mock_driver.session.return_value
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=audit_rows)
+        mock_session.run = AsyncMock(return_value=mock_result)
+
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 200
+        data = response.json()
+        event_types = [e["event_type"] for e in data["items"]]
+        assert "service_account.created" in event_types
+        assert "service_account.key_rotated" in event_types
+        assert "service_account.revoked" in event_types
+        assert data["total_count"] == 3
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_is_reverse_chronological(self, async_client):
+        """Items are returned newest-first (reverse-chronological order)."""
+        audit_rows = [_AUDIT_REVOKED, _AUDIT_ROTATED, _AUDIT_CREATED]
+
+        mock_driver = _make_mock_driver()
+        mock_session = mock_driver.session.return_value
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=audit_rows)
+        mock_session.run = AsyncMock(return_value=mock_result)
+
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 200
+        items = response.json()["items"]
+        assert items[0]["event_type"] == "service_account.revoked"
+        assert items[1]["event_type"] == "service_account.key_rotated"
+        assert items[2]["event_type"] == "service_account.created"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_before_cursor_filters_entries(self, async_client):
+        """?before=<timestamp> only returns entries strictly before that timestamp."""
+        audit_rows = [_AUDIT_CREATED]
+
+        mock_driver = _make_mock_driver()
+        mock_session = mock_driver.session.return_value
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=audit_rows)
+        mock_session.run = AsyncMock(return_value=mock_result)
+
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    params={"before": _T2},
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 1
+        assert data["items"][0]["event_type"] == "service_account.created"
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_sa_principal_denied(self, async_client):
+        """SA principal cannot access audit log — always 403."""
+        mock_driver = _make_mock_driver()
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_SA_PRINCIPAL)
+        try:
+            response = await async_client.get(
+                f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                headers=_auth_headers(),
+            )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 403
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_invalid_before_returns_422(self, async_client):
+        """Unparseable ?before value → 422 Unprocessable Entity."""
+        mock_driver = _make_mock_driver()
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    params={"before": "not-a-date"},
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 422
+
+    # ── ORA-318: additional validation scenarios ────────────────────────────
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_limit_too_large_returns_422(self, async_client):
+        """limit=200 exceeds le=100 — FastAPI validates before auth, must return 422."""
+        mock_driver = _make_mock_driver()
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    params={"limit": 200},
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 422
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_limit_zero_returns_422(self, async_client):
+        """limit=0 is below ge=1 — FastAPI validates before auth, must return 422."""
+        mock_driver = _make_mock_driver()
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    params={"limit": 0},
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 422
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_reader_level_denied(self, async_client):
+        """User with only reader access on SA home_graph → 403 (endpoint requires admin)."""
+        mock_driver = _make_mock_driver()
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        # Human user JWT (not SA principal)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                # Reader/writer lacks admin — check_graph_permission returns False
+                mock_rebac.check_graph_permission = AsyncMock(return_value=False)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 403
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_writer_level_denied(self, async_client):
+        """User with writer access on SA home_graph → 403 (endpoint requires admin)."""
+        mock_driver = _make_mock_driver()
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                # Writer lacks admin — check_graph_permission returns False
+                mock_rebac.check_graph_permission = AsyncMock(return_value=False)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 403
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_cross_tenant_sa_denied(self, async_client):
+        """SA from a different tenant → tenant-isolated lookup returns None → 403 (not 404)."""
+        mock_driver = _make_mock_driver()
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        # User from tenant B trying to access an SA that belongs to tenant A
+        cross_tenant_user = {**FAKE_USER, "tenant_id": TENANT_B_ID}
+        auth_p = _patch_auth(cross_tenant_user)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                # Tenant-isolated lookup returns None — SA not visible to other tenant
+                mock_svc.get_service_account = AsyncMock(return_value=None)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        # Must be 403, NOT 404 — never reveal SA existence to unauthorized tenants
+        assert response.status_code == 403
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_default_limit_returns_200(self, async_client):
+        """Default limit=50 with no ?limit param → 200 OK."""
+        audit_rows = [_AUDIT_CREATED]
+        mock_driver = _make_mock_driver()
+        mock_session = mock_driver.session.return_value
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=audit_rows)
+        mock_session.run = AsyncMock(return_value=mock_result)
+
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "total_count" in data
+        assert "has_more" in data
+        assert "items" in data
+
+    @pytest.mark.integration
+    @pytest.mark.api
+    async def test_audit_log_response_has_no_raw_key(self, async_client):
+        """Audit log entries must never expose raw API keys in the response."""
+        raw_key = "osk_testkey1abc123def456gh"
+        audit_rows = [
+            {**_AUDIT_CREATED, "event_type": "service_account.created"},
+        ]
+        mock_driver = _make_mock_driver()
+        mock_session = mock_driver.session.return_value
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=audit_rows)
+        mock_session.run = AsyncMock(return_value=mock_result)
+
+        ep_p, deps_p = _patch_neo4j(mock_driver)
+        auth_p = _patch_auth(FAKE_USER)
+        try:
+            with (
+                patch(
+                    "app.api.v1.endpoints.service_accounts.service_account_service"
+                ) as mock_svc,
+                patch("app.api.dependencies.rebac_service") as mock_rebac,
+            ):
+                mock_svc.get_service_account = AsyncMock(return_value=_SA_RECORD)
+                mock_rebac.check_graph_permission = AsyncMock(return_value=True)
+
+                response = await async_client.get(
+                    f"/api/v1/service-accounts/{SA_ID}/audit-log",
+                    headers=_auth_headers(),
+                )
+        finally:
+            auth_p.stop()
+            ep_p.stop()
+            deps_p.stop()
+
+        assert response.status_code == 200
+        body_text = response.text
+        assert raw_key not in body_text
+        # SecurityAuditEventEntry schema has no key_prefix field
+        for item in response.json()["items"]:
+            assert "key_prefix" not in item
+            assert "api_key" not in item

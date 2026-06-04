@@ -50,12 +50,19 @@ def retroactive_apply_ontology_task(
         coercions = 0
         deletions = 0
 
+        # labels(e) returns all Neo4j node labels on the entity.
+        # We exclude the two system labels so only user-defined type labels are compared.
+        _VIOLATION_WHERE = (
+            "NOT any(l IN labels(e) "
+            "WHERE l IN $allowed_types AND l <> '__Entity__' AND l <> '__KGBuilder__')"
+        )
+
         with driver.session() as session:
             if mode == "strict":
                 result = session.run(
-                    """
-                    MATCH (e:__Entity__ {graph_id: $graph_id})
-                    WHERE NOT e.label IN $allowed_types
+                    f"""
+                    MATCH (e:__Entity__ {{graph_id: $graph_id}})
+                    WHERE {_VIOLATION_WHERE}
                     DETACH DELETE e
                     RETURN count(e) AS deleted
                     """,
@@ -66,11 +73,13 @@ def retroactive_apply_ontology_task(
 
             elif mode == "coerce":
                 allowed_list = list(allowed_set)
+                # Return the first non-system label as the entity's type label for matching.
                 violators = session.run(
-                    """
-                    MATCH (e:__Entity__ {graph_id: $graph_id})
-                    WHERE NOT e.label IN $allowed_types
-                    RETURN elementId(e) AS eid, e.label AS label
+                    f"""
+                    MATCH (e:__Entity__ {{graph_id: $graph_id}})
+                    WHERE {_VIOLATION_WHERE}
+                    RETURN elementId(e) AS eid,
+                           [l IN labels(e) WHERE l <> '__Entity__' AND l <> '__KGBuilder__'][0] AS label
                     """,
                     {"graph_id": graph_id, "allowed_types": allowed_types},
                 ).data()
@@ -90,8 +99,16 @@ def retroactive_apply_ontology_task(
                         None, label.lower(), best_match.lower()
                     ).ratio()
                     if ratio >= 0.7:
+                        # Rename the Neo4j node label: remove the old type label and add the new one.
                         session.run(
-                            "MATCH (e:__Entity__) WHERE elementId(e) = $eid SET e.label = $new_label",
+                            """
+                            MATCH (e:__Entity__) WHERE elementId(e) = $eid
+                            CALL apoc.create.removeLabels(e, [l IN labels(e) WHERE l <> '__Entity__' AND l <> '__KGBuilder__'])
+                            YIELD node
+                            CALL apoc.create.addLabels(node, [$new_label])
+                            YIELD node AS updated
+                            RETURN updated
+                            """,
                             {"eid": eid, "new_label": best_match},
                         )
                         coercions += 1
@@ -104,9 +121,9 @@ def retroactive_apply_ontology_task(
 
             # Count remaining violations regardless of mode
             record = session.run(
-                """
-                MATCH (e:__Entity__ {graph_id: $graph_id})
-                WHERE NOT e.label IN $allowed_types
+                f"""
+                MATCH (e:__Entity__ {{graph_id: $graph_id}})
+                WHERE {_VIOLATION_WHERE}
                 RETURN count(e) AS cnt
                 """,
                 {"graph_id": graph_id, "allowed_types": allowed_types},
