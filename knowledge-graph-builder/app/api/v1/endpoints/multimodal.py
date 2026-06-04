@@ -17,6 +17,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from neo4j import Driver
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
@@ -24,8 +25,8 @@ from app.api.dependencies import (
     get_database,
     verify_graph_write_access,
 )
+from app.core.dependencies import get_neo4j_driver
 from app.core.logging import get_logger
-from app.core.neo4j_client import neo4j_client
 from app.models.graph import IngestionJob
 from app.schemas.multimodal import MultiModalJobResponse, PDFExtractor, VisionModel
 from app.services.background_job_service import background_job_service
@@ -65,14 +66,9 @@ def _save_upload(graph_id: str, job_id: str, upload: UploadFile, data: bytes) ->
     return str(dest_path)
 
 
-async def _verify_graph(graph_id: UUID) -> None:
-    """Raise 503/404 if Neo4j is unavailable or the graph does not exist."""
-    if not neo4j_client.sync_driver:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neo4j connection not available",
-        )
-    graph_service = GraphNodeService(neo4j_client.sync_driver)
+async def _verify_graph(graph_id: UUID, driver: Driver) -> None:
+    """Raise 404 if the graph does not exist."""
+    graph_service = GraphNodeService(driver)
     if not graph_service.get_graph(str(graph_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Graph not found"
@@ -104,6 +100,7 @@ async def ingest_document(
     user_id: str = Depends(get_current_user_id),
     _access: str = Depends(verify_graph_write_access),
     db: AsyncSession = Depends(get_database),
+    driver: Driver = Depends(get_neo4j_driver),
 ):
     """
     Upload a PDF or DOCX document for entity/relationship extraction.
@@ -111,7 +108,7 @@ async def ingest_document(
     The file is saved to a local temp directory, then processed asynchronously
     by a Celery worker.  Poll `GET /graphs/{id}/jobs/{job_id}` for status.
     """
-    await _verify_graph(graph_id)
+    await _verify_graph(graph_id, driver)
 
     # ── Read and validate ─────────────────────────────────────────────────────
     data = await file.read()
@@ -217,6 +214,7 @@ async def ingest_image(
     user_id: str = Depends(get_current_user_id),
     _access: str = Depends(verify_graph_write_access),
     db: AsyncSession = Depends(get_database),
+    driver: Driver = Depends(get_neo4j_driver),
 ):
     """
     Upload an image for entity/relationship extraction using a vision model.
@@ -224,7 +222,7 @@ async def ingest_image(
     Claude 3.5 Sonnet is used by default.  Supply `vision_model=gpt4o` to use
     GPT-4o instead.  The job runs asynchronously; poll `GET /graphs/{id}/jobs/{job_id}`.
     """
-    await _verify_graph(graph_id)
+    await _verify_graph(graph_id, driver)
 
     data = await file.read()
     if len(data) > _MAX_IMAGE_BYTES:
