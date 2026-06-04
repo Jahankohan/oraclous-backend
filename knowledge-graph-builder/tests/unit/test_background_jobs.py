@@ -386,3 +386,47 @@ class TestProcessIngestionJobStateTransitions:
 
         assert result["status"] == "error"
         assert "Access denied" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: _scrub_credentials
+# ---------------------------------------------------------------------------
+
+
+class TestScrubCredentials:
+    @pytest.mark.unit
+    def test_redacts_mongodb_uri_with_credentials(self):
+        from app.services.background_jobs import _scrub_credentials
+
+        result = _scrub_credentials("mongodb://user:s3cr3t@host:27017/db")
+        assert result == "mongodb://<redacted>@host:27017/db"
+
+    @pytest.mark.unit
+    def test_plain_message_passes_through_unchanged(self):
+        from app.services.background_jobs import _scrub_credentials
+
+        msg = "Connection timed out after 30 seconds"
+        assert _scrub_credentials(msg) == msg
+
+    @pytest.mark.unit
+    def test_redacts_postgres_uri(self):
+        from app.services.background_jobs import _scrub_credentials
+
+        result = _scrub_credentials("postgresql://admin:hunter2@db.internal:5432/prod")
+        assert result == "postgresql://<redacted>@db.internal:5432/prod"
+
+    @pytest.mark.unit
+    def test_redacts_multiple_uris_in_one_message(self):
+        from app.services.background_jobs import _scrub_credentials
+
+        msg = "Failed: mongodb://u1:p1@host1/db and mongodb://u2:p2@host2/db"  # pragma: allowlist secret
+        result = _scrub_credentials(msg)
+        assert "p1" not in result
+        assert "p2" not in result
+        assert result.count("<redacted>") == 2
+
+    @pytest.mark.unit
+    def test_empty_string_passes_through(self):
+        from app.services.background_jobs import _scrub_credentials
+
+        assert _scrub_credentials("") == ""
